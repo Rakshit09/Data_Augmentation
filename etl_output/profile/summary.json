@@ -1,0 +1,10 @@
+{
+  "total_buildings": 43514196,
+  "min_area_m2": 5.050418092690588e-05,
+  "avg_area_m2": 152.6402776333822,
+  "max_area_m2": 480217.70549947995,
+  "unknown_occupancy_share": 0.044912400541653116,
+  "missing_height_share": 0.08416795750977452,
+  "missing_floorspace_share": 0.1803568885887263,
+  "avg_attribute_completeness_score": 0.9342223592962627
+}

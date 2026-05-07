@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Germany Data Enrichment</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.22.0/dist/maplibre-gl.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <main class="shell">
+    <section id="lookupMain" class="main-view">
+      <div id="map"></div>
+    </section>
+
+    <section id="exposureMain" class="main-view hidden">
+      <section class="preview-panel">
+        <header class="preview-header">
+          <div>
+            <h2>Preview</h2>
+          </div>
+          <a id="downloadLink" class="download hidden" href="#">Download enriched CSV</a>
+        </header>
+        <div id="uploadSummary" class="preview-empty">
+          Upload an exposure to preview
+        </div>
+        <div id="previewTable" class="preview-table hidden"></div>
+        <section id="statsPanel" class="stats-panel hidden">
+          <h2>Statistics</h2>
+          <div id="statsGrid" class="stats-tables"></div>
+        </section>
+      </section>
+    </section>
+
+    <aside class="panel" aria-live="polite">
+      <nav class="tabs" aria-label="Application mode">
+        <button id="lookupTab" class="tab active" type="button">Building Lookup</button>
+        <button id="exposureTab" class="tab" type="button">Enrich Exposure</button>
+      </nav>
+
+      <header class="panel-header">
+        <div>
+          <p id="modeEyebrow" class="eyebrow">Germany</p>
+          <h1 id="modeTitle">Building Lookup</h1>
+        </div>
+        <span id="status" class="status">Ready</span>
+      </header>
+
+      <section id="lookupTools" class="side-mode">
+        <form id="searchForm" class="search">
+          <input
+            id="searchInput"
+            type="search"
+            autocomplete="off"
+            placeholder="Search address in Germany"
+            aria-label="Search address in Germany"
+          >
+          <button type="submit">Search</button>
+        </form>
+        <div id="searchResults" class="search-results hidden"></div>
+
+        <section id="empty" class="empty">
+          <p>Select a building footprint on the map.</p>
+        </section>
+
+        <section id="details" class="details hidden">
+          <div class="match-row">
+            <span id="matchType" class="pill"></span>
+            <span id="distance"></span>
+          </div>
+          <h2 id="buildingId"></h2>
+          <dl id="attributes"></dl>
+        </section>
+      </section>
+
+      <section id="exposureTools" class="side-mode hidden">
+        <section class="exposure-tools">
+          <header>
+            <p class="eyebrow">Batch Enrichment</p>
+          </header>
+
+          <form id="uploadForm" class="upload-form">
+            <label class="dropzone" for="csvFile">
+              <span class="dropzone-title">Choose Exposure File</span>
+              <span class="dropzone-subtitle">CSV with latitude, longitude, and other columns</span>
+            </label>
+            <input id="csvFile" class="file-input" type="file" accept=".csv,text/csv" tabindex="-1" aria-hidden="true">
+          </form>
+
+          <div id="mappingControls" class="mapping hidden">
+            <label>
+              Latitude
+              <select id="latColumn"></select>
+            </label>
+            <label>
+              Longitude
+              <select id="lonColumn"></select>
+            </label>
+            <label>
+              Match mode
+              <select id="matchMode">
+                <option value="inside_nearest">Inside polygon + nearest</option>
+                <option value="inside">Inside polygon only</option>
+                <option value="centroid">Centroid nearest only</option>
+              </select>
+            </label>
+            <label>
+              Max nearest distance (m)
+              <input id="maxDistance" type="number" min="1" max="500" step="1" value="50">
+            </label>
+            <button id="runEnrichment" type="button">Run enrichment</button>
+          </div>
+        </section>
+      </section>
+    </aside>
+  </main>
+
+  <script src="https://unpkg.com/maplibre-gl@5.22.0/dist/maplibre-gl.js"></script>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
