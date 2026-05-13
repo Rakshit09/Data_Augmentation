@@ -70,6 +70,10 @@ class ETLConfig:
     sample_limit: int = 100_000
     obm_quadkey_zoom: int = 6
 
+    # Optional local boundary file (shapefile .zip or .shp, or GeoPackage .gpkg/.zip).
+    # When set, the bkg_boundary_zip_url download is skipped.
+    boundary_file: Optional[str] = None
+
 
 class OpenBuildingMapGermanyETL:
     def __init__(self, config: ETLConfig):
@@ -181,13 +185,22 @@ class OpenBuildingMapGermanyETL:
     # Boundary
     # ---------------------------------------------------------------------
 
-    def _download_and_prepare_boundary(self) -> Tuple[Path, str, int, str]:
+    def _download_and_prepare_boundary(self) -> Tuple[Path, Optional[str], int, str]:
         """
-        Downloads and unzips BKG VG250 GeoPackage.
+        Resolves the country boundary file.
+
+        If ``ETLConfig.boundary_file`` is set, uses that local file (supports
+        shapefile .shp, a ZIP containing .shp files, or a .gpkg / ZIP containing
+        .gpkg files).  Otherwise downloads the German BKG VG250 GeoPackage.
 
         Returns:
-            gpkg_path, layer_name, source_epsg, geometry_column
+            boundary_path, layer_name_or_None, source_epsg, geometry_column
+
+        ``layer_name_or_None`` is None for plain shapefiles (layer arg omitted).
         """
+
+        if self.cfg.boundary_file:
+            return self._prepare_local_boundary(Path(self.cfg.boundary_file))
 
         zip_path = self.boundary_dir / "vg250_bkg_boundary.zip"
 
@@ -220,6 +233,77 @@ class OpenBuildingMapGermanyETL:
         logger.info("Boundary geometry column: %s", geometry_column)
 
         return gpkg_path, layer_name, source_epsg, geometry_column
+
+    def _prepare_local_boundary(self, boundary_file: Path) -> Tuple[Path, Optional[str], int, str]:
+        """
+        Handles a user-supplied boundary file.  Supports:
+          - .shp  (or any GDAL-readable single-file vector)
+          - .zip  containing .shp files  → extracted to boundary_dir
+          - .gpkg
+          - .zip  containing .gpkg files → extracted to boundary_dir
+        """
+        suffix = boundary_file.suffix.lower()
+
+        if suffix == ".zip":
+            extract_dir = self.boundary_dir / "user_boundary"
+            extract_dir.mkdir(parents=True, exist_ok=True)
+            logger.info("Extracting user boundary ZIP: %s", boundary_file)
+            with zipfile.ZipFile(boundary_file, "r") as zf:
+                zf.extractall(extract_dir)
+
+            gpkg_files = list(extract_dir.rglob("*.gpkg"))
+            shp_files = list(extract_dir.rglob("*.shp"))
+
+            if gpkg_files:
+                boundary_file = gpkg_files[0]
+                suffix = ".gpkg"
+            elif shp_files:
+                boundary_file = shp_files[0]
+                suffix = ".shp"
+            else:
+                raise FileNotFoundError(
+                    "No .gpkg or .shp file found inside the uploaded boundary ZIP."
+                )
+
+        if suffix == ".gpkg":
+            layer_name, source_epsg, geometry_column = self._detect_gpkg_boundary_layer(boundary_file)
+            logger.info("Using user GeoPackage boundary: %s (layer=%s)", boundary_file, layer_name)
+            return boundary_file, layer_name, source_epsg, geometry_column
+
+        # Shapefile (or other GDAL single-layer source)
+        source_epsg = self._detect_shapefile_epsg(boundary_file)
+        geometry_column = self._detect_shapefile_geom_column(boundary_file)
+        logger.info("Using user shapefile boundary: %s (epsg=%s, geom=%s)", boundary_file, source_epsg, geometry_column)
+        return boundary_file, None, source_epsg, geometry_column
+
+    @staticmethod
+    def _detect_shapefile_epsg(shp_path: Path) -> int:
+        """Reads EPSG from the companion .prj file, falling back to 4326."""
+        prj_path = shp_path.with_suffix(".prj")
+        if not prj_path.exists():
+            logger.warning("No .prj file found for %s; assuming EPSG:4326", shp_path)
+            return 4326
+        try:
+            from pyproj import CRS
+            crs = CRS.from_wkt(prj_path.read_text(encoding="utf-8", errors="replace"))
+            epsg = crs.to_epsg()
+            return int(epsg) if epsg else 4326
+        except Exception as exc:
+            logger.warning("Could not parse .prj for EPSG (%s); assuming 4326", exc)
+            return 4326
+
+    def _detect_shapefile_geom_column(self, shp_path: Path) -> str:
+        """Returns the geometry column name DuckDB assigns when reading the shapefile."""
+        try:
+            path_sql = shp_path.as_posix().replace("'", "''")
+            schema = self.con.execute(f"""
+                DESCRIBE SELECT * FROM ST_Read('{path_sql}', keep_wkb = false) LIMIT 1
+            """).df()
+            geom_cols = schema[schema["column_type"].str.upper().str.contains("GEOMETRY")]["column_name"].tolist()
+            return geom_cols[0] if geom_cols else "wkb_geometry"
+        except Exception as exc:
+            logger.warning("Could not detect shapefile geometry column (%s); using wkb_geometry", exc)
+            return "wkb_geometry"
 
     @staticmethod
     def _download_file(url: str, target_path: Path):
@@ -282,19 +366,25 @@ class OpenBuildingMapGermanyETL:
     def _create_germany_boundary_table(
         self,
         gpkg_path: Path,
-        layer_name: str,
+        layer_name: Optional[str],
         source_epsg: int,
         geometry_column: str,
     ):
         """
-        Creates a single dissolved Germany boundary geometry in EPSG:4326.
+        Creates a single dissolved country boundary geometry in EPSG:4326.
+
+        ``layer_name`` may be None for single-layer sources such as shapefiles.
         """
 
-        logger.info("Creating dissolved Germany boundary table in DuckDB")
+        logger.info("Creating dissolved boundary table in DuckDB")
 
-        gpkg_path_sql = gpkg_path.as_posix().replace("'", "''")
-        layer_sql = layer_name.replace("'", "''")
+        file_path_sql = gpkg_path.as_posix().replace("'", "''")
         geom_col_sql = '"' + geometry_column.replace('"', '""') + '"'
+
+        layer_clause = ""
+        if layer_name is not None:
+            layer_sql = layer_name.replace("'", "''")
+            layer_clause = f"layer = '{layer_sql}',"
 
         if source_epsg == 4326:
             geom_sql = geom_col_sql
@@ -312,8 +402,8 @@ class OpenBuildingMapGermanyETL:
             CREATE OR REPLACE TABLE germany_boundary AS
             SELECT ST_Union_Agg({geom_sql}) AS geom
             FROM ST_Read(
-                '{gpkg_path_sql}',
-                layer = '{layer_sql}',
+                '{file_path_sql}',
+                {layer_clause}
                 keep_wkb = false
             )
             WHERE {geom_col_sql} IS NOT NULL;

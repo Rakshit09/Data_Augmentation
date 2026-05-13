@@ -1,10 +1,13 @@
 const statusEl = document.getElementById("status");
 const lookupTab = document.getElementById("lookupTab");
 const exposureTab = document.getElementById("exposureTab");
+const etlTab = document.getElementById("etlTab");
 const lookupMain = document.getElementById("lookupMain");
 const exposureMain = document.getElementById("exposureMain");
+const etlMain = document.getElementById("etlMain");
 const lookupTools = document.getElementById("lookupTools");
 const exposureTools = document.getElementById("exposureTools");
+const etlTools = document.getElementById("etlTools");
 const modeEyebrow = document.getElementById("modeEyebrow");
 const modeTitle = document.getElementById("modeTitle");
 const emptyEl = document.getElementById("empty");
@@ -69,18 +72,29 @@ map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-
 
 lookupTab.addEventListener("click", () => switchMode("lookup"));
 exposureTab.addEventListener("click", () => switchMode("exposure"));
+etlTab.addEventListener("click", () => switchMode("etl"));
 
 function switchMode(mode) {
   const isLookup = mode === "lookup";
+  const isExposure = mode === "exposure";
+  const isEtl = mode === "etl";
 
   lookupTab.classList.toggle("active", isLookup);
-  exposureTab.classList.toggle("active", !isLookup);
+  exposureTab.classList.toggle("active", isExposure);
+  etlTab.classList.toggle("active", isEtl);
+
   lookupMain.classList.toggle("hidden", !isLookup);
-  exposureMain.classList.toggle("hidden", isLookup);
+  exposureMain.classList.toggle("hidden", !isExposure);
+  etlMain.classList.toggle("hidden", !isEtl);
+
   lookupTools.classList.toggle("hidden", !isLookup);
-  exposureTools.classList.toggle("hidden", isLookup);
+  exposureTools.classList.toggle("hidden", !isExposure);
+  etlTools.classList.toggle("hidden", !isEtl);
+
   modeEyebrow.textContent = isLookup ? "Germany" : " ";
-  modeTitle.textContent = isLookup ? "Building Lookup" : "Enrich Exposure";
+  modeTitle.textContent = isLookup ? "Building Lookup"
+    : isExposure ? "Enrich Exposure"
+    : "Create OBM Database";
 
   if (isLookup) {
     window.setTimeout(() => map.resize(), 50);
@@ -577,4 +591,120 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+// -----------------------------------------------------------------------
+// ETL: Create OBM Database
+// -----------------------------------------------------------------------
+const boundaryFile = document.getElementById("boundaryFile");
+const boundaryFileName = document.getElementById("boundaryFileName");
+const etlOutputDir = document.getElementById("etlOutputDir");
+const etlOutputParquet = document.getElementById("etlOutputParquet");
+const etlDuckdbFile = document.getElementById("etlDuckdbFile");
+const runEtlBtn = document.getElementById("runEtl");
+const etlStatusEl = document.getElementById("etlStatus");
+
+boundaryFile.addEventListener("change", () => {
+  if (boundaryFile.files.length) {
+    boundaryFileName.textContent = boundaryFile.files[0].name;
+    boundaryFileName.classList.remove("hidden");
+  } else {
+    boundaryFileName.classList.add("hidden");
+  }
+});
+
+// Auto-fill Parquet / DuckDB paths when output dir changes
+etlOutputDir.addEventListener("input", () => {
+  const dir = etlOutputDir.value.trim() || "./etl_output";
+  if (!etlOutputParquet.dataset.userEdited) {
+    etlOutputParquet.placeholder = `${dir}/buildings_cleaned.parquet`;
+  }
+  if (!etlDuckdbFile.dataset.userEdited) {
+    etlDuckdbFile.placeholder = `${dir}/work_obm.duckdb`;
+  }
+});
+
+etlOutputParquet.addEventListener("input", () => { etlOutputParquet.dataset.userEdited = "1"; });
+etlDuckdbFile.addEventListener("input", () => { etlDuckdbFile.dataset.userEdited = "1"; });
+
+runEtlBtn.addEventListener("click", async () => {
+  runEtlBtn.disabled = true;
+  statusEl.textContent = "ETL running";
+  showEtlStatus("info", "Submitting ETL job...");
+
+  const formData = new FormData();
+  if (boundaryFile.files.length) {
+    formData.append("boundary_file", boundaryFile.files[0]);
+  }
+
+  const dir = etlOutputDir.value.trim() || "./etl_output";
+  formData.append("output_dir", dir);
+  formData.append("output_parquet", etlOutputParquet.value.trim() || `${dir}/buildings_cleaned.parquet`);
+  formData.append("duckdb_file", etlDuckdbFile.value.trim() || `${dir}/work_obm.duckdb`);
+  formData.append("lon_min", document.getElementById("etlLonMin").value);
+  formData.append("lon_max", document.getElementById("etlLonMax").value);
+  formData.append("lat_min", document.getElementById("etlLatMin").value);
+  formData.append("lat_max", document.getElementById("etlLatMax").value);
+
+  try {
+    const response = await fetch("/api/etl/create-database", {
+      method: "POST",
+      body: formData
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error || "ETL submission failed");
+    }
+
+    pollEtlProgress(payload.job_id);
+  } catch (error) {
+    statusEl.textContent = "Error";
+    showEtlStatus("error", error.message);
+    runEtlBtn.disabled = false;
+  }
+});
+
+async function pollEtlProgress(jobId) {
+  try {
+    const response = await fetch(`/api/etl/progress/${jobId}`);
+    const payload = await response.json();
+
+    if (!response.ok) throw new Error(payload.error || "Could not read ETL progress");
+
+    const percent = Math.max(0, Math.min(100, Number(payload.percent || 0)));
+    showEtlStatus("info", `
+      <div class="progress-copy">${escapeHtml(payload.phase || payload.status || "Working")}</div>
+      <div class="progress-track"><div class="progress-fill" style="width:${percent}%"></div></div>
+      <div class="progress-copy">${percent.toFixed(0)}%</div>
+    `);
+
+    if (payload.status === "complete") {
+      statusEl.textContent = "Done";
+      showEtlStatus("success", `
+        <strong>Database created successfully.</strong><br>
+        Parquet: <code>${escapeHtml(payload.output_parquet || "")}</code><br>
+        DuckDB: <code>${escapeHtml(payload.duckdb_file || "")}</code>
+      `);
+      runEtlBtn.disabled = false;
+      return;
+    }
+
+    if (payload.status === "error") {
+      throw new Error(payload.error || "ETL failed");
+    }
+
+    window.setTimeout(() => pollEtlProgress(jobId), 3000);
+  } catch (error) {
+    statusEl.textContent = "Error";
+    showEtlStatus("error", error.message);
+    runEtlBtn.disabled = false;
+  }
+}
+
+function showEtlStatus(type, html) {
+  etlStatusEl.classList.remove("hidden", "etl-status--error", "etl-status--success");
+  if (type === "error") etlStatusEl.classList.add("etl-status--error");
+  if (type === "success") etlStatusEl.classList.add("etl-status--success");
+  etlStatusEl.innerHTML = html;
 }

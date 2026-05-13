@@ -17,6 +17,8 @@ import pandas as pd
 from flask import Flask, jsonify, render_template, request, send_file
 from werkzeug.utils import secure_filename
 
+from obm_germany_to_parquet import ETLConfig, OpenBuildingMapGermanyETL
+
 
 DEFAULT_PARQUET = "etl_output/buildings_de_cleaned.parquet"
 DEFAULT_DB = "etl_output/building_lookup.duckdb"
@@ -412,6 +414,91 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
             return jsonify({"error": "Result file was not found."}), 404
 
         return send_file(output_path, as_attachment=True, download_name=safe_name)
+
+    # ------------------------------------------------------------------
+    # ETL: Create OBM Database
+    # ------------------------------------------------------------------
+
+    etl_jobs: Dict[str, Dict[str, Any]] = {}
+    etl_jobs_lock = Lock()
+
+    def set_etl_job(job_id: str, **updates: Any) -> None:
+        with etl_jobs_lock:
+            etl_jobs.setdefault(job_id, {}).update(updates)
+
+    @app.route("/api/etl/create-database", methods=["POST"])
+    def etl_create_database():
+        # ---------- boundary file (optional) ----------
+        boundary_file_path: Optional[str] = None
+        boundary_file = request.files.get("boundary_file")
+        if boundary_file and boundary_file.filename:
+            filename = secure_filename(boundary_file.filename)
+            ext = Path(filename).suffix.lower()
+            if ext not in {".zip", ".gpkg", ".shp"}:
+                return jsonify({"error": "Boundary file must be a .zip, .gpkg, or .shp."}), 400
+            upload_dir = Path(app.config["UPLOAD_DIR"])
+            saved_path = upload_dir / f"{uuid.uuid4().hex}_{filename}"
+            boundary_file.save(saved_path)
+            boundary_file_path = str(saved_path)
+
+        # ---------- config fields ----------
+        def _float(key: str, default: float) -> float:
+            try:
+                return float(request.form.get(key, default))
+            except (TypeError, ValueError):
+                return default
+
+        def _str(key: str, default: str) -> str:
+            val = request.form.get(key, "").strip()
+            return val if val else default
+
+        output_dir = _str("output_dir", "./etl_output")
+        output_parquet = _str("output_parquet", f"{output_dir}/buildings_cleaned.parquet")
+        duckdb_file = _str("duckdb_file", f"{output_dir}/work_obm.duckdb")
+
+        cfg = ETLConfig(
+            output_dir=output_dir,
+            output_parquet=output_parquet,
+            duckdb_file=duckdb_file,
+            temp_directory=f"{output_dir}/duckdb_temp",
+            lon_min=_float("lon_min", 5.5),
+            lon_max=_float("lon_max", 15.5),
+            lat_min=_float("lat_min", 47.0),
+            lat_max=_float("lat_max", 55.3),
+            boundary_file=boundary_file_path,
+            force=True,
+        )
+
+        job_id = uuid.uuid4().hex
+        set_etl_job(
+            job_id,
+            status="running",
+            phase="Starting ETL",
+            percent=1,
+            error=None,
+            output_parquet=cfg.output_parquet,
+            duckdb_file=cfg.duckdb_file,
+        )
+
+        def run_etl() -> None:
+            try:
+                set_etl_job(job_id, phase="Initialising DuckDB", percent=5)
+                etl = OpenBuildingMapGermanyETL(cfg)
+                etl.run()
+                set_etl_job(job_id, status="complete", phase="Complete", percent=100)
+            except Exception as exc:
+                set_etl_job(job_id, status="error", phase="Error", percent=100, error=str(exc))
+
+        Thread(target=run_etl, daemon=True).start()
+        return jsonify({"job_id": job_id, "status": "running"}), 202
+
+    @app.route("/api/etl/progress/<job_id>")
+    def etl_progress(job_id: str):
+        with etl_jobs_lock:
+            job = etl_jobs.get(job_id)
+        if job is None:
+            return jsonify({"error": "Job not found."}), 404
+        return jsonify(job)
 
     return app
 

@@ -57,7 +57,7 @@ input[type=number] {
 
 .shell {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 383px;
+  grid-template-columns: minmax(0, 1fr) 766px;
   height: 100%;
   background: #fff;
 }
@@ -93,7 +93,7 @@ input[type=number] {
 
 .tabs {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1fr;
   gap: 8px;
   padding: 6px;
   border: 1px solid rgba(0, 31, 63, 0.08);
@@ -596,6 +596,153 @@ dd {
 
 .hidden {
   display: none;
+}
+
+/* ETL tab ----------------------------------------------------------------- */
+
+.etl-splash {
+  display: grid;
+  gap: 14px;
+  align-content: center;
+  justify-items: start;
+  height: 100%;
+  padding: 48px 44px;
+}
+
+.etl-splash-sub {
+  max-width: 520px;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.etl-tools {
+  display: grid;
+  gap: 14px;
+}
+
+.etl-form {
+  display: grid;
+  gap: 14px;
+}
+
+.etl-fieldset {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.etl-fieldset legend {
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.etl-fieldset label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.etl-fieldset input[type=text],
+.etl-fieldset input[type=number] {
+  width: 100%;
+  padding: 10px 14px;
+  border: 2px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.etl-fieldset input:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--focus);
+}
+
+.bbox-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.etl-hint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.file-chosen {
+  color: var(--brand-dark);
+  font-size: 13px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+#runEtl {
+  height: 44px;
+  padding: 0 16px;
+  border: 2px solid var(--brand);
+  border-radius: 12px;
+  background: var(--brand);
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: var(--shadow-md);
+  transition: all var(--transition-fast);
+}
+
+#runEtl:hover {
+  border-color: var(--brand-dark);
+  background: var(--brand-dark);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-lg);
+}
+
+#runEtl:disabled {
+  border-color: #94a3b8;
+  background: #94a3b8;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.etl-status {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--soft);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.etl-status--error {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.etl-status--success {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #15803d;
 }
 
 @media (max-width: 820px) {
