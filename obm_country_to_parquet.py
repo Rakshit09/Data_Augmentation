@@ -1,4 +1,5 @@
 import argparse
+import gzip
 import json
 import logging
 import math
@@ -6,6 +7,7 @@ import re
 import shutil
 import sqlite3
 import time
+import urllib.request
 import zipfile
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
@@ -22,6 +24,34 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger("obm_country_etl")
+
+
+def _ensure_duckdb_extension(con: "duckdb.DuckDBPyConnection", name: str) -> None:
+    """Install a DuckDB extension, falling back to a direct download if the CDN returns 403."""
+    try:
+        con.execute(f"INSTALL {name};")
+    except Exception as install_err:
+        if "403" not in str(install_err) and "HTTP" not in str(install_err):
+            raise
+        logger.warning(
+            "INSTALL %s failed (%s). Attempting direct download with browser User-Agent.",
+            name, install_err,
+        )
+        import duckdb as _duckdb
+        version = _duckdb.__version__
+        platform = "windows_amd64"
+        url = f"http://extensions.duckdb.org/v{version}/{platform}/{name}.duckdb_extension.gz"
+        dest_dir = Path.home() / ".duckdb" / "extensions" / f"v{version}" / platform
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        gz_path = dest_dir / f"{name}.duckdb_extension.gz"
+        ext_path = dest_dir / f"{name}.duckdb_extension"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=60) as resp, open(gz_path, "wb") as fh:
+            shutil.copyfileobj(resp, fh)
+        with gzip.open(gz_path, "rb") as gz, open(ext_path, "wb") as out:
+            shutil.copyfileobj(gz, out)
+        gz_path.unlink(missing_ok=True)
+        logger.info("Downloaded %s extension to %s", name, ext_path)
 
 
 @dataclass
@@ -156,9 +186,9 @@ class OpenBuildingMapCountryETL:
 
         self.con = duckdb.connect(self.cfg.duckdb_file)
 
-        self.con.execute("INSTALL spatial;")
+        _ensure_duckdb_extension(self.con, "spatial")
         self.con.execute("LOAD spatial;")
-        self.con.execute("INSTALL httpfs;")
+        _ensure_duckdb_extension(self.con, "httpfs")
         self.con.execute("LOAD httpfs;")
 
         self.con.execute(f"SET threads = {self.cfg.threads};")

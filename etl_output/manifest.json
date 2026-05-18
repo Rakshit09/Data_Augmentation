@@ -1,6 +1,6 @@
 {
-  "created_at_utc": "2026-05-18T14:51:07.965082+00:00",
-  "runtime_seconds": 59.86,
+  "created_at_utc": "2026-05-18T16:45:42.606696+00:00",
+  "runtime_seconds": 175.6,
   "config": {
     "output_dir": "./etl_output",
     "obm_s3": "s3://us-west-2.opendata.source.coop/tge-labs/openbuildingmap/*.parquet",
@@ -9,11 +9,11 @@
     "lon_max": -76.0,
     "lat_min": 17.6,
     "lat_max": 18.7,
-    "duckdb_file": "work_obm_Jamica.duckdb",
+    "duckdb_file": "etl_output/work_obm_jamaica.duckdb",
     "threads": 8,
     "memory_limit": "24GB",
     "temp_directory": "./etl_output/duckdb_temp",
-    "output_parquet": "buildings_cleaned_Jamaica.parquet",
+    "output_parquet": "etl_output/buildings_jamaica_cleaned.parquet",
     "row_group_size": 100000,
     "metres_per_storey": 3.0,
     "usable_floor_factor": 1.0,
@@ -21,10 +21,10 @@
     "sample_only": false,
     "sample_limit": 100000,
     "obm_quadkey_zoom": 6,
-    "boundary_file": "etl_output/app_uploads/a8eb781d9fe14b35b8832b2a687644ec_jamaica_adm0_geoboundaries.zip"
+    "boundary_file": "etl_output\\app_uploads\\50d1d6c385a94812a3322559b465c0d7_jamaica_adm0_geoboundaries.zip"
   },
-  "output_parquet": "/Users/rakshitjoshi/Data Augmentation/buildings_cleaned_Jamaica.parquet",
-  "profile_dir": "/Users/rakshitjoshi/Data Augmentation/etl_output/profile",
+  "output_parquet": "C:\\Users\\rajoshi\\Data Augmentation\\etl_output\\buildings_jamaica_cleaned.parquet",
+  "profile_dir": "C:\\Users\\rajoshi\\Data Augmentation\\etl_output\\profile",
   "notes": [
     "Geometry is stored as WKB binary in geom_wkb.",
     "Coordinates are EPSG:4326.",
