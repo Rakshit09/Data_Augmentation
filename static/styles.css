@@ -1,6 +1,6 @@
 :root {
-  --brand: #0882df;
-  --brand-dark: #0882df;
+  --brand: #6FACDE;
+  --brand-dark: #3f627f;
   --ink: #001F3F;
   --muted: #64748b;
   --line: #e2e8f0;
@@ -57,7 +57,7 @@ input[type=number] {
 
 .shell {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 766px;
+  grid-template-columns: minmax(0, 1fr) 550px;
   height: 100%;
   background: #fff;
 }
@@ -174,11 +174,72 @@ h2 {
 }
 
 .side-mode,
+.data-source,
 .exposure-tools,
 .upload-form,
 .mapping {
   display: grid;
   gap: 14px;
+}
+
+.data-source {
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 14px 0 16px;
+}
+
+.data-source-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.data-source label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.path-picker-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.file-picker {
+  display: grid;
+  gap: 6px;
+  max-height: 160px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8fbff;
+}
+
+.file-picker button {
+  height: auto;
+  padding: 8px 10px;
+  border: 1px solid rgba(0, 120, 212, 0.18);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  box-shadow: none;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.file-picker button:hover {
+  border-color: var(--brand);
+  background: #edf7ff;
+  color: var(--brand-dark);
+  transform: none;
+  box-shadow: none;
 }
 
 .empty,
@@ -195,6 +256,7 @@ h2 {
 }
 
 .search input,
+.data-source input,
 .upload-form input,
 .mapping select,
 .mapping input {
@@ -214,6 +276,12 @@ h2 {
   padding: 0 14px;
 }
 
+.data-source input {
+  height: 40px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
 .upload-form input,
 .mapping select,
 .mapping input {
@@ -225,6 +293,7 @@ h2 {
 }
 
 .search input:focus,
+.data-source input:focus,
 .upload-form input:focus,
 .mapping select:focus,
 .mapping input:focus {
@@ -234,6 +303,7 @@ h2 {
 }
 
 .search button,
+.data-source button,
 .upload-form button,
 .mapping button,
 .download {
@@ -249,13 +319,23 @@ h2 {
 }
 
 .search button,
+.data-source button,
 .upload-form button,
 .mapping button {
   height: 44px;
   padding: 0 16px;
 }
 
+.data-source-header button {
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 10px;
+  box-shadow: none;
+  font-size: 12px;
+}
+
 .search button:hover,
+.data-source button:hover,
 .upload-form button:hover,
 .mapping button:hover,
 .download:hover {
@@ -265,12 +345,50 @@ h2 {
   box-shadow: var(--shadow-lg);
 }
 
-.mapping button:disabled {
+.mapping button:disabled,
+.data-source button:disabled {
   border-color: #94a3b8;
   background: #94a3b8;
   cursor: not-allowed;
   transform: none;
   box-shadow: none;
+}
+
+.data-source .file-picker button {
+  height: auto;
+  padding: 8px 10px;
+  border: 1px solid rgba(0, 120, 212, 0.18);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+  box-shadow: none;
+  text-align: left;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.data-source .file-picker button:hover {
+  border-color: var(--brand);
+  background: #edf7ff;
+  color: var(--brand-dark);
+  transform: none;
+  box-shadow: none;
+}
+
+.data-source-message {
+  min-height: 18px;
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.data-source-message.error {
+  color: #b91c1c;
+}
+
+.data-source-message.success {
+  color: var(--brand-dark);
 }
 
 .search-results {
@@ -509,7 +627,7 @@ dd {
 .preview-table th {
   position: sticky;
   top: 0;
-  background: #7bc1fa;
+  background: var(--brand);
   color: var(--ink);
   font-weight: 700;
 }
@@ -519,7 +637,7 @@ dd {
 }
 
 .preview-table h3{
-  background-color: #7bc1fa;
+  background-color: var(--brand)
 }
 
 .stats-panel {
@@ -546,7 +664,7 @@ dd {
   margin: 0;
   padding: 14px 16px;
   border-bottom: 1px solid rgba(0, 31, 63, 0.12);
-  background: #7bc1fa;
+  background: var(--brand);
   color: #000000;
   font-size: 15px;
   font-weight: 800;

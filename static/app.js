@@ -10,6 +10,18 @@ const exposureTools = document.getElementById("exposureTools");
 const etlTools = document.getElementById("etlTools");
 const modeEyebrow = document.getElementById("modeEyebrow");
 const modeTitle = document.getElementById("modeTitle");
+const dataSourcePanel = document.getElementById("dataSourcePanel");
+const activeParquetPath = document.getElementById("activeParquetPath");
+const activeDbPath = document.getElementById("activeDbPath");
+const parquetFileOptions = document.getElementById("parquetFileOptions");
+const dbFileOptions = document.getElementById("dbFileOptions");
+const browseParquet = document.getElementById("browseParquet");
+const browseDb = document.getElementById("browseDb");
+const parquetPicker = document.getElementById("parquetPicker");
+const dbPicker = document.getElementById("dbPicker");
+const refreshSources = document.getElementById("refreshSources");
+const applyDataSource = document.getElementById("applyDataSource");
+const dataSourceMessage = document.getElementById("dataSourceMessage");
 const emptyEl = document.getElementById("empty");
 const detailsEl = document.getElementById("details");
 const matchTypeEl = document.getElementById("matchType");
@@ -34,6 +46,8 @@ const statsPanel = document.getElementById("statsPanel");
 const statsGrid = document.getElementById("statsGrid");
 
 let currentUploadId = null;
+let availableParquetFiles = [];
+let availableDbFiles = [];
 
 const selectedSource = {
   type: "FeatureCollection",
@@ -73,6 +87,10 @@ map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-
 lookupTab.addEventListener("click", () => switchMode("lookup"));
 exposureTab.addEventListener("click", () => switchMode("exposure"));
 etlTab.addEventListener("click", () => switchMode("etl"));
+refreshSources.addEventListener("click", () => loadDataSources());
+applyDataSource.addEventListener("click", () => applySelectedDataSource());
+browseParquet.addEventListener("click", () => browseLocalFile("parquet"));
+browseDb.addEventListener("click", () => browseLocalFile("db"));
 
 function switchMode(mode) {
   const isLookup = mode === "lookup";
@@ -90,6 +108,7 @@ function switchMode(mode) {
   lookupTools.classList.toggle("hidden", !isLookup);
   exposureTools.classList.toggle("hidden", !isExposure);
   etlTools.classList.toggle("hidden", !isEtl);
+  dataSourcePanel.classList.toggle("hidden", isEtl);
 
   modeEyebrow.textContent = isLookup ? "Germany" : " ";
   modeTitle.textContent = isLookup ? "Building Lookup"
@@ -100,6 +119,147 @@ function switchMode(mode) {
     window.setTimeout(() => map.resize(), 50);
   }
 }
+
+async function loadDataSources() {
+  setDataSourceMessage("Scanning local files...");
+  refreshSources.disabled = true;
+
+  try {
+    const response = await fetch("/api/data-source");
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error || "Could not load data source files");
+    }
+
+    activeParquetPath.value = payload.parquet_path || "";
+    activeDbPath.value = payload.db_path || "";
+    availableParquetFiles = payload.parquet_files || [];
+    availableDbFiles = payload.db_files || [];
+    renderFileOptions(parquetFileOptions, availableParquetFiles);
+    renderFileOptions(dbFileOptions, availableDbFiles);
+    renderFilePicker(parquetPicker, availableParquetFiles, activeParquetPath);
+    renderFilePicker(dbPicker, availableDbFiles, activeDbPath);
+    setDataSourceMessage("Choose a local Parquet and DuckDB lookup database.", "success");
+  } catch (error) {
+    setDataSourceMessage(error.message, "error");
+  } finally {
+    refreshSources.disabled = false;
+  }
+}
+
+function renderFileOptions(listEl, files) {
+  listEl.innerHTML = files
+    .map((path) => `<option value="${escapeHtml(path)}"></option>`)
+    .join("");
+}
+
+function renderFilePicker(pickerEl, files, inputEl) {
+  if (!files.length) {
+    pickerEl.innerHTML = "<p>No matching files found.</p>";
+    return;
+  }
+
+  pickerEl.innerHTML = files
+    .map((path) => `<button type="button" data-path="${escapeHtml(path)}">${escapeHtml(path)}</button>`)
+    .join("");
+
+  pickerEl.querySelectorAll("button").forEach((button) => {
+    button.addEventListener("click", () => {
+      inputEl.value = button.dataset.path || "";
+      pickerEl.classList.add("hidden");
+    });
+  });
+}
+
+function toggleFilePicker(kind) {
+  const picker = kind === "parquet" ? parquetPicker : dbPicker;
+  const otherPicker = kind === "parquet" ? dbPicker : parquetPicker;
+  otherPicker.classList.add("hidden");
+
+  const files = kind === "parquet" ? availableParquetFiles : availableDbFiles;
+  if (!files.length) {
+    setDataSourceMessage("No matching local files found. Press Refresh after creating files.", "error");
+  }
+  picker.classList.toggle("hidden");
+}
+
+async function browseLocalFile(kind) {
+  const button = kind === "parquet" ? browseParquet : browseDb;
+  const input = kind === "parquet" ? activeParquetPath : activeDbPath;
+  const picker = kind === "parquet" ? parquetPicker : dbPicker;
+  const label = kind === "parquet" ? "Parquet" : "DuckDB";
+
+  button.disabled = true;
+  setDataSourceMessage(`Opening ${label} file picker...`);
+
+  try {
+    const response = await fetch(`/api/browse-file?kind=${encodeURIComponent(kind)}`);
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error || "Could not open file picker");
+    }
+
+    if (payload.cancelled) {
+      setDataSourceMessage("File selection cancelled.");
+      return;
+    }
+
+    input.value = payload.path || "";
+    picker.classList.add("hidden");
+    setDataSourceMessage("File selected. Press Use selected files.", "success");
+  } catch (error) {
+    setDataSourceMessage(`${error.message} Showing the local file list instead.`, "error");
+    toggleFilePicker(kind);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function applySelectedDataSource() {
+  applyDataSource.disabled = true;
+  setDataSourceMessage("Applying selected files...");
+
+  try {
+    const response = await fetch("/api/data-source", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        parquet_path: activeParquetPath.value.trim(),
+        db_path: activeDbPath.value.trim()
+      })
+    });
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error || "Could not apply data source");
+    }
+
+    activeParquetPath.value = payload.parquet_path || "";
+    activeDbPath.value = payload.db_path || "";
+    clearSelection();
+    const message = payload.generated_lookup
+      ? `Created lookup DB and switched to ${payload.db_path}.`
+      : "Active data source updated.";
+    setDataSourceMessage(message, "success");
+    statusEl.textContent = "Ready";
+  } catch (error) {
+    setDataSourceMessage(error.message, "error");
+  } finally {
+    applyDataSource.disabled = false;
+  }
+}
+
+function setDataSourceMessage(message, type = "") {
+  dataSourceMessage.textContent = message;
+  dataSourceMessage.classList.toggle("error", type === "error");
+  dataSourceMessage.classList.toggle("success", type === "success");
+}
+
+loadDataSources();
 
 map.on("load", () => {
   map.addSource("selected-building", {
@@ -599,8 +759,10 @@ function escapeHtml(value) {
 const boundaryFile = document.getElementById("boundaryFile");
 const boundaryFileName = document.getElementById("boundaryFileName");
 const etlOutputDir = document.getElementById("etlOutputDir");
+const browseOutputDir = document.getElementById("browseOutputDir");
 const etlOutputParquet = document.getElementById("etlOutputParquet");
 const etlDuckdbFile = document.getElementById("etlDuckdbFile");
+const etlLookupDbFile = document.getElementById("etlLookupDbFile");
 const runEtlBtn = document.getElementById("runEtl");
 const etlStatusEl = document.getElementById("etlStatus");
 
@@ -613,8 +775,7 @@ boundaryFile.addEventListener("change", () => {
   }
 });
 
-// Auto-fill Parquet / DuckDB paths when output dir changes
-etlOutputDir.addEventListener("input", () => {
+function updateEtlOutputPlaceholders() {
   const dir = etlOutputDir.value.trim() || "./etl_output";
   if (!etlOutputParquet.dataset.userEdited) {
     etlOutputParquet.placeholder = `${dir}/buildings_cleaned.parquet`;
@@ -622,10 +783,45 @@ etlOutputDir.addEventListener("input", () => {
   if (!etlDuckdbFile.dataset.userEdited) {
     etlDuckdbFile.placeholder = `${dir}/work_obm.duckdb`;
   }
-});
+  if (!etlLookupDbFile.dataset.userEdited) {
+    etlLookupDbFile.placeholder = `${dir}/building_lookup.duckdb`;
+  }
+}
+
+// Auto-fill Parquet / DuckDB paths when output dir changes
+etlOutputDir.addEventListener("input", updateEtlOutputPlaceholders);
 
 etlOutputParquet.addEventListener("input", () => { etlOutputParquet.dataset.userEdited = "1"; });
 etlDuckdbFile.addEventListener("input", () => { etlDuckdbFile.dataset.userEdited = "1"; });
+etlLookupDbFile.addEventListener("input", () => { etlLookupDbFile.dataset.userEdited = "1"; });
+updateEtlOutputPlaceholders();
+
+browseOutputDir.addEventListener("click", async () => {
+  browseOutputDir.disabled = true;
+  showEtlStatus("info", "Opening output folder picker...");
+
+  try {
+    const response = await fetch("/api/browse-folder");
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error || "Could not open folder picker");
+    }
+
+    if (payload.cancelled) {
+      showEtlStatus("info", "Folder selection cancelled.");
+      return;
+    }
+
+    etlOutputDir.value = payload.path || "";
+    updateEtlOutputPlaceholders();
+    showEtlStatus("info", "Output folder selected.");
+  } catch (error) {
+    showEtlStatus("error", error.message);
+  } finally {
+    browseOutputDir.disabled = false;
+  }
+});
 
 runEtlBtn.addEventListener("click", async () => {
   runEtlBtn.disabled = true;
@@ -641,6 +837,7 @@ runEtlBtn.addEventListener("click", async () => {
   formData.append("output_dir", dir);
   formData.append("output_parquet", etlOutputParquet.value.trim() || `${dir}/buildings_cleaned.parquet`);
   formData.append("duckdb_file", etlDuckdbFile.value.trim() || `${dir}/work_obm.duckdb`);
+  formData.append("lookup_db_file", etlLookupDbFile.value.trim() || `${dir}/building_lookup.duckdb`);
   formData.append("lon_min", document.getElementById("etlLonMin").value);
   formData.append("lon_max", document.getElementById("etlLonMax").value);
   formData.append("lat_min", document.getElementById("etlLatMin").value);
@@ -684,7 +881,8 @@ async function pollEtlProgress(jobId) {
       showEtlStatus("success", `
         <strong>Database created successfully.</strong><br>
         Parquet: <code>${escapeHtml(payload.output_parquet || "")}</code><br>
-        DuckDB: <code>${escapeHtml(payload.duckdb_file || "")}</code>
+        DuckDB work file: <code>${escapeHtml(payload.duckdb_file || "")}</code><br>
+        DuckDB lookup table: <code>${escapeHtml(payload.lookup_db_file || "")}</code>
       `);
       runEtlBtn.disabled = false;
       return;

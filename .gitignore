@@ -1,16 +1,23 @@
+# Ignore all data files anywhere in the project
+*.parquet
+*.duckdb
+
 # Ignore all parquet and duckdb files inside etl_output
 etl_output/*.parquet
 etl_output/*.duckdb
 etl_output_test/*
 
+
 #Ignore all boundary files
-etl_output/boundary/*
+etl_output/boundary/
+*
 # General Python ignores (recommended)
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .venv/
+
 
 # VS Code
 .vscode/

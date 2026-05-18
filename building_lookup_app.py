@@ -1,6 +1,8 @@
 import argparse
 import json
 import math
+import subprocess
+import sys
 import time
 import urllib.parse
 import urllib.request
@@ -17,7 +19,7 @@ import pandas as pd
 from flask import Flask, jsonify, render_template, request, send_file
 from werkzeug.utils import secure_filename
 
-from obm_germany_to_parquet import ETLConfig, OpenBuildingMapGermanyETL
+from obm_country_to_parquet import ETLConfig, OpenBuildingMapCountryETL
 
 
 DEFAULT_PARQUET = "etl_output/buildings_de_cleaned.parquet"
@@ -73,6 +75,86 @@ def json_safe(value: Any) -> Any:
     return value
 
 
+def fetch_geocoder_json(url: str, user_agent: str) -> Any:
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": user_agent,
+            "Accept": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=10) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def geocode_with_nominatim(query: str, user_agent: str) -> List[Dict[str, Any]]:
+    params = urllib.parse.urlencode({
+        "q": query,
+        "format": "jsonv2",
+        "addressdetails": 1,
+        "limit": 5,
+    })
+    raw_results = fetch_geocoder_json(
+        f"https://nominatim.openstreetmap.org/search?{params}",
+        user_agent,
+    )
+    if not isinstance(raw_results, list):
+        raise ValueError("Nominatim returned an unexpected response.")
+
+    return [
+        {
+            "label": item.get("display_name"),
+            "lon": float(item["lon"]),
+            "lat": float(item["lat"]),
+            "type": item.get("type"),
+            "provider": "Nominatim",
+        }
+        for item in raw_results
+        if item.get("lat") and item.get("lon") and item.get("display_name")
+    ]
+
+
+def geocode_with_photon(query: str, user_agent: str) -> List[Dict[str, Any]]:
+    params = urllib.parse.urlencode({
+        "q": query,
+        "limit": 5,
+    })
+    raw_results = fetch_geocoder_json(
+        f"https://photon.komoot.io/api/?{params}",
+        user_agent,
+    )
+    features = raw_results.get("features", []) if isinstance(raw_results, dict) else []
+    results = []
+
+    for feature in features:
+        geometry = feature.get("geometry") or {}
+        properties = feature.get("properties") or {}
+        coordinates = geometry.get("coordinates") or []
+        if len(coordinates) < 2:
+            continue
+
+        label_parts = [
+            properties.get("name"),
+            properties.get("street"),
+            properties.get("city") or properties.get("county"),
+            properties.get("state"),
+            properties.get("country"),
+        ]
+        label = ", ".join(str(part) for part in label_parts if part)
+        if not label:
+            continue
+
+        results.append({
+            "label": label,
+            "lon": float(coordinates[0]),
+            "lat": float(coordinates[1]),
+            "type": properties.get("osm_value"),
+            "provider": "Photon",
+        })
+
+    return results
+
+
 def detect_csv_encoding(csv_path: Path) -> str:
     for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin1"):
         try:
@@ -88,6 +170,149 @@ def open_db(db_path: str, read_only: bool = False) -> duckdb.DuckDBPyConnection:
     con = duckdb.connect(db_path, read_only=read_only)
     con.execute("LOAD spatial;")
     return con
+
+
+def display_path(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def find_local_files(suffix: str) -> List[str]:
+    ignored_dirs = {".git", ".venv", "__pycache__"}
+    matches = []
+    for path in Path.cwd().rglob(f"*{suffix}"):
+        if any(part in ignored_dirs for part in path.parts):
+            continue
+        if path.is_file():
+            matches.append(display_path(path))
+    return sorted(set(matches))
+
+
+def validate_local_file(path_value: str, suffix: str, label: str) -> str:
+    path = Path(path_value).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    if not path.exists() or not path.is_file():
+        raise ValueError(f"{label} file does not exist: {path_value}")
+    if path.suffix.lower() != suffix:
+        raise ValueError(f"{label} file must end with {suffix}: {path_value}")
+    return display_path(path)
+
+
+def browse_local_file(kind: str) -> Optional[str]:
+    choices = {
+        "parquet": (".parquet", "Parquet", "Select Parquet file"),
+        "db": (".duckdb", "DuckDB", "Select DuckDB lookup database"),
+    }
+    if kind not in choices:
+        raise ValueError("File type must be parquet or db.")
+
+    suffix, label, title = choices[kind]
+
+    if sys.platform == "darwin":
+        script = f'POSIX path of (choose file with prompt "{title}")'
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            selected = result.stdout.strip()
+            return validate_local_file(selected, suffix, label)
+        if "User canceled" in result.stderr:
+            return None
+        raise RuntimeError(result.stderr.strip() or "macOS file picker failed.")
+
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        selected = filedialog.askopenfilename(
+            title=title,
+            initialdir=str(Path.cwd()),
+            filetypes=[(f"{label} files", f"*{suffix}"), ("All files", "*.*")],
+        )
+    finally:
+        root.destroy()
+
+    if not selected:
+        return None
+    return validate_local_file(selected, suffix, label)
+
+
+def browse_local_folder() -> Optional[str]:
+    title = "Select output folder"
+
+    if sys.platform == "darwin":
+        script = f'POSIX path of (choose folder with prompt "{title}")'
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            selected = Path(result.stdout.strip())
+            return display_path(selected)
+        if "User canceled" in result.stderr:
+            return None
+        raise RuntimeError(result.stderr.strip() or "macOS folder picker failed.")
+
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    try:
+        selected = filedialog.askdirectory(
+            title=title,
+            initialdir=str(Path.cwd()),
+            mustexist=True,
+        )
+    finally:
+        root.destroy()
+
+    if not selected:
+        return None
+    return display_path(Path(selected))
+
+
+def has_buildings_table(db_path: str) -> bool:
+    con = open_db(db_path, read_only=True)
+    try:
+        return bool(con.execute("""
+            SELECT COUNT(*)
+            FROM information_schema.tables
+            WHERE table_name = 'buildings';
+        """).fetchone()[0])
+    finally:
+        con.close()
+
+
+def lookup_db_path_for_parquet(parquet_path: str) -> str:
+    parquet = Path(parquet_path)
+    if not parquet.is_absolute():
+        parquet = Path.cwd() / parquet
+
+    name = parquet.stem
+    for prefix in ("buildings_cleaned_", "buildings_de_cleaned", "buildings_cleaned"):
+        if name == prefix:
+            name = "building_lookup"
+            break
+        if name.startswith(prefix):
+            name = "building_lookup_" + name[len(prefix):]
+            break
+    else:
+        name = f"{name}_lookup"
+
+    return display_path(parquet.with_name(f"{name}.duckdb"))
 
 
 def prepare_index(parquet_path: str, db_path: str, force: bool = False, threads: int = 8) -> None:
@@ -184,8 +409,9 @@ def prepare_index(parquet_path: str, db_path: str, force: bool = False, threads:
 def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Flask:
     app = Flask(__name__)
     app.config["DB_PATH"] = db_path
+    app.config["PARQUET_PATH"] = DEFAULT_PARQUET
     app.config["NEAREST_RADIUS_M"] = float(nearest_radius_m)
-    app.config["GEOCODER_USER_AGENT"] = "GermanyBuildingLookup/0.1 local-development"
+    app.config["GEOCODER_USER_AGENT"] = "OBMBuildingLookup/0.1 local-development"
     app.config["UPLOAD_DIR"] = "etl_output/app_uploads"
     app.config["RESULT_DIR"] = "etl_output/app_results"
     geocode_cache: Dict[str, Any] = {}
@@ -206,7 +432,104 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
     @app.route("/api/health")
     def health():
         db = Path(app.config["DB_PATH"])
-        return jsonify({"ok": db.exists(), "db_path": str(db)})
+        parquet = Path(app.config["PARQUET_PATH"])
+        return jsonify({
+            "ok": db.exists(),
+            "db_path": str(db),
+            "parquet_path": str(parquet),
+        })
+
+    @app.route("/api/data-source", methods=["GET", "POST"])
+    def data_source():
+        if request.method == "GET":
+            return jsonify({
+                "parquet_path": app.config["PARQUET_PATH"],
+                "db_path": app.config["DB_PATH"],
+                "parquet_files": find_local_files(".parquet"),
+                "db_files": find_local_files(".duckdb"),
+            })
+
+        payload = request.get_json(silent=True) or {}
+        parquet_path = str(payload.get("parquet_path", "")).strip()
+        db_path = str(payload.get("db_path", "")).strip()
+
+        if not parquet_path or not db_path:
+            return jsonify({"error": "Parquet and DuckDB paths are required."}), 400
+
+        try:
+            parquet_path = validate_local_file(parquet_path, ".parquet", "Parquet")
+            db_path = validate_local_file(db_path, ".duckdb", "DuckDB")
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        generated_lookup = False
+        try:
+            has_buildings = has_buildings_table(db_path)
+        except Exception as exc:
+            return jsonify({"error": f"Could not open DuckDB lookup database: {exc}"}), 400
+
+        if not has_buildings:
+            generated_db_path = lookup_db_path_for_parquet(parquet_path)
+            try:
+                prepare_index(parquet_path, generated_db_path, force=True, threads=8)
+                has_buildings = has_buildings_table(generated_db_path)
+            except Exception as exc:
+                return jsonify({
+                    "error": (
+                        "The selected DuckDB file is an ETL work database, not a lookup database, "
+                        f"and creating a lookup database from the Parquet failed: {exc}"
+                    )
+                }), 400
+
+            if not has_buildings:
+                return jsonify({"error": "Could not create a buildings lookup table from the selected Parquet."}), 400
+
+            db_path = generated_db_path
+            generated_lookup = True
+
+        app.config["PARQUET_PATH"] = parquet_path
+        app.config["DB_PATH"] = db_path
+        return jsonify({
+            "parquet_path": parquet_path,
+            "db_path": db_path,
+            "status": "active",
+            "generated_lookup": generated_lookup,
+        })
+
+    @app.route("/api/browse-file")
+    def browse_file():
+        kind = str(request.args.get("kind", "")).strip()
+        try:
+            selected_path = browse_local_file(kind)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except Exception as exc:
+            return jsonify({
+                "error": (
+                    "Native file picker is not available from this Flask session. "
+                    f"{exc}"
+                )
+            }), 501
+
+        if selected_path is None:
+            return jsonify({"cancelled": True})
+        return jsonify({"path": selected_path})
+
+    @app.route("/api/browse-folder")
+    def browse_folder():
+        try:
+            selected_path = browse_local_folder()
+        except Exception as exc:
+            return jsonify({
+                "error": (
+                    "Native folder picker is not available from this Flask session. "
+                    f"{exc}"
+                )
+            }), 501
+
+        if selected_path is None:
+            return jsonify({"cancelled": True})
+        return jsonify({"path": selected_path})
 
     @app.route("/api/building-at")
     def building_at():
@@ -257,43 +580,28 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
         if elapsed < 1.0:
             time.sleep(1.0 - elapsed)
 
-        params = urllib.parse.urlencode({
-            "q": query,
-            "format": "jsonv2",
-            "addressdetails": 1,
-            "limit": 5,
-            "countrycodes": "de",
-        })
-        url = f"https://nominatim.openstreetmap.org/search?{params}"
-        req = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": app.config["GEOCODER_USER_AGENT"],
-                "Accept": "application/json",
-            },
-        )
+        errors = []
+        results = []
+        provider_succeeded = False
+        for geocoder in (geocode_with_nominatim, geocode_with_photon):
+            try:
+                results = geocoder(query, app.config["GEOCODER_USER_AGENT"])
+                provider_succeeded = True
+            except Exception as exc:
+                errors.append(f"{geocoder.__name__}: {exc}")
+            finally:
+                last_geocode_at[0] = time.time()
 
-        try:
-            with urllib.request.urlopen(req, timeout=10) as response:
-                raw_results = json.loads(response.read().decode("utf-8"))
-        except Exception as exc:
-            return jsonify({"error": f"Address search failed: {exc}"}), 502
-        finally:
-            last_geocode_at[0] = time.time()
+            if results:
+                geocode_cache[cache_key] = results
+                return jsonify({"results": results})
 
-        results = [
-            {
-                "label": item.get("display_name"),
-                "lon": float(item["lon"]),
-                "lat": float(item["lat"]),
-                "type": item.get("type"),
-            }
-            for item in raw_results
-            if item.get("lat") and item.get("lon") and item.get("display_name")
-        ]
-        geocode_cache[cache_key] = results
+        if errors and not provider_succeeded:
+            return jsonify({
+                "error": "Address search failed. " + " | ".join(errors)
+            }), 502
 
-        return jsonify({"results": results})
+        return jsonify({"results": []})
 
     @app.route("/api/exposure/preview", methods=["POST"])
     def exposure_preview():
@@ -453,8 +761,27 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
             return val if val else default
 
         output_dir = _str("output_dir", "./etl_output")
-        output_parquet = _str("output_parquet", f"{output_dir}/buildings_cleaned.parquet")
-        duckdb_file = _str("duckdb_file", f"{output_dir}/work_obm.duckdb")
+
+        def _output_path(key: str, default_filename: str, suffix: str, label: str) -> str:
+            raw_value = request.form.get(key, "").strip()
+            path = Path(raw_value) if raw_value else Path(output_dir) / default_filename
+            if raw_value and not path.is_absolute() and path.parent == Path("."):
+                path = Path(output_dir) / path
+            if path.suffix.lower() != suffix:
+                raise ValueError(f"{label} must end with {suffix}.")
+            return path.as_posix()
+
+        try:
+            output_parquet = _output_path("output_parquet", "buildings_cleaned.parquet", ".parquet", "Parquet output")
+            duckdb_file = _output_path("duckdb_file", "work_obm.duckdb", ".duckdb", "DuckDB work file")
+            lookup_db_file = _output_path("lookup_db_file", "building_lookup.duckdb", ".duckdb", "DuckDB lookup table")
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        duckdb_abs = (Path.cwd() / duckdb_file).resolve() if not Path(duckdb_file).is_absolute() else Path(duckdb_file).resolve()
+        lookup_abs = (Path.cwd() / lookup_db_file).resolve() if not Path(lookup_db_file).is_absolute() else Path(lookup_db_file).resolve()
+        if duckdb_abs == lookup_abs:
+            return jsonify({"error": "DuckDB work file and DuckDB lookup table must be different files."}), 400
 
         cfg = ETLConfig(
             output_dir=output_dir,
@@ -478,13 +805,18 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
             error=None,
             output_parquet=cfg.output_parquet,
             duckdb_file=cfg.duckdb_file,
+            lookup_db_file=lookup_db_file,
         )
 
         def run_etl() -> None:
             try:
                 set_etl_job(job_id, phase="Initialising DuckDB", percent=5)
-                etl = OpenBuildingMapGermanyETL(cfg)
+                etl = OpenBuildingMapCountryETL(cfg)
                 etl.run()
+                set_etl_job(job_id, phase="Creating DuckDB lookup table", percent=85)
+                prepare_index(cfg.output_parquet, lookup_db_file, force=True, threads=8)
+                app.config["PARQUET_PATH"] = display_path(Path(cfg.output_parquet))
+                app.config["DB_PATH"] = display_path(Path(lookup_db_file))
                 set_etl_job(job_id, status="complete", phase="Complete", percent=100)
             except Exception as exc:
                 set_etl_job(job_id, status="error", phase="Error", percent=100, error=str(exc))

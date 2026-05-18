@@ -55,14 +55,41 @@
         <span id="status" class="status">Ready</span>
       </header>
 
+      <section id="dataSourcePanel" class="data-source">
+        <div class="data-source-header">
+          <p class="eyebrow">Active Data Source</p>
+          <button id="refreshSources" type="button">Refresh</button>
+        </div>
+        <label>
+          Parquet
+          <span class="path-picker-row">
+            <input id="activeParquetPath" type="text" list="parquetFileOptions" placeholder="etl_output/buildings_de_cleaned.parquet">
+            <button id="browseParquet" type="button">Browse</button>
+          </span>
+          <datalist id="parquetFileOptions"></datalist>
+          <div id="parquetPicker" class="file-picker hidden"></div>
+        </label>
+        <label>
+          DuckDB lookup
+          <span class="path-picker-row">
+            <input id="activeDbPath" type="text" list="dbFileOptions" placeholder="etl_output/building_lookup.duckdb">
+            <button id="browseDb" type="button">Browse</button>
+          </span>
+          <datalist id="dbFileOptions"></datalist>
+          <div id="dbPicker" class="file-picker hidden"></div>
+        </label>
+        <button id="applyDataSource" type="button">Use selected files</button>
+        <p id="dataSourceMessage" class="data-source-message"></p>
+      </section>
+
       <section id="lookupTools" class="side-mode">
         <form id="searchForm" class="search">
           <input
             id="searchInput"
             type="search"
             autocomplete="off"
-            placeholder="Search address in Germany"
-            aria-label="Search address in Germany"
+            placeholder="Search address"
+            aria-label="Search address"
           >
           <button type="submit">Search</button>
         </form>
@@ -138,7 +165,7 @@
               </label>
               <input id="boundaryFile" class="file-input" type="file" accept=".zip,.shp,.gpkg" tabindex="-1" aria-hidden="true">
               <span id="boundaryFileName" class="file-chosen hidden"></span>
-              <p class="etl-hint">Leave empty to use the BKG VG250 Germany boundary (auto-downloaded).</p>
+              <p class="etl-hint">Upload a country boundary for non-Germany runs. Leave empty only for the default Germany boundary.</p>
             </fieldset>
 
             <fieldset class="etl-fieldset">
@@ -154,13 +181,19 @@
             <fieldset class="etl-fieldset">
               <legend>Output Paths</legend>
               <label>Output folder
-                <input id="etlOutputDir" type="text" value="./etl_output" placeholder="./etl_output">
+                <span class="path-picker-row">
+                  <input id="etlOutputDir" type="text" value="./etl_output" placeholder="./etl_output">
+                  <button id="browseOutputDir" type="button">Browse</button>
+                </span>
               </label>
               <label>Parquet filename
                 <input id="etlOutputParquet" type="text" placeholder="buildings_cleaned.parquet">
               </label>
               <label>DuckDB work file
                 <input id="etlDuckdbFile" type="text" placeholder="work_obm.duckdb">
+              </label>
+              <label>DuckDB lookup table
+                <input id="etlLookupDbFile" type="text" placeholder="building_lookup.duckdb">
               </label>
             </fieldset>
 
