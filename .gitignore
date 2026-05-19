@@ -8,9 +8,17 @@ etl_output/*.duckdb
 etl_output_test/*
 
 
-#Ignore all boundary files
-etl_output/boundary/
-*
+#Ignore all boundary files (large data, not tracked in git)
+etl_output/boundary/*.zip
+etl_output/boundary/*.gpkg
+etl_output/boundary/user_boundary/
+etl_output/boundary/vg250_01-01.utm32s.gpkg.ebenen/
+etl_output/boundary/.extracted
+
+# Ignore app upload/result files
+etl_output/app_uploads/
+etl_output/app_results/
+
 # General Python ignores (recommended)
 __pycache__/
 *.pyc
@@ -21,6 +29,4 @@ __pycache__/
 
 # VS Code
 .vscode/
-./app_uploads/*
-./app_results/*
 .DS_Store
