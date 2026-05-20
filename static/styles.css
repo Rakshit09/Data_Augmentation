@@ -707,11 +707,6 @@ dd {
   background: rgba(0, 120, 212, 0.04);
 }
 
-.maplibregl-ctrl-top-left {
-  top: 12px;
-  left: 12px;
-}
-
 .hidden {
   display: none;
 }

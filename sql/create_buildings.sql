@@ -1,0 +1,32 @@
+CREATE OR REPLACE TABLE {{ buildings_table }} AS
+SELECT
+    building_id::VARCHAR AS building_id,
+    source::VARCHAR AS source,
+    relation_id::VARCHAR AS relation_id,
+    quadkey::VARCHAR AS quadkey,
+    quadkey_prefix_6::VARCHAR AS quadkey_prefix_6,
+    last_update::VARCHAR AS last_update,
+    centroid_lon::DOUBLE AS centroid_lon,
+    centroid_lat::DOUBLE AS centroid_lat,
+    bbox_xmin::DOUBLE AS bbox_xmin,
+    bbox_ymin::DOUBLE AS bbox_ymin,
+    bbox_xmax::DOUBLE AS bbox_xmax,
+    bbox_ymax::DOUBLE AS bbox_ymax,
+    footprint_area_m2::DOUBLE AS footprint_area_m2,
+    height_raw::VARCHAR AS height_raw,
+    occupancy_raw::VARCHAR AS occupancy_raw,
+    floorspace_obm_m2::DOUBLE AS floorspace_obm_m2,
+    height_source_type::VARCHAR AS height_source_type,
+    height_m::DOUBLE AS height_m,
+    stories_exact::DOUBLE AS stories_exact,
+    stories_min::DOUBLE AS stories_min,
+    stories_max::DOUBLE AS stories_max,
+    height_quality::VARCHAR AS height_quality,
+    occupancy_code::VARCHAR AS occupancy_code,
+    occupancy_group::VARCHAR AS occupancy_group,
+    occupancy_quality::VARCHAR AS occupancy_quality,
+    floorspace_est_m2::DOUBLE AS floorspace_est_m2,
+    attribute_completeness_score::DOUBLE AS attribute_completeness_score,
+    ST_GEOGRAPHYFROMWKB(geom_wkb) AS geom
+FROM {{ raw_table }}
+WHERE geom_wkb IS NOT NULL;

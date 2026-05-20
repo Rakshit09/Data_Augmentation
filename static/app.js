@@ -1,3 +1,9 @@
+import {Deck, FlyToInterpolator} from "https://esm.sh/@deck.gl/core@^9.0.0";
+import {BitmapLayer, GeoJsonLayer} from "https://esm.sh/@deck.gl/layers@^9.0.0";
+import {TileLayer} from "https://esm.sh/@deck.gl/geo-layers@^9.0.0";
+import {VectorTileLayer} from "https://esm.sh/@deck.gl/carto@^9.0.0";
+import {vectorQuerySource} from "https://esm.sh/@carto/api-client";
+
 const statusEl = document.getElementById("status");
 const lookupTab = document.getElementById("lookupTab");
 const exposureTab = document.getElementById("exposureTab");
@@ -48,49 +54,133 @@ const statsGrid = document.getElementById("statsGrid");
 let currentUploadId = null;
 let availableParquetFiles = [];
 let availableDbFiles = [];
-
-const selectedSource = {
-  type: "FeatureCollection",
-  features: []
+let selectedFeature = null;
+let buildingsData = null;
+let viewState = {
+  longitude: 10.45,
+  latitude: 51.16,
+  zoom: 5.4,
+  pitch: 0,
+  bearing: 0
 };
 
-const map = new maplibregl.Map({
-  container: "map",
-  style: {
-    version: 8,
-    sources: {
-      osm: {
-        type: "raster",
-        tiles: [
-          "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-        ],
-        tileSize: 256,
-        maxzoom: 19,
-        attribution: "© OpenStreetMap contributors"
-      }
-    },
-    layers: [
-      {
-        id: "osm",
-        type: "raster",
-        source: "osm"
-      }
-    ]
-  },
-  center: [10.45, 51.16],
-  zoom: 5.4,
-  maxZoom: 20
+const osmLayer = new TileLayer({
+  id: "osm-raster",
+  data: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+  minZoom: 0,
+  maxZoom: 19,
+  tileSize: 256,
+  renderSubLayers: (props) => {
+    const {west, south, east, north} = props.tile.bbox;
+    return new BitmapLayer(props, {
+      id: `${props.id}-bitmap`,
+      image: props.data,
+      bounds: [west, south, east, north]
+    });
+  }
 });
 
-map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-left");
+let deckgl;
+deckgl = new Deck({
+  parent: document.getElementById("map"),
+  initialViewState: viewState,
+  controller: true,
+  layers: [osmLayer],
+  getCursor: ({isDragging}) => (isDragging ? "grabbing" : "crosshair"),
+  onViewStateChange: ({viewState: nextViewState}) => {
+    viewState = nextViewState;
+    deckgl.setProps({viewState});
+  },
+  onClick: ({coordinate}) => {
+    if (!coordinate) return;
+    lookupAtCoordinate(coordinate[0], coordinate[1]);
+  }
+});
 
 lookupTab.addEventListener("click", () => switchMode("lookup"));
 exposureTab.addEventListener("click", () => switchMode("exposure"));
 etlTab.addEventListener("click", () => switchMode("etl"));
 refreshSources.addEventListener("click", () => loadDataSources());
 applyDataSource.addEventListener("click", () => applySelectedDataSource());
-browseParquet.addEventListener("click", () => browseLocalFile("parquet"));
-browseDb.addEventListener("click", () => browseLocalFile("db"));
+browseParquet.addEventListener("click", () => toggleFilePicker("parquet"));
+browseDb.classList.add("hidden");
+
+loadDataSources();
+loadCartoLayer();
+
+async function loadCartoLayer() {
+  try {
+    const response = await fetch("/api/carto-config");
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not load CARTO configuration");
+
+    viewState = {...viewState, ...payload.initialViewState};
+    deckgl.setProps({viewState});
+
+    const sourceOptions = {
+      accessToken: payload.accessToken,
+      connectionName: payload.connectionName,
+      sqlQuery: payload.sqlQuery,
+      spatialDataColumn: payload.spatialDataColumn || "geom",
+      columns: ["building_id", "occupancy_group", "height_m", "footprint_area_m2"]
+    };
+    if (payload.apiBaseUrl) sourceOptions.apiBaseUrl = payload.apiBaseUrl;
+
+    buildingsData = vectorQuerySource(sourceOptions);
+    updateDeckLayers();
+    statusEl.textContent = "Ready";
+  } catch (error) {
+    statusEl.textContent = "Map config error";
+    emptyEl.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function updateDeckLayers() {
+  const layers = [osmLayer];
+
+  if (buildingsData) {
+    layers.push(new VectorTileLayer({
+      id: "carto-buildings",
+      data: buildingsData,
+      pickable: false,
+      getFillColor: (feature) => colorForOccupancy(feature.properties?.occupancy_group),
+      getLineColor: [20, 30, 45, 140],
+      lineWidthMinPixels: 0.4,
+      opacity: 0.74,
+      updateTriggers: {
+        getFillColor: []
+      }
+    }));
+  }
+
+  if (selectedFeature) {
+    layers.push(new GeoJsonLayer({
+      id: "selected-building",
+      data: {
+        type: "FeatureCollection",
+        features: [selectedFeature]
+      },
+      pickable: false,
+      filled: true,
+      stroked: true,
+      getFillColor: [255, 183, 3, 110],
+      getLineColor: [193, 18, 31, 245],
+      getLineWidth: 3,
+      lineWidthUnits: "pixels"
+    }));
+  }
+
+  deckgl.setProps({layers});
+}
+
+function colorForOccupancy(value) {
+  const key = String(value || "").toLowerCase();
+  if (key.includes("residential")) return [102, 166, 30, 175];
+  if (key.includes("commercial")) return [231, 111, 81, 180];
+  if (key.includes("industrial")) return [117, 112, 179, 175];
+  if (key.includes("public") || key.includes("civic")) return [27, 158, 119, 175];
+  return [111, 172, 222, 165];
+}
 
 function switchMode(mode) {
   const isLookup = mode === "lookup";
@@ -110,37 +200,32 @@ function switchMode(mode) {
   etlTools.classList.toggle("hidden", !isEtl);
   dataSourcePanel.classList.toggle("hidden", isEtl);
 
-  modeEyebrow.textContent = isLookup ? "Germany" : " ";
+  modeEyebrow.textContent = isLookup ? "Snowflake + CARTO" : " ";
   modeTitle.textContent = isLookup ? "Building Lookup"
     : isExposure ? "Enrich Exposure"
-    : "Create OBM Database";
+    : "Create OBM Table";
 
-  if (isLookup) {
-    window.setTimeout(() => map.resize(), 50);
-  }
+  if (isLookup) window.setTimeout(() => deckgl.redraw(true), 50);
 }
 
 async function loadDataSources() {
-  setDataSourceMessage("Scanning local files...");
+  setDataSourceMessage("Reading active Snowflake source...");
   refreshSources.disabled = true;
 
   try {
     const response = await fetch("/api/data-source");
     const payload = await response.json();
-
-    if (!response.ok) {
-      throw new Error(payload.error || "Could not load data source files");
-    }
+    if (!response.ok) throw new Error(payload.error || "Could not load data source");
 
     activeParquetPath.value = payload.parquet_path || "";
-    activeDbPath.value = payload.db_path || "";
+    activeDbPath.value = payload.snowflake_buildings_table || payload.db_path || "";
     availableParquetFiles = payload.parquet_files || [];
     availableDbFiles = payload.db_files || [];
     renderFileOptions(parquetFileOptions, availableParquetFiles);
     renderFileOptions(dbFileOptions, availableDbFiles);
     renderFilePicker(parquetPicker, availableParquetFiles, activeParquetPath);
     renderFilePicker(dbPicker, availableDbFiles, activeDbPath);
-    setDataSourceMessage("Choose a local Parquet and DuckDB lookup database.", "success");
+    setDataSourceMessage("Using Snowflake for lookup and enrichment.", "success");
   } catch (error) {
     setDataSourceMessage(error.message, "error");
   } finally {
@@ -149,9 +234,7 @@ async function loadDataSources() {
 }
 
 function renderFileOptions(listEl, files) {
-  listEl.innerHTML = files
-    .map((path) => `<option value="${escapeHtml(path)}"></option>`)
-    .join("");
+  listEl.innerHTML = files.map((path) => `<option value="${escapeHtml(path)}"></option>`).join("");
 }
 
 function renderFilePicker(pickerEl, files, inputEl) {
@@ -184,68 +267,27 @@ function toggleFilePicker(kind) {
   picker.classList.toggle("hidden");
 }
 
-async function browseLocalFile(kind) {
-  const button = kind === "parquet" ? browseParquet : browseDb;
-  const input = kind === "parquet" ? activeParquetPath : activeDbPath;
-  const picker = kind === "parquet" ? parquetPicker : dbPicker;
-  const label = kind === "parquet" ? "Parquet" : "DuckDB";
-
-  button.disabled = true;
-  setDataSourceMessage(`Opening ${label} file picker...`);
-
-  try {
-    const response = await fetch(`/api/browse-file?kind=${encodeURIComponent(kind)}`);
-    const payload = await response.json();
-
-    if (!response.ok) {
-      throw new Error(payload.error || "Could not open file picker");
-    }
-
-    if (payload.cancelled) {
-      setDataSourceMessage("File selection cancelled.");
-      return;
-    }
-
-    input.value = payload.path || "";
-    picker.classList.add("hidden");
-    setDataSourceMessage("File selected. Press Use selected files.", "success");
-  } catch (error) {
-    setDataSourceMessage(`${error.message} Showing the local file list instead.`, "error");
-    toggleFilePicker(kind);
-  } finally {
-    button.disabled = false;
-  }
-}
-
 async function applySelectedDataSource() {
   applyDataSource.disabled = true;
-  setDataSourceMessage("Applying selected files...");
+  setDataSourceMessage("Applying Snowflake source...");
 
   try {
     const response = await fetch("/api/data-source", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
+      headers: {"Content-Type": "application/json"},
       body: JSON.stringify({
         parquet_path: activeParquetPath.value.trim(),
-        db_path: activeDbPath.value.trim()
+        snowflake_buildings_table: activeDbPath.value.trim()
       })
     });
     const payload = await response.json();
-
-    if (!response.ok) {
-      throw new Error(payload.error || "Could not apply data source");
-    }
+    if (!response.ok) throw new Error(payload.error || "Could not apply data source");
 
     activeParquetPath.value = payload.parquet_path || "";
-    activeDbPath.value = payload.db_path || "";
+    activeDbPath.value = payload.snowflake_buildings_table || "";
     clearSelection();
-    const message = payload.generated_lookup
-      ? `Created lookup DB and switched to ${payload.db_path}.`
-      : "Active data source updated.";
-    setDataSourceMessage(message, "success");
-    statusEl.textContent = "Ready";
+    setDataSourceMessage("Active Snowflake table updated.", "success");
+    await loadCartoLayer();
   } catch (error) {
     setDataSourceMessage(error.message, "error");
   } finally {
@@ -259,47 +301,14 @@ function setDataSourceMessage(message, type = "") {
   dataSourceMessage.classList.toggle("success", type === "success");
 }
 
-loadDataSources();
-
-map.on("load", () => {
-  map.addSource("selected-building", {
-    type: "geojson",
-    data: selectedSource
-  });
-
-  map.addLayer({
-    id: "selected-building-fill",
-    type: "fill",
-    source: "selected-building",
-    paint: {
-      "fill-color": "#ffb703",
-      "fill-opacity": 0.42
-    }
-  });
-
-  map.addLayer({
-    id: "selected-building-outline",
-    type: "line",
-    source: "selected-building",
-    paint: {
-      "line-color": "#c1121f",
-      "line-width": 3
-    }
-  });
-});
-
-map.on("click", async (event) => {
-  const { lng, lat } = event.lngLat;
+async function lookupAtCoordinate(lng, lat) {
   hideSearchResults();
   statusEl.textContent = "Searching";
 
   try {
     const response = await fetch(`/api/building-at?lon=${lng}&lat=${lat}`);
     const payload = await response.json();
-
-    if (!response.ok) {
-      throw new Error(payload.hint || payload.error || "Lookup failed");
-    }
+    if (!response.ok) throw new Error(payload.hint || payload.error || "Lookup failed");
 
     if (!payload.building) {
       clearSelection();
@@ -315,30 +324,22 @@ map.on("click", async (event) => {
     statusEl.textContent = "Error";
     emptyEl.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
   }
-});
+}
 
 function renderBuilding(payload) {
   const building = payload.building;
-  const feature = {
+  selectedFeature = {
     type: "Feature",
     geometry: building.geometry,
-    properties: {
-      building_id: building.building_id
-    }
+    properties: {building_id: building.building_id}
   };
-
-  map.getSource("selected-building").setData({
-    type: "FeatureCollection",
-    features: [feature]
-  });
+  updateDeckLayers();
 
   emptyEl.classList.add("hidden");
   detailsEl.classList.remove("hidden");
 
   matchTypeEl.textContent = labelForMatch(payload.match_type, payload.confidence);
-  distanceEl.textContent = payload.distance_m == null
-    ? ""
-    : `${Number(payload.distance_m).toFixed(1)} m`;
+  distanceEl.textContent = payload.distance_m == null ? "" : `${Number(payload.distance_m).toFixed(1)} m`;
   buildingIdEl.textContent = building.building_id || "Building";
 
   const rows = [
@@ -363,7 +364,6 @@ function renderBuilding(payload) {
 
 searchForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-
   const query = searchInput.value.trim();
   if (query.length < 3) {
     renderSearchMessage("Enter at least 3 characters.");
@@ -371,14 +371,10 @@ searchForm.addEventListener("submit", async (event) => {
   }
 
   statusEl.textContent = "Searching";
-
   try {
     const response = await fetch(`/api/search-address?q=${encodeURIComponent(query)}`);
     const payload = await response.json();
-
-    if (!response.ok) {
-      throw new Error(payload.error || "Address search failed");
-    }
+    if (!response.ok) throw new Error(payload.error || "Address search failed");
 
     renderSearchResults(payload.results || []);
     statusEl.textContent = "Ready";
@@ -396,24 +392,28 @@ function renderSearchResults(results) {
 
   searchResults.classList.remove("hidden");
   searchResults.innerHTML = results
-    .map((result, index) => `
-      <button type="button" data-index="${index}">
-        ${escapeHtml(result.label)}
-      </button>
-    `)
+    .map((result, index) => `<button type="button" data-index="${index}">${escapeHtml(result.label)}</button>`)
     .join("");
 
   searchResults.querySelectorAll("button").forEach((button) => {
     button.addEventListener("click", () => {
       const result = results[Number(button.dataset.index)];
       hideSearchResults();
-      map.flyTo({
-        center: [result.lon, result.lat],
-        zoom: 18,
-        speed: 1.4
-      });
+      flyTo(result.lon, result.lat, 18);
     });
   });
+}
+
+function flyTo(longitude, latitude, zoom) {
+  viewState = {
+    ...viewState,
+    longitude,
+    latitude,
+    zoom,
+    transitionDuration: 1000,
+    transitionInterpolator: new FlyToInterpolator()
+  };
+  deckgl.setProps({viewState});
 }
 
 function renderSearchMessage(message) {
@@ -454,10 +454,7 @@ async function uploadSelectedCsv() {
       body: formData
     });
     const payload = await response.json();
-
-    if (!response.ok) {
-      throw new Error(payload.error || "Upload failed");
-    }
+    if (!response.ok) throw new Error(payload.error || "Upload failed");
 
     currentUploadId = payload.upload_id;
     populateColumnSelectors(payload.columns);
@@ -481,16 +478,14 @@ runEnrichment.addEventListener("click", async () => {
 
   runEnrichment.disabled = true;
   statusEl.textContent = "Enriching";
-  setUploadSummary("Running batch spatial enrichment...");
+  setUploadSummary("Running Snowflake spatial enrichment...");
   downloadLink.classList.add("hidden");
   statsPanel.classList.add("hidden");
 
   try {
     const response = await fetch("/api/exposure/enrich", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
+      headers: {"Content-Type": "application/json"},
       body: JSON.stringify({
         upload_id: currentUploadId,
         lat_col: latColumn.value,
@@ -500,10 +495,7 @@ runEnrichment.addEventListener("click", async () => {
       })
     });
     const payload = await response.json();
-
-    if (!response.ok) {
-      throw new Error(payload.error || "Enrichment failed");
-    }
+    if (!response.ok) throw new Error(payload.error || "Enrichment failed");
 
     pollEnrichmentProgress(payload.job_id);
   } catch (error) {
@@ -517,13 +509,9 @@ async function pollEnrichmentProgress(jobId) {
   try {
     const response = await fetch(`/api/exposure/progress/${jobId}`);
     const payload = await response.json();
-
-    if (!response.ok) {
-      throw new Error(payload.error || "Could not read progress");
-    }
+    if (!response.ok) throw new Error(payload.error || "Could not read progress");
 
     renderProgress(payload);
-
     if (payload.status === "complete") {
       downloadLink.href = payload.download_url;
       downloadLink.classList.remove("hidden");
@@ -534,10 +522,7 @@ async function pollEnrichmentProgress(jobId) {
       return;
     }
 
-    if (payload.status === "error") {
-      throw new Error(payload.error || "Enrichment failed");
-    }
-
+    if (payload.status === "error") throw new Error(payload.error || "Enrichment failed");
     window.setTimeout(() => pollEnrichmentProgress(jobId), 1500);
   } catch (error) {
     statusEl.textContent = "Error";
@@ -568,16 +553,12 @@ function renderFileSummary(filename, rowCount) {
 }
 
 function populateColumnSelectors(columns) {
-  const options = columns
-    .map((column) => `<option value="${escapeHtml(column)}">${escapeHtml(column)}</option>`)
-    .join("");
-
+  const options = columns.map((column) => `<option value="${escapeHtml(column)}">${escapeHtml(column)}</option>`).join("");
   latColumn.innerHTML = options;
   lonColumn.innerHTML = options;
 
   const latGuess = guessColumn(columns, ["lat", "latitude", "y"]);
   const lonGuess = guessColumn(columns, ["lon", "lng", "longitude", "x"]);
-
   if (latGuess) latColumn.value = latGuess;
   if (lonGuess) lonColumn.value = lonGuess;
 }
@@ -592,28 +573,19 @@ function guessColumn(columns, candidates) {
     const exact = normalized.find(([, cleaned]) => cleaned === candidate);
     if (exact) return exact[0];
   }
-
   for (const candidate of candidates) {
     const partial = normalized.find(([, cleaned]) => cleaned.includes(candidate));
     if (partial) return partial[0];
   }
-
   return null;
 }
 
 function renderPreview(columns, rows) {
   previewTable.classList.remove("hidden");
-
-  const header = columns
-    .map((column) => `<th>${escapeHtml(column)}</th>`)
-    .join("");
-  const body = rows
-    .map((row) => `
-      <tr>
-        ${columns.map((column) => `<td>${escapeHtml(row[column] ?? "")}</td>`).join("")}
-      </tr>
-    `)
-    .join("");
+  const header = columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("");
+  const body = rows.map((row) => `
+    <tr>${columns.map((column) => `<td>${escapeHtml(row[column] ?? "")}</td>`).join("")}</tr>
+  `).join("");
 
   previewTable.innerHTML = `
     <table>
@@ -635,7 +607,6 @@ function renderSummary(summary) {
 
 function renderStats(summary) {
   statsPanel.classList.remove("hidden");
-
   const total = Number(summary.total_rows || 0);
   const overviewRows = [
     ["Total rows", summary.total_rows],
@@ -660,9 +631,7 @@ function renderStatsTable(title, rows, total) {
     <section class="stats-table">
       <h3>${escapeHtml(title)}</h3>
       <table>
-        <thead>
-          <tr><th>Metric</th><th>Count</th><th>Share</th></tr>
-        </thead>
+        <thead><tr><th>Metric</th><th>Count</th><th>Share</th></tr></thead>
         <tbody>
           ${rows.map(([label, value, customShare]) => {
             const share = customShare === null ? "" : formatShare(Number(value || 0), total);
@@ -682,14 +651,11 @@ function renderStatsTable(title, rows, total) {
 
 function renderDistributionTable(title, rows) {
   const total = rows.reduce((sum, row) => sum + Number(row.count || 0), 0);
-
   return `
     <section class="stats-table">
       <h3>${escapeHtml(title)}</h3>
       <table>
-        <thead>
-          <tr><th>Name</th><th>Count</th><th>Share</th></tr>
-        </thead>
+        <thead><tr><th>Name</th><th>Count</th><th>Share</th></tr></thead>
         <tbody>
           ${rows.length ? rows.map((row) => `
             <tr>
@@ -710,8 +676,7 @@ function formatShare(value, total) {
 }
 
 function formatStatValue(value) {
-  if (typeof value === "number") return formatInteger(value);
-  return value;
+  return typeof value === "number" ? formatInteger(value) : value;
 }
 
 function setUploadSummary(message) {
@@ -723,20 +688,21 @@ function formatInteger(value) {
 }
 
 function clearSelection() {
-  map.getSource("selected-building")?.setData(selectedSource);
+  selectedFeature = null;
+  updateDeckLayers();
   detailsEl.classList.add("hidden");
   emptyEl.classList.remove("hidden");
 }
 
 function labelForMatch(matchType, confidence) {
   if (matchType === "inside_polygon") return "Inside";
-  if (matchType === "nearest") return `Nearest · ${confidence}`;
+  if (matchType === "nearest_polygon" || matchType === "nearest") return `Nearest · ${confidence}`;
   return "None";
 }
 
 function formatNumber(value, suffix) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return null;
-  return `${Number(value).toLocaleString(undefined, { maximumFractionDigits: 1 })}${suffix}`;
+  return `${Number(value).toLocaleString(undefined, {maximumFractionDigits: 1})}${suffix}`;
 }
 
 function formatPercent(value) {
@@ -753,9 +719,6 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-// -----------------------------------------------------------------------
-// ETL: Create OBM Database
-// -----------------------------------------------------------------------
 const boundaryFile = document.getElementById("boundaryFile");
 const boundaryFileName = document.getElementById("boundaryFileName");
 const etlOutputDir = document.getElementById("etlOutputDir");
@@ -777,67 +740,31 @@ boundaryFile.addEventListener("change", () => {
 
 function updateEtlOutputPlaceholders() {
   const dir = etlOutputDir.value.trim() || "./etl_output";
-  if (!etlOutputParquet.dataset.userEdited) {
-    etlOutputParquet.placeholder = `${dir}/buildings_cleaned.parquet`;
-  }
-  if (!etlDuckdbFile.dataset.userEdited) {
-    etlDuckdbFile.placeholder = `${dir}/work_obm.duckdb`;
-  }
-  if (!etlLookupDbFile.dataset.userEdited) {
-    etlLookupDbFile.placeholder = `${dir}/building_lookup.duckdb`;
-  }
+  if (!etlOutputParquet.dataset.userEdited) etlOutputParquet.placeholder = `${dir}/buildings_cleaned.parquet`;
+  if (!etlDuckdbFile.dataset.userEdited) etlDuckdbFile.placeholder = `${dir}/work_obm.duckdb`;
+  if (!etlLookupDbFile.dataset.userEdited) etlLookupDbFile.placeholder = "OBM_BUILDINGS";
 }
 
-// Auto-fill Parquet / DuckDB paths when output dir changes
 etlOutputDir.addEventListener("input", updateEtlOutputPlaceholders);
-
 etlOutputParquet.addEventListener("input", () => { etlOutputParquet.dataset.userEdited = "1"; });
 etlDuckdbFile.addEventListener("input", () => { etlDuckdbFile.dataset.userEdited = "1"; });
 etlLookupDbFile.addEventListener("input", () => { etlLookupDbFile.dataset.userEdited = "1"; });
 updateEtlOutputPlaceholders();
-
-browseOutputDir.addEventListener("click", async () => {
-  browseOutputDir.disabled = true;
-  showEtlStatus("info", "Opening output folder picker...");
-
-  try {
-    const response = await fetch("/api/browse-folder");
-    const payload = await response.json();
-
-    if (!response.ok) {
-      throw new Error(payload.error || "Could not open folder picker");
-    }
-
-    if (payload.cancelled) {
-      showEtlStatus("info", "Folder selection cancelled.");
-      return;
-    }
-
-    etlOutputDir.value = payload.path || "";
-    updateEtlOutputPlaceholders();
-    showEtlStatus("info", "Output folder selected.");
-  } catch (error) {
-    showEtlStatus("error", error.message);
-  } finally {
-    browseOutputDir.disabled = false;
-  }
-});
+if (browseOutputDir) browseOutputDir.classList.add("hidden");
 
 runEtlBtn.addEventListener("click", async () => {
   runEtlBtn.disabled = true;
   statusEl.textContent = "ETL running";
-  showEtlStatus("info", "Submitting ETL job...");
+  showEtlStatus("info", "Submitting ETL and Snowflake load job...");
 
   const formData = new FormData();
-  if (boundaryFile.files.length) {
-    formData.append("boundary_file", boundaryFile.files[0]);
-  }
+  if (boundaryFile.files.length) formData.append("boundary_file", boundaryFile.files[0]);
 
   const dir = etlOutputDir.value.trim() || "./etl_output";
   formData.append("output_dir", dir);
   formData.append("output_parquet", etlOutputParquet.value.trim() || `${dir}/buildings_cleaned.parquet`);
   formData.append("duckdb_file", etlDuckdbFile.value.trim() || `${dir}/work_obm.duckdb`);
-  formData.append("lookup_db_file", etlLookupDbFile.value.trim() || `${dir}/building_lookup.duckdb`);
+  formData.append("snowflake_table", etlLookupDbFile.value.trim() || "OBM_BUILDINGS");
   formData.append("lon_min", document.getElementById("etlLonMin").value);
   formData.append("lon_max", document.getElementById("etlLonMax").value);
   formData.append("lat_min", document.getElementById("etlLatMin").value);
@@ -849,11 +776,7 @@ runEtlBtn.addEventListener("click", async () => {
       body: formData
     });
     const payload = await response.json();
-
-    if (!response.ok) {
-      throw new Error(payload.error || "ETL submission failed");
-    }
-
+    if (!response.ok) throw new Error(payload.error || "ETL submission failed");
     pollEtlProgress(payload.job_id);
   } catch (error) {
     statusEl.textContent = "Error";
@@ -866,7 +789,6 @@ async function pollEtlProgress(jobId) {
   try {
     const response = await fetch(`/api/etl/progress/${jobId}`);
     const payload = await response.json();
-
     if (!response.ok) throw new Error(payload.error || "Could not read ETL progress");
 
     const percent = Math.max(0, Math.min(100, Number(payload.percent || 0)));
@@ -879,19 +801,18 @@ async function pollEtlProgress(jobId) {
     if (payload.status === "complete") {
       statusEl.textContent = "Done";
       showEtlStatus("success", `
-        <strong>Database created successfully.</strong><br>
+        <strong>Snowflake table created successfully.</strong><br>
         Parquet: <code>${escapeHtml(payload.output_parquet || "")}</code><br>
-        DuckDB work file: <code>${escapeHtml(payload.duckdb_file || "")}</code><br>
-        DuckDB lookup table: <code>${escapeHtml(payload.lookup_db_file || "")}</code>
+        ETL work file: <code>${escapeHtml(payload.duckdb_file || "")}</code><br>
+        Snowflake table: <code>${escapeHtml(payload.snowflake_table || "")}</code>
       `);
+      await loadDataSources();
+      await loadCartoLayer();
       runEtlBtn.disabled = false;
       return;
     }
 
-    if (payload.status === "error") {
-      throw new Error(payload.error || "ETL failed");
-    }
-
+    if (payload.status === "error") throw new Error(payload.error || "ETL failed");
     window.setTimeout(() => pollEtlProgress(jobId), 3000);
   } catch (error) {
     statusEl.textContent = "Error";

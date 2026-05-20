@@ -1,2 +1,6 @@
 duckdb
 flask
+pandas
+pyarrow
+requests
+snowflake-connector-python

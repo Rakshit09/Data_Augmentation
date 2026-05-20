@@ -3,8 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Germany Data Enrichment</title>
-  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.22.0/dist/maplibre-gl.css">
+  <title>Building Data Enrichment</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
@@ -35,8 +34,8 @@
     <section id="etlMain" class="main-view hidden">
       <div class="etl-splash">
         <p class="eyebrow">OpenBuildingMap ETL</p>
-        <h2>Create a new building database for any country</h2>
-        <p class="etl-splash-sub">Configure the parameters in the panel on the right, then press <strong>Create database</strong>. The ETL downloads buildings from the OpenBuildingMap S3 bucket, clips them to your boundary, and writes a DuckDB lookup database.</p>
+        <h2>Create a new building table for any country</h2>
+        <p class="etl-splash-sub">Configure the parameters in the panel on the right, then press <strong>Create and load</strong>. The ETL downloads buildings from the OpenBuildingMap S3 bucket, clips them to your boundary, writes Parquet, and loads Snowflake.</p>
       </div>
     </section>
 
@@ -44,12 +43,12 @@
       <nav class="tabs" aria-label="Application mode">
         <button id="lookupTab" class="tab active" type="button">Building Lookup</button>
         <button id="exposureTab" class="tab" type="button">Enrich Exposure</button>
-        <button id="etlTab" class="tab" type="button">Create OBM Database</button>
+        <button id="etlTab" class="tab" type="button">Create OBM Table</button>
       </nav>
 
       <header class="panel-header">
         <div>
-          <p id="modeEyebrow" class="eyebrow">Germany</p>
+          <p id="modeEyebrow" class="eyebrow">Snowflake + CARTO</p>
           <h1 id="modeTitle">Building Lookup</h1>
         </div>
         <span id="status" class="status">Ready</span>
@@ -70,15 +69,15 @@
           <div id="parquetPicker" class="file-picker hidden"></div>
         </label>
         <label>
-          DuckDB lookup
+          Snowflake buildings table
           <span class="path-picker-row">
-            <input id="activeDbPath" type="text" list="dbFileOptions" placeholder="etl_output/building_lookup.duckdb">
-            <button id="browseDb" type="button">Browse</button>
+            <input id="activeDbPath" type="text" list="dbFileOptions" placeholder="OBM_BUILDINGS">
+            <button id="browseDb" class="hidden" type="button">Browse</button>
           </span>
           <datalist id="dbFileOptions"></datalist>
           <div id="dbPicker" class="file-picker hidden"></div>
         </label>
-        <button id="applyDataSource" type="button">Use selected files</button>
+        <button id="applyDataSource" type="button">Use selected source</button>
         <p id="dataSourceMessage" class="data-source-message"></p>
       </section>
 
@@ -183,7 +182,7 @@
               <label>Output folder
                 <span class="path-picker-row">
                   <input id="etlOutputDir" type="text" value="./etl_output" placeholder="./etl_output">
-                  <button id="browseOutputDir" type="button">Browse</button>
+                  <button id="browseOutputDir" class="hidden" type="button">Browse</button>
                 </span>
               </label>
               <label>Parquet filename
@@ -192,12 +191,12 @@
               <label>DuckDB work file
                 <input id="etlDuckdbFile" type="text" placeholder="work_obm.duckdb">
               </label>
-              <label>DuckDB lookup table
-                <input id="etlLookupDbFile" type="text" placeholder="building_lookup.duckdb">
+              <label>Snowflake buildings table
+                <input id="etlLookupDbFile" type="text" placeholder="OBM_BUILDINGS">
               </label>
             </fieldset>
 
-            <button id="runEtl" type="button">Create database</button>
+            <button id="runEtl" type="button">Create and load</button>
           </form>
 
           <div id="etlStatus" class="etl-status hidden"></div>
@@ -206,7 +205,6 @@
     </aside>
   </main>
 
-  <script src="https://unpkg.com/maplibre-gl@5.22.0/dist/maplibre-gl.js"></script>
-  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <script type="module" src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>
