@@ -156,9 +156,10 @@ def geocode_with_photon(query: str, user_agent: str) -> List[Dict[str, Any]]:
 
 
 def detect_csv_encoding(csv_path: Path) -> str:
+    sample = csv_path.read_bytes()[:1_048_576]
     for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin1"):
         try:
-            pd.read_csv(csv_path, nrows=5, encoding=encoding)
+            sample.decode(encoding)
             return encoding
         except UnicodeDecodeError:
             continue
