@@ -1,17 +1,18 @@
 import argparse
+import codecs
 import json
 import math
+import os
 import subprocess
 import sys
 import time
 import urllib.parse
 import urllib.request
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
-from threading import Lock, Thread, local
+from threading import Event, Lock, Thread
 from typing import Any, Dict, List, Optional
 
 import duckdb
@@ -25,8 +26,9 @@ from obm_country_to_parquet import ETLConfig, OpenBuildingMapCountryETL
 
 DEFAULT_PARQUET = "etl_output/buildings_de_cleaned.parquet"
 DEFAULT_DB = "etl_output/building_lookup.duckdb"
-ENRICHMENT_CHUNK_SIZE = 5000
-ENRICHMENT_WORKERS = 8
+NEAREST_CANDIDATE_LIMIT = 128
+QUADKEY_PREFIX_ZOOM = 6
+QUADKEY_TILE_COUNT = 1 << QUADKEY_PREFIX_ZOOM
 BUILDING_COLUMNS = [
     "building_id",
     "source",
@@ -158,6 +160,9 @@ def geocode_with_photon(query: str, user_agent: str) -> List[Dict[str, Any]]:
 
 def detect_csv_encoding(csv_path: Path) -> str:
     sample = csv_path.read_bytes()[:1_048_576]
+    if sample.startswith(codecs.BOM_UTF8):
+        return "utf-8-sig"
+
     for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin1"):
         try:
             sample.decode(encoding)
@@ -166,6 +171,17 @@ def detect_csv_encoding(csv_path: Path) -> str:
             continue
 
     return "latin1"
+
+
+def duckdb_csv_encoding(csv_path: Path) -> str:
+    encoding = detect_csv_encoding(csv_path)
+    if encoding == "utf-8-sig":
+        return "utf-8"
+    if encoding == "cp1252":
+        return "latin-1"
+    if encoding == "latin1":
+        return "latin-1"
+    return encoding
 
 
 def open_db(db_path: str, read_only: bool = False) -> duckdb.DuckDBPyConnection:
@@ -856,8 +872,18 @@ def preview_csv(csv_path: Path) -> tuple[List[str], List[Dict[str, Any]]]:
 
 
 def csv_columns(con: duckdb.DuckDBPyConnection, csv_path: Path) -> List[str]:
-    encoding = detect_csv_encoding(csv_path)
-    return list(pd.read_csv(csv_path, nrows=0, encoding=encoding).columns)
+    csv_sql = sql_string(str(csv_path.resolve()))
+    scan_options_sql = csv_scan_options(csv_path)
+    rows = con.execute(f"""
+        DESCRIBE SELECT *
+        FROM read_csv_auto({csv_sql}, {scan_options_sql});
+    """).fetchall()
+    return [row[0] for row in rows]
+
+
+def csv_scan_options(csv_path: Path) -> str:
+    encoding = sql_string(duckdb_csv_encoding(csv_path))
+    return f"sample_size = 20480, ignore_errors = true, header = true, all_varchar = true, encoding = {encoding}"
 
 
 def b_select(alias: str = "b") -> str:
@@ -886,11 +912,19 @@ def exposure_select(columns: List[str]) -> str:
     return ",\n            ".join(f"e.{sql_identifier(col)}" for col in columns)
 
 
-def count_csv_rows(csv_path: Path) -> int:
-    with csv_path.open("rb") as handle:
-        line_count = sum(1 for _ in handle)
+def quadkey_prefix_sql(tile_x_sql: str, tile_y_sql: str) -> str:
+    digits = []
 
-    return max(line_count - 1, 0)
+    for level in range(QUADKEY_PREFIX_ZOOM, 0, -1):
+        mask = 1 << (level - 1)
+        digits.append(
+            "CAST(("
+            f"(CASE WHEN (({tile_x_sql}) & {mask}) != 0 THEN 1 ELSE 0 END)"
+            f" + (CASE WHEN (({tile_y_sql}) & {mask}) != 0 THEN 2 ELSE 0 END)"
+            ") AS VARCHAR)"
+        )
+
+    return f"CONCAT({', '.join(digits)})"
 
 
 def enrich_exposure_csv(
@@ -903,102 +937,152 @@ def enrich_exposure_csv(
     max_distance_m: float,
     progress_callback=None,
 ) -> Dict[str, Any]:
+    started_at = time.perf_counter()
+
     if progress_callback:
         progress_callback("Opening lookup database", 5)
 
     con = open_db(db_path, read_only=True)
-    con.execute("SET threads = 1;")
+    con.execute(f"SET threads = {max(os.cpu_count() or 1, 1)};")
 
-    if progress_callback:
-        progress_callback("Inspecting CSV columns", 10)
+    try:
+        if progress_callback:
+            progress_callback("Inspecting CSV columns", 10)
 
-    columns = csv_columns(con, csv_path)
-    if lat_col not in columns or lon_col not in columns:
-        raise ValueError("Selected latitude/longitude columns were not found in the CSV.")
+        columns = csv_columns(con, csv_path)
+        if lat_col not in columns or lon_col not in columns:
+            raise ValueError("Selected latitude/longitude columns were not found in the CSV.")
 
-    radius = float(max_distance_m)
-    encoding = detect_csv_encoding(csv_path)
-    total_rows = count_csv_rows(csv_path)
-    processed_rows = 0
-    header_written = False
+        if progress_callback:
+            progress_callback("Running vectorized spatial enrichment", 20)
 
-    if progress_callback:
-        progress_callback(f"Running spatial enrichment: 0/{total_rows:,} rows", 15)
-
-    summary = {
-        "total_rows": 0,
-        "valid_coordinate_rows": 0,
-        "inside_polygon_matches": 0,
-        "nearest_matches": 0,
-        "no_matches": 0,
-        "nearest_distance_total_m": 0.0,
-        "nearest_distance_count": 0,
-        "detailed_occupancy": {},
-        "occupancy_group": {},
-    }
-    con.close()
-    worker_state = local()
-
-    def worker_connection() -> duckdb.DuckDBPyConnection:
-        if not hasattr(worker_state, "con"):
-            worker_state.con = open_db(db_path, read_only=True)
-            worker_state.con.execute("SET threads = 1;")
-        return worker_state.con
-
-    def enrich_record(index: int, record: Dict[str, Any]) -> tuple[int, Dict[str, Any]]:
-        lookup = lookup_exposure_row(
-            con=worker_connection(),
-            lon=record.get(lon_col),
-            lat=record.get(lat_col),
+        csv_sql = sql_string(str(csv_path.resolve()))
+        output_sql = sql_string(str(output_path.resolve()))
+        scan_options_sql = csv_scan_options(csv_path)
+        select_sql = enrichment_select_sql(
+            csv_sql=csv_sql,
+            scan_options_sql=scan_options_sql,
+            lat_sql=sql_identifier(lat_col),
+            lon_sql=sql_identifier(lon_col),
             mode=mode,
-            radius_m=radius,
+            radius_sql=str(float(max_distance_m)),
+            original_cols_sql=exposure_select(columns),
         )
-        return index, {**record, **lookup}
 
-    with ThreadPoolExecutor(max_workers=ENRICHMENT_WORKERS) as executor:
-        for chunk in pd.read_csv(csv_path, chunksize=ENRICHMENT_CHUNK_SIZE, encoding=encoding):
-            records = chunk.to_dict(orient="records")
-            enriched_records: List[Optional[Dict[str, Any]]] = [None] * len(records)
-            futures = [
-                executor.submit(enrich_record, index, record)
-                for index, record in enumerate(records)
-            ]
+        progress_stop = Event()
+        progress_thread: Optional[Thread] = None
 
-            for future in as_completed(futures):
-                index, enriched_record = future.result()
-                enriched_records[index] = enriched_record
-                processed_rows += 1
+        if progress_callback:
+            def advance_progress() -> None:
+                percent = 20
+                while not progress_stop.wait(3):
+                    percent = min(percent + 5, 90)
+                    progress_callback("Running vectorized spatial enrichment", percent)
 
-                if progress_callback and (processed_rows % 100 == 0 or processed_rows == total_rows):
-                    percent = 15 + int((processed_rows / max(total_rows, 1)) * 75)
-                    progress_callback(
-                        f"Running spatial enrichment: {processed_rows:,}/{total_rows:,} rows",
-                        min(percent, 90),
-                    )
+            progress_thread = Thread(target=advance_progress, daemon=True)
+            progress_thread.start()
 
-            enriched = pd.DataFrame([record for record in enriched_records if record is not None])
-            enriched.to_csv(output_path, mode="a", index=False, header=not header_written)
-            header_written = True
+        try:
+            con.execute(f"""
+                COPY (
+                    {select_sql}
+                ) TO {output_sql} (HEADER, DELIMITER ',');
+            """)
+        finally:
+            progress_stop.set()
+            if progress_thread is not None:
+                progress_thread.join(timeout=1)
 
-            update_summary(summary, enriched)
+        if progress_callback:
+            progress_callback("Finalizing summary", 95)
 
-    if progress_callback:
-        progress_callback("Finalizing summary", 95)
+        summary = summarize_enriched_output(con, output_path)
+        summary["enrichment_elapsed_seconds"] = round(time.perf_counter() - started_at, 3)
+        return summary
+    finally:
+        con.close()
+
+
+def summarize_enriched_output(
+    con: duckdb.DuckDBPyConnection,
+    output_path: Path,
+) -> Dict[str, Any]:
+    output_sql = sql_string(str(output_path.resolve()))
+
+    summary_rows = con.execute(f"""
+        WITH enriched AS (
+            SELECT
+                TRY_CAST(coordinate_valid AS BOOLEAN) AS coordinate_valid,
+                CAST(building_match_type AS VARCHAR) AS building_match_type,
+                TRY_CAST(building_distance_m AS DOUBLE) AS building_distance_m,
+                NULLIF(TRIM(CAST(building_occupancy_raw AS VARCHAR)), '') AS building_occupancy_raw,
+                NULLIF(TRIM(CAST(building_occupancy_group AS VARCHAR)), '') AS building_occupancy_group
+            FROM read_csv_auto({output_sql}, header = true, sample_size = 20480, all_varchar = true)
+        ),
+        rolled AS (
+            SELECT
+                building_occupancy_raw,
+                building_occupancy_group,
+            GROUPING(building_occupancy_raw) AS occupancy_raw_grouped,
+            GROUPING(building_occupancy_group) AS occupancy_group_grouped,
+                COUNT(*) AS row_count,
+                COALESCE(SUM(CASE WHEN coordinate_valid THEN 1 ELSE 0 END), 0) AS valid_coordinate_rows,
+                COALESCE(SUM(CASE WHEN building_match_type = 'inside_polygon' THEN 1 ELSE 0 END), 0) AS inside_polygon_matches,
+                COALESCE(SUM(CASE WHEN building_match_type IN ('nearest_polygon', 'nearest_centroid') THEN 1 ELSE 0 END), 0) AS nearest_matches,
+                COALESCE(SUM(CASE WHEN building_match_type = 'none' THEN 1 ELSE 0 END), 0) AS no_matches,
+                COALESCE(SUM(CASE WHEN building_match_type IN ('nearest_polygon', 'nearest_centroid') THEN building_distance_m ELSE NULL END), 0.0) AS nearest_distance_total_m,
+                COUNT(building_distance_m) FILTER (
+                    WHERE building_match_type IN ('nearest_polygon', 'nearest_centroid')
+                ) AS nearest_distance_count
+            FROM enriched
+            GROUP BY GROUPING SETS ((), (building_occupancy_raw), (building_occupancy_group))
+        )
+        SELECT
+            CASE
+                WHEN occupancy_raw_grouped = 0 THEN 'occupancy_raw'
+                WHEN occupancy_group_grouped = 0 THEN 'occupancy_group'
+                ELSE 'overall'
+            END AS section,
+            COALESCE(building_occupancy_raw, building_occupancy_group) AS name,
+            row_count,
+            valid_coordinate_rows,
+            inside_polygon_matches,
+            nearest_matches,
+            no_matches,
+            nearest_distance_total_m,
+            nearest_distance_count
+        FROM rolled
+          WHERE (occupancy_raw_grouped = 1 AND occupancy_group_grouped = 1)
+              OR (occupancy_raw_grouped = 0 AND building_occupancy_raw IS NOT NULL)
+              OR (occupancy_group_grouped = 0 AND building_occupancy_group IS NOT NULL)
+        ORDER BY
+            CASE section WHEN 'overall' THEN 0 WHEN 'occupancy_raw' THEN 1 ELSE 2 END,
+            row_count DESC,
+            name;
+    """).fetchall()
+
+    overall = next(row for row in summary_rows if row[0] == "overall")
+    detailed_occupancy = [
+        {"name": row[1], "count": int(row[2])}
+        for row in summary_rows
+        if row[0] == "occupancy_raw" and row[1] is not None
+    ]
+    occupancy_group = [
+        {"name": row[1], "count": int(row[2])}
+        for row in summary_rows
+        if row[0] == "occupancy_group" and row[1] is not None
+    ]
 
     return {
-        "total_rows": int(summary["total_rows"]),
-        "valid_coordinate_rows": int(summary["valid_coordinate_rows"]),
-        "inside_polygon_matches": int(summary["inside_polygon_matches"]),
-        "nearest_matches": int(summary["nearest_matches"]),
-        "no_matches": int(summary["no_matches"]),
-        "average_nearest_distance_m": (
-            summary["nearest_distance_total_m"] / summary["nearest_distance_count"]
-            if summary["nearest_distance_count"]
-            else None
-        ),
-        "detailed_occupancy": distribution_to_rows(summary["detailed_occupancy"]),
-        "occupancy_raw": distribution_to_rows(summary["detailed_occupancy"]),
-        "occupancy_group": distribution_to_rows(summary["occupancy_group"]),
+        "total_rows": int(overall[2]),
+        "valid_coordinate_rows": int(overall[3]),
+        "inside_polygon_matches": int(overall[4]),
+        "nearest_matches": int(overall[5]),
+        "no_matches": int(overall[6]),
+        "average_nearest_distance_m": (float(overall[7]) / int(overall[8])) if int(overall[8]) else None,
+        "detailed_occupancy": detailed_occupancy,
+        "occupancy_raw": detailed_occupancy,
+        "occupancy_group": occupancy_group,
     }
 
 
@@ -1373,79 +1457,166 @@ def chunk_lookup_sql(
 
 def enrichment_select_sql(
     csv_sql: str,
+    scan_options_sql: str,
     lat_sql: str,
     lon_sql: str,
     mode: str,
     radius_sql: str,
     original_cols_sql: str,
 ) -> str:
-    
-    # 1. Base logic shared by ALL modes
-    base_exposure_cols = f"""
-        *,
-        TRY_CAST({lon_sql} AS DOUBLE) AS __lon,
-        TRY_CAST({lat_sql} AS DOUBLE) AS __lat,
-        TRY_CAST({lon_sql} AS DOUBLE) BETWEEN -180 AND 180
-            AND TRY_CAST({lat_sql} AS DOUBLE) BETWEEN -90 AND 90 AS __valid_coordinates,
-        ST_Point(TRY_CAST({lon_sql} AS DOUBLE), TRY_CAST({lat_sql} AS DOUBLE)) AS __pt
-    """
-    
-    # 2. Add specific pre-computations depending on the mode
+    tile_count_sql = str(QUADKEY_TILE_COUNT)
+    max_tile_sql = str(QUADKEY_TILE_COUNT - 1)
+    candidate_limit_sql = str(NEAREST_CANDIDATE_LIMIT)
+    quadkey_expr_sql = quadkey_prefix_sql("tile_x", "tile_y")
+    ranked_building_cols_sql = ",\n                    ".join(sql_identifier(col) for col in BUILDING_COLUMNS)
+    nearest_building_cols_sql = ",\n                ".join(
+        f"c.{sql_identifier(col)} AS {sql_identifier(col)}"
+        for col in BUILDING_COLUMNS
+    )
+
     if mode == "centroid":
-        mode_specific_cols = f""",
+        mode_base_cols = f""",
         {radius_sql} / 111320.0 AS __lat_delta,
         {radius_sql} / (
-            111320.0 * GREATEST(COS(RADIANS(TRY_CAST({lat_sql} AS DOUBLE))), 0.2)
+            111320.0 * __cos_lat
         ) AS __lon_delta
+        """
+        projected_ctes = """
+        exposure AS (
+            SELECT *
+            FROM exposure_base
+        )
         """
     elif mode == "inside_nearest":
-        mode_specific_cols = f""",
-        CASE 
-            WHEN TRY_CAST({lon_sql} AS DOUBLE) BETWEEN -180 AND 180 AND TRY_CAST({lat_sql} AS DOUBLE) BETWEEN -90 AND 90 
-            THEN ST_Transform(ST_Point(TRY_CAST({lon_sql} AS DOUBLE), TRY_CAST({lat_sql} AS DOUBLE)), 'EPSG:4326', 'EPSG:3035', always_xy := true)
-            ELSE NULL 
-        END AS __pt_m,
+        mode_base_cols = f""",
         {radius_sql} / 111320.0 AS __lat_delta,
         {radius_sql} / (
-            111320.0 * GREATEST(COS(RADIANS(TRY_CAST({lat_sql} AS DOUBLE))), 0.2)
+            111320.0 * __cos_lat
         ) AS __lon_delta
         """
+        projected_ctes = """
+        exposure_projected AS (
+            SELECT
+                *,
+                CASE
+                    WHEN __valid_coordinates
+                    THEN ST_Transform(__pt, 'EPSG:4326', 'EPSG:3035', always_xy := true)
+                    ELSE NULL
+                END AS __pt_m
+            FROM exposure_base
+        ),
+        exposure AS (
+            SELECT
+                *,
+                CASE WHEN __pt_m IS NOT NULL THEN ST_X(__pt_m) ELSE NULL END AS __pt_m_x,
+                CASE WHEN __pt_m IS NOT NULL THEN ST_Y(__pt_m) ELSE NULL END AS __pt_m_y
+            FROM exposure_projected
+        )
+        """
     else:
-        mode_specific_cols = ""
+        mode_base_cols = ""
+        projected_ctes = """
+        exposure AS (
+            SELECT *
+            FROM exposure_base
+        )
+        """
 
     exposure_ctes = f"""
         WITH exposure_raw AS (
             SELECT
                 ROW_NUMBER() OVER () AS __exposure_row_id,
                 *
-            FROM read_csv_auto({csv_sql}, sample_size = 20480, ignore_errors = true)
+            FROM read_csv_auto({csv_sql}, {scan_options_sql})
         ),
-        exposure AS (
-            SELECT 
-                {base_exposure_cols}
-                {mode_specific_cols}
+        exposure_parsed AS (
+            SELECT
+                *,
+                TRY_CAST({lon_sql} AS DOUBLE) AS __lon,
+                TRY_CAST({lat_sql} AS DOUBLE) AS __lat
             FROM exposure_raw
+        ),
+        exposure_base AS (
+            SELECT
+                *,
+                __lon BETWEEN -180 AND 180
+                    AND __lat BETWEEN -90 AND 90 AS __valid_coordinates,
+                LEAST(GREATEST(__lat, -85.05112878), 85.05112878) AS __lat_clamped,
+                GREATEST(COS(RADIANS(__lat)), 0.2) AS __cos_lat,
+                CASE
+                    WHEN __lon BETWEEN -180 AND 180 AND __lat BETWEEN -90 AND 90 THEN ST_Point(__lon, __lat)
+                    ELSE NULL
+                END AS __pt,
+                CASE
+                    WHEN __lon BETWEEN -180 AND 180 AND __lat BETWEEN -90 AND 90
+                    THEN LEAST(GREATEST(CAST(FLOOR((__lon + 180.0) / 360.0 * {tile_count_sql}) AS BIGINT), 0), {max_tile_sql})
+                    ELSE NULL
+                END AS __tile_x,
+                CASE
+                    WHEN __lon BETWEEN -180 AND 180 AND __lat BETWEEN -90 AND 90
+                    THEN LEAST(
+                        GREATEST(
+                            CAST(FLOOR((0.5 - LN((1 + SIN(RADIANS(LEAST(GREATEST(__lat, -85.05112878), 85.05112878)))) / (1 - SIN(RADIANS(LEAST(GREATEST(__lat, -85.05112878), 85.05112878))))) / (4 * PI())) * {tile_count_sql}) AS BIGINT),
+                            0
+                        ),
+                        {max_tile_sql}
+                    )
+                    ELSE NULL
+                END AS __tile_y
+                {mode_base_cols}
+            FROM exposure_parsed
+        ),
+        {projected_ctes},
+        exposure_tiles AS (
+            SELECT DISTINCT
+                t.__exposure_row_id,
+                {quadkey_expr_sql} AS __quadkey_prefix_6
+            FROM (
+                SELECT
+                    e.__exposure_row_id,
+                    e.__tile_x + dx AS tile_x,
+                    e.__tile_y + dy AS tile_y
+                FROM exposure e
+                CROSS JOIN range(-1, 2) AS dx(dx)
+                CROSS JOIN range(-1, 2) AS dy(dy)
+                WHERE e.__valid_coordinates
+            ) t
+            WHERE t.tile_x BETWEEN 0 AND {max_tile_sql}
+              AND t.tile_y BETWEEN 0 AND {max_tile_sql}
         )
     """
 
     if mode == "centroid":
         return f"""
             {exposure_ctes},
-            centroid_ranked AS (
+            centroid_candidates AS (
                 SELECT
                     e.__exposure_row_id,
                     ST_Distance_Sphere(ST_Point(b.centroid_lon, b.centroid_lat), e.__pt) AS distance_m,
                     ROW_NUMBER() OVER (
                         PARTITION BY e.__exposure_row_id
                         ORDER BY ST_Distance_Sphere(ST_Point(b.centroid_lon, b.centroid_lat), e.__pt)
-                    ) AS rn,
+                    ) AS candidate_rank,
                     {b_select("b")}
                 FROM exposure e
+                JOIN exposure_tiles t USING (__exposure_row_id)
                 JOIN buildings b
-                    ON e.__valid_coordinates
+                    ON b.quadkey_prefix_6 = t.__quadkey_prefix_6
                     AND b.centroid_lon BETWEEN e.__lon - e.__lon_delta AND e.__lon + e.__lon_delta
                     AND b.centroid_lat BETWEEN e.__lat - e.__lat_delta AND e.__lat + e.__lat_delta
-                WHERE ST_Distance_Sphere(ST_Point(b.centroid_lon, b.centroid_lat), e.__pt) <= {radius_sql}
+            ),
+            centroid_ranked AS (
+                SELECT
+                    __exposure_row_id,
+                    distance_m,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY __exposure_row_id
+                        ORDER BY distance_m
+                    ) AS rn,
+                    {ranked_building_cols_sql}
+                FROM centroid_candidates
+                WHERE candidate_rank <= {candidate_limit_sql}
+                  AND distance_m <= {radius_sql}
             ),
             matches AS (
                 SELECT * FROM centroid_ranked WHERE rn = 1
@@ -1478,8 +1649,9 @@ def enrichment_select_sql(
                     ) AS rn,
                     {b_select("b")}
                 FROM exposure e
+                JOIN exposure_tiles t USING (__exposure_row_id)
                 JOIN buildings b
-                    ON e.__valid_coordinates
+                    ON b.quadkey_prefix_6 = t.__quadkey_prefix_6
                     AND e.__lon BETWEEN b.bbox_xmin AND b.bbox_xmax
                     AND e.__lat BETWEEN b.bbox_ymin AND b.bbox_ymax
                     AND ST_Intersects(b.geom, e.__pt)
@@ -1511,8 +1683,9 @@ def enrichment_select_sql(
                 ) AS rn,
                 {b_select("b")}
             FROM exposure e
+            JOIN exposure_tiles t USING (__exposure_row_id)
             JOIN buildings b
-                ON e.__valid_coordinates
+                ON b.quadkey_prefix_6 = t.__quadkey_prefix_6
                 AND e.__lon BETWEEN b.bbox_xmin AND b.bbox_xmax
                 AND e.__lat BETWEEN b.bbox_ymin AND b.bbox_ymax
                 AND ST_Intersects(b.geom, e.__pt)
@@ -1520,35 +1693,49 @@ def enrichment_select_sql(
         inside_matches AS (
             SELECT * FROM inside_ranked WHERE rn = 1
         ),
+        unmatched_exposure AS (
+            SELECT e.*
+            FROM exposure e
+            LEFT JOIN inside_matches i USING (__exposure_row_id)
+            WHERE e.__valid_coordinates
+              AND i.__exposure_row_id IS NULL
+        ),
         nearest_candidates AS (
             SELECT
                 e.__exposure_row_id,
-                ST_Distance(b.geom_3035, e.__pt_m) AS distance_m,
+                b.geom_3035 AS __geom_3035,
+                ST_Distance_Sphere(ST_Point(b.centroid_lon, b.centroid_lat), e.__pt) AS centroid_distance_m,
+                ROW_NUMBER() OVER (
+                    PARTITION BY e.__exposure_row_id
+                    ORDER BY ST_Distance_Sphere(ST_Point(b.centroid_lon, b.centroid_lat), e.__pt)
+                ) AS candidate_rank,
                 {b_select("b")}
-            FROM exposure e
-            LEFT JOIN inside_matches i USING (__exposure_row_id)
+            FROM unmatched_exposure e
+            JOIN exposure_tiles t USING (__exposure_row_id)
             JOIN buildings b
-                ON e.__valid_coordinates
-                AND i.__exposure_row_id IS NULL
+                ON b.quadkey_prefix_6 = t.__quadkey_prefix_6
                 AND b.bbox_xmin <= e.__lon + e.__lon_delta
                 AND b.bbox_xmax >= e.__lon - e.__lon_delta
                 AND b.bbox_ymin <= e.__lat + e.__lat_delta
                 AND b.bbox_ymax >= e.__lat - e.__lat_delta
-                AND b.bbox_3035_xmin <= ST_X(e.__pt_m) + {radius_sql}
-                AND b.bbox_3035_xmax >= ST_X(e.__pt_m) - {radius_sql}
-                AND b.bbox_3035_ymin <= ST_Y(e.__pt_m) + {radius_sql}
-                AND b.bbox_3035_ymax >= ST_Y(e.__pt_m) - {radius_sql}
-                AND ST_DWithin(b.geom_3035, e.__pt_m, {radius_sql})
+                AND b.bbox_3035_xmin <= e.__pt_m_x + {radius_sql}
+                AND b.bbox_3035_xmax >= e.__pt_m_x - {radius_sql}
+                AND b.bbox_3035_ymin <= e.__pt_m_y + {radius_sql}
+                AND b.bbox_3035_ymax >= e.__pt_m_y - {radius_sql}
         ),
         nearest_ranked AS (
             SELECT
-                *,
+                c.__exposure_row_id,
+                ST_Distance(c.__geom_3035, e.__pt_m) AS distance_m,
                 ROW_NUMBER() OVER (
-                    PARTITION BY __exposure_row_id
-                    ORDER BY distance_m
-                ) AS rn
-            FROM nearest_candidates
-            WHERE distance_m <= {radius_sql}
+                    PARTITION BY c.__exposure_row_id
+                    ORDER BY ST_Distance(c.__geom_3035, e.__pt_m)
+                ) AS rn,
+                {nearest_building_cols_sql}
+            FROM nearest_candidates c
+            JOIN unmatched_exposure e USING (__exposure_row_id)
+            WHERE c.candidate_rank <= {candidate_limit_sql}
+              AND ST_DWithin(c.__geom_3035, e.__pt_m, {radius_sql})
         ),
         nearest_matches AS (
             SELECT * FROM nearest_ranked WHERE rn = 1
