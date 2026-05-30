@@ -1,32 +1,15 @@
 (() => {
-  const fields = [
-    { key: "occupancy_group", label: "Use" },
-    { key: "occupancy_raw", label: "Raw occupancy" },
-    { key: "occupancy_code", label: "Occupancy code" },
-    { key: "height_raw", label: "Raw height" },
-    { key: "height_m", label: "Height (m)", format: (value) => formatNumber(value, " m") },
-    { key: "height_quality", label: "Height quality" },
-    { key: "footprint_area_m2", label: "Footprint", format: (value) => formatNumber(value, " m2") },
-    { key: "floorspace_est_m2", label: "Floorspace", format: (value) => formatNumber(value, " m2") },
-    { key: "attribute_completeness_score", label: "Completeness", format: formatPercent },
-    { key: "year_built", label: "Year built" },
-    { key: "construction", label: "Construction" },
-    { key: "roof_type", label: "Roof type" },
-    { key: "basement", label: "Basement" },
-    { key: "source", label: "Source" },
-    { key: "last_update", label: "Updated" }
-  ];
-  const selected = new Set(fields.map((field) => field.key));
   const controls = document.getElementById("buildingInfoFieldOptions");
+  const selected = new Set();
+  let fields = [];
 
-  controls.innerHTML = fields
-    .map((field) => `
-      <label class="lookup-field-option">
-        <input type="checkbox" value="${escapeHtml(field.key)}" checked>
-        <span>${escapeHtml(field.label)}</span>
-      </label>
-    `)
-    .join("");
+  const formatters = {
+    height_m: (value) => formatNumber(value, " m"),
+    footprint_area_m2: (value) => formatNumber(value, " m2"),
+    floorspace_obm_m2: (value) => formatNumber(value, " m2"),
+    floorspace_est_m2: (value) => formatNumber(value, " m2"),
+    attribute_completeness_score: formatPercent
+  };
 
   controls.addEventListener("change", (event) => {
     if (!event.target.matches("input[type=checkbox]")) return;
@@ -35,21 +18,56 @@
     } else {
       selected.delete(event.target.value);
     }
-    window.dispatchEvent(new CustomEvent("building-info-fields-change"));
+    notifyChange();
   });
 
+  async function load() {
+    controls.innerHTML = "<p>Loading database fields...</p>";
+
+    try {
+      const response = await fetch("/api/building-fields");
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Could not load database fields");
+
+      fields = payload.fields || [];
+      selected.clear();
+      fields.forEach((field) => selected.add(field));
+      controls.innerHTML = fields.length
+        ? fields.map((field) => `
+            <label class="lookup-field-option">
+              <input type="checkbox" value="${escapeHtml(field)}" checked>
+              <span>${escapeHtml(field)}</span>
+            </label>
+          `).join("")
+        : "<p>No displayable database fields found.</p>";
+      notifyChange();
+    } catch (error) {
+      fields = [];
+      selected.clear();
+      controls.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+      notifyChange();
+    }
+  }
+
+  function notifyChange() {
+    window.dispatchEvent(new CustomEvent("building-info-fields-change"));
+  }
+
   window.buildingInfoFields = {
+    load,
     render(building) {
       return fields
-        .filter((field) => selected.has(field.key))
+        .filter((field) => selected.has(field))
         .map((field) => {
-          const rawValue = building[field.key];
-          const value = field.format ? field.format(rawValue) : rawValue;
-          return [field.label, value];
+          const format = formatters[field];
+          const value = format ? format(building[field]) : building[field];
+          return [field, value];
         })
         .filter(([, value]) => value !== null && value !== undefined && value !== "")
         .map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`)
         .join("");
     }
   };
+
+  load();
 })();

@@ -141,6 +141,8 @@ async function loadDataSources() {
     renderFileOptions(dbFileOptions, availableDbFiles);
     renderFilePicker(parquetPicker, availableParquetFiles, activeParquetPath);
     renderFilePicker(dbPicker, availableDbFiles, activeDbPath);
+    await window.buildingInfoFields?.load();
+    await window.exposureEnrichmentFields?.load();
     setDataSourceMessage("Choose a local Parquet and DuckDB lookup database.", "success");
   } catch (error) {
     setDataSourceMessage(error.message, "error");
@@ -242,6 +244,7 @@ async function applySelectedDataSource() {
     activeParquetPath.value = payload.parquet_path || "";
     activeDbPath.value = payload.db_path || "";
     clearSelection();
+    await window.buildingInfoFields?.load();
     const message = payload.generated_lookup
       ? `Created lookup DB and switched to ${payload.db_path}.`
       : "Active data source updated.";
@@ -485,7 +488,8 @@ runEnrichment.addEventListener("click", async () => {
         lat_col: latColumn.value,
         lon_col: lonColumn.value,
         mode: matchMode.value,
-        max_distance_m: Number(maxDistance.value || 50)
+        max_distance_m: Number(maxDistance.value || 50),
+        appended_fields: window.exposureEnrichmentFields?.selected() || []
       })
     });
     const payload = await response.json();
@@ -854,11 +858,6 @@ runEtlBtn.addEventListener("click", async () => {
   formData.append("output_parquet", etlOutputParquet.value.trim() || `${dir}/buildings_cleaned.parquet`);
   formData.append("duckdb_file", etlDuckdbFile.value.trim() || `${dir}/work_obm.duckdb`);
   formData.append("lookup_db_file", etlLookupDbFile.value.trim() || `${dir}/building_lookup.duckdb`);
-  formData.append("lon_min", document.getElementById("etlLonMin").value);
-  formData.append("lon_max", document.getElementById("etlLonMax").value);
-  formData.append("lat_min", document.getElementById("etlLatMin").value);
-  formData.append("lat_max", document.getElementById("etlLatMax").value);
-
   try {
     const response = await fetch("/api/etl/create-database", {
       method: "POST",
@@ -896,11 +895,13 @@ async function pollEtlProgress(jobId) {
       statusEl.textContent = "Done";
       showEtlStatus("success", `
         <strong>Database created successfully.</strong><br>
+        ${formatBoundaryExtent(payload.boundary_extent)}
         Parquet: <code>${escapeHtml(payload.output_parquet || "")}</code><br>
         DuckDB work file: <code>${escapeHtml(payload.duckdb_file || "")}</code><br>
         DuckDB lookup table: <code>${escapeHtml(payload.lookup_db_file || "")}</code>
       `);
       runEtlBtn.disabled = false;
+      await loadDataSources();
       return;
     }
 
@@ -921,4 +922,9 @@ function showEtlStatus(type, html) {
   if (type === "error") etlStatusEl.classList.add("etl-status--error");
   if (type === "success") etlStatusEl.classList.add("etl-status--success");
   etlStatusEl.innerHTML = html;
+}
+
+function formatBoundaryExtent(extent) {
+  if (!extent) return "";
+  return `Boundary extent: <code>${Number(extent.lon_min).toFixed(4)}, ${Number(extent.lat_min).toFixed(4)} to ${Number(extent.lon_max).toFixed(4)}, ${Number(extent.lat_max).toFixed(4)}</code><br>`;
 }

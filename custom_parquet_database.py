@@ -115,6 +115,27 @@ def _geometry_sql(column: str, column_type: str) -> str:
     return f"ST_GeomFromWKB({identifier})"
 
 
+def _quadkey_prefix_sql(lon_sql: str, lat_sql: str, zoom: int = 6) -> str:
+    tile_count = 2 ** zoom
+    tile_x = f"CAST(FLOOR((({lon_sql}) + 180.0) / 360.0 * {tile_count}) AS BIGINT)"
+    clamped_lat = f"LEAST(GREATEST(({lat_sql}), -85.05112878), 85.05112878)"
+    tile_y = (
+        "CAST(FLOOR(("
+        f"0.5 - LN((1 + SIN(RADIANS({clamped_lat}))) / (1 - SIN(RADIANS({clamped_lat})))) / (4 * PI())"
+        f") * {tile_count}) AS BIGINT)"
+    )
+    digits = []
+    for level in range(zoom, 0, -1):
+        mask = 1 << (level - 1)
+        digits.append(
+            "CAST(("
+            f"(CASE WHEN (({tile_x}) & {mask}) != 0 THEN 1 ELSE 0 END)"
+            f" + (CASE WHEN (({tile_y}) & {mask}) != 0 THEN 2 ELSE 0 END)"
+            ") AS VARCHAR)"
+        )
+    return f"CONCAT({', '.join(digits)})"
+
+
 def prepare_custom_parquet_database(
     parquet_path: Path,
     db_path: Path,
@@ -135,6 +156,8 @@ def prepare_custom_parquet_database(
     occupancy = _mapped_identifier(mappings, "occupancy")
     height = _mapped_identifier(mappings, "height")
     source = _sql_string(f"custom_parquet:{parquet_path.stem}")
+    quadkey_prefix_6 = _quadkey_prefix_sql("centroid_lon", "centroid_lat", zoom=6)
+    quadkey_prefix_14 = _quadkey_prefix_sql("centroid_lon", "centroid_lat", zoom=14)
 
     con = duckdb.connect(str(db_path))
     try:
@@ -173,7 +196,8 @@ def prepare_custom_parquet_database(
                 {source} AS source,
                 NULL::DOUBLE AS relation_id,
                 NULL::VARCHAR AS quadkey,
-                NULL::VARCHAR AS quadkey_prefix_6,
+                {quadkey_prefix_6} AS quadkey_prefix_6,
+                {quadkey_prefix_14} AS quadkey_prefix_14,
                 NULL::VARCHAR AS last_update,
                 centroid_lon,
                 centroid_lat,
@@ -210,10 +234,11 @@ def prepare_custom_parquet_database(
                 ST_XMax(geom_3035) AS bbox_3035_xmax,
                 ST_YMax(geom_3035) AS bbox_3035_ymax
             FROM projected_buildings
-            ORDER BY centroid_lon, centroid_lat;
+            ORDER BY quadkey_prefix_14, centroid_lon, centroid_lat;
         """)
         con.execute("CREATE INDEX buildings_geom_rtree ON buildings USING RTREE (geom);")
         con.execute("CREATE INDEX buildings_geom_3035_rtree ON buildings USING RTREE (geom_3035);")
+        con.execute("CREATE INDEX buildings_quadkey_prefix_14_idx ON buildings(quadkey_prefix_14);")
         return int(con.execute("SELECT COUNT(*) FROM buildings;").fetchone()[0])
     finally:
         con.close()

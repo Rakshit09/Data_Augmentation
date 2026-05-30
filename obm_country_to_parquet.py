@@ -74,8 +74,8 @@ class ETLConfig:
         "aktuell/vg250_01-01.utm32s.gpkg.ebenen.zip"
     )
 
-    # Coarse country bbox with a small margin.
-    # Used only as cheap prefilter. Precise filtering is done by the boundary file.
+    # Initial fallback bbox. Once the boundary is loaded, its WGS84 extent
+    # replaces these values for tile selection and the cheap spatial prefilter.
     lon_min: float = 5.5
     lon_max: float = 15.5
     lat_min: float = 47.0
@@ -143,6 +143,7 @@ class OpenBuildingMapCountryETL:
             boundary_epsg,
             boundary_geom_col,
         )
+        self._set_bbox_from_country_boundary()
 
         geom_expr = self._detect_obm_geometry_expression()
         self._extract_clean_parquet(geom_expr)
@@ -278,6 +279,8 @@ class OpenBuildingMapCountryETL:
 
         if suffix == ".zip":
             extract_dir = self.boundary_dir / "user_boundary"
+            if extract_dir.exists():
+                shutil.rmtree(extract_dir)
             extract_dir.mkdir(parents=True, exist_ok=True)
             logger.info("Extracting user boundary ZIP: %s", boundary_file)
             with zipfile.ZipFile(boundary_file, "r") as zf:
@@ -329,14 +332,17 @@ class OpenBuildingMapCountryETL:
             if epsg_match:
                 return int(epsg_match.group(1))
 
+            from pyproj import CRS
+            crs = CRS.from_wkt(prj_text)
+            epsg = crs.to_epsg()
+            if epsg:
+                return int(epsg)
+
             normalized_prj = prj_text.upper().replace(" ", "").replace("_", "")
             if "WGS1984" in normalized_prj or "WGS84" in normalized_prj:
                 return 4326
 
-            from pyproj import CRS
-            crs = CRS.from_wkt(prj_text)
-            epsg = crs.to_epsg()
-            return int(epsg) if epsg else 4326
+            return 4326
         except Exception as exc:
             logger.warning("Could not parse .prj for EPSG (%s); assuming 4326", exc)
             return 4326
@@ -438,17 +444,14 @@ class OpenBuildingMapCountryETL:
             layer_clause = f"layer = '{layer_sql}',"
 
         if source_epsg == 4326:
-            geom_sql = f"ST_SetCRS({geom_col_sql}, 'OGC:CRS84')"
+            geom_sql = f"ST_Transform({geom_col_sql}, 'EPSG:4326', 'OGC:CRS84', always_xy := true)"
         else:
             geom_sql = (
-                f"ST_SetCRS("
                 f"ST_Transform("
                 f"{geom_col_sql}, "
                 f"'EPSG:{source_epsg}', "
-                f"'EPSG:4326', "
+                f"'OGC:CRS84', "
                 f"always_xy := true"
-                f"), "
-                f"'OGC:CRS84'"
                 f")"
             )
 
@@ -471,6 +474,40 @@ class OpenBuildingMapCountryETL:
         """).df()
 
         logger.info("Boundary check:\n%s", boundary_check)
+
+    def _set_bbox_from_country_boundary(self) -> None:
+        """Uses the dissolved WGS84 boundary extent for OBM tile selection."""
+        bounds = self.con.execute("""
+            SELECT
+                ST_XMin(geom),
+                ST_YMin(geom),
+                ST_XMax(geom),
+                ST_YMax(geom)
+            FROM country_boundary
+            WHERE geom IS NOT NULL;
+        """).fetchone()
+
+        if bounds is None or any(value is None or not math.isfinite(float(value)) for value in bounds):
+            raise ValueError("Could not determine a valid extent from the boundary file.")
+
+        lon_min, lat_min, lon_max, lat_max = map(float, bounds)
+        if not (-180 <= lon_min < lon_max <= 180 and -90 <= lat_min < lat_max <= 90):
+            raise ValueError(
+                "Boundary extent is outside valid WGS84 longitude/latitude ranges: "
+                f"{lon_min}, {lat_min}, {lon_max}, {lat_max}"
+            )
+
+        self.cfg.lon_min = lon_min
+        self.cfg.lon_max = lon_max
+        self.cfg.lat_min = lat_min
+        self.cfg.lat_max = lat_max
+        logger.info(
+            "Using boundary-derived WGS84 extent: lon %.6f to %.6f, lat %.6f to %.6f",
+            lon_min,
+            lon_max,
+            lat_min,
+            lat_max,
+        )
 
     # ---------------------------------------------------------------------
     # OBM schema inspection
@@ -661,7 +698,7 @@ class OpenBuildingMapCountryETL:
                     ST_Area(
                         ST_Transform(
                             geom,
-                            'EPSG:4326',
+                            'OGC:CRS84',
                             'EPSG:3035',
                             always_xy := true
                         )
@@ -920,10 +957,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--memory-limit", default="24GB")
     parser.add_argument("--force", action="store_true")
-    parser.add_argument("--lon-min", type=float, default=ETLConfig.lon_min)
-    parser.add_argument("--lon-max", type=float, default=ETLConfig.lon_max)
-    parser.add_argument("--lat-min", type=float, default=ETLConfig.lat_min)
-    parser.add_argument("--lat-max", type=float, default=ETLConfig.lat_max)
 
     parser.add_argument(
         "--sample-only",
@@ -968,10 +1001,6 @@ def main():
         ),
         threads=args.threads,
         memory_limit=args.memory_limit,
-        lon_min=args.lon_min,
-        lon_max=args.lon_max,
-        lat_min=args.lat_min,
-        lat_max=args.lat_max,
         force=args.force,
         sample_only=args.sample_only,
         sample_limit=args.sample_limit,

@@ -149,6 +149,10 @@
               Max nearest distance (m)
               <input id="maxDistance" type="number" min="1" max="500" step="1" value="50">
             </label>
+            <details class="lookup-field-picker">
+              <summary>Choose appended database fields</summary>
+              <div id="exposureFieldOptions" class="lookup-field-options"></div>
+            </details>
             <button id="runEnrichment" type="button">Run enrichment</button>
           </div>
         </section>
@@ -171,21 +175,11 @@
                   <legend>Boundary</legend>
                   <label class="dropzone" for="boundaryFile">
                     <span class="dropzone-title">Upload Boundary (optional)</span>
-                    <span class="dropzone-subtitle">.shp, .gpkg or .zip containing either</span>
+                    <span class="dropzone-subtitle">.gpkg or .zip containing a shapefile and its sidecar files</span>
                   </label>
-                  <input id="boundaryFile" class="file-input" type="file" accept=".zip,.shp,.gpkg" tabindex="-1" aria-hidden="true">
+                  <input id="boundaryFile" class="file-input" type="file" accept=".zip,.gpkg" tabindex="-1" aria-hidden="true">
                   <span id="boundaryFileName" class="file-chosen hidden"></span>
-                  <p class="etl-hint">Upload a country boundary for non-Germany runs. Leave empty only for the default Germany boundary.</p>
-                </fieldset>
-
-                <fieldset class="etl-fieldset">
-                  <legend>Bounding Box</legend>
-                  <div class="bbox-grid">
-                    <label>Lon min<input id="etlLonMin" type="number" step="any" value="5.5"></label>
-                    <label>Lon max<input id="etlLonMax" type="number" step="any" value="15.5"></label>
-                    <label>Lat min<input id="etlLatMin" type="number" step="any" value="47.0"></label>
-                    <label>Lat max<input id="etlLatMax" type="number" step="any" value="55.3"></label>
-                  </div>
+                  <p class="etl-hint">Upload a country boundary for non-Germany runs. Its latitude and longitude extent is detected automatically. Leave empty only for the default Germany boundary.</p>
                 </fieldset>
 
                 <fieldset class="etl-fieldset">
@@ -267,6 +261,7 @@
   <script src="https://unpkg.com/maplibre-gl@5.22.0/dist/maplibre-gl.js"></script>
   <script src="{{ url_for('static', filename='app.js') }}"></script>
   <script src="{{ url_for('static', filename='building_lookup_fields.js') }}"></script>
+  <script src="{{ url_for('static', filename='exposure_enrichment_fields.js') }}"></script>
   <script src="{{ url_for('static', filename='custom_parquet_database.js') }}"></script>
 </body>
 </html>

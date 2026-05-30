@@ -27,8 +27,8 @@ from obm_country_to_parquet import ETLConfig, OpenBuildingMapCountryETL
 DEFAULT_PARQUET = "etl_output/buildings_de_cleaned.parquet"
 DEFAULT_DB = "etl_output/building_lookup.duckdb"
 NEAREST_CANDIDATE_LIMIT = 128
-QUADKEY_PREFIX_ZOOM = 6
-QUADKEY_TILE_COUNT = 1 << QUADKEY_PREFIX_ZOOM
+DEFAULT_QUADKEY_PREFIX_ZOOM = 6
+OPTIMIZED_QUADKEY_PREFIX_ZOOM = 14
 BUILDING_COLUMNS = [
     "building_id",
     "source",
@@ -383,6 +383,7 @@ def prepare_index(parquet_path: str, db_path: str, force: bool = False, threads:
             relation_id,
             quadkey,
             quadkey_prefix_6,
+            SUBSTR(CAST(quadkey AS VARCHAR), 1, 14) AS quadkey_prefix_14,
             CAST(last_update AS VARCHAR) AS last_update,
             centroid_lon,
             centroid_lat,
@@ -412,12 +413,13 @@ def prepare_index(parquet_path: str, db_path: str, force: bool = False, threads:
             ST_XMax(geom_3035) AS bbox_3035_xmax,
             ST_YMax(geom_3035) AS bbox_3035_ymax
         FROM projected_buildings
-        ORDER BY quadkey_prefix_6, bbox_xmin, bbox_ymin;
+        ORDER BY quadkey_prefix_14, bbox_xmin, bbox_ymin;
     """)
 
     print("Creating spatial index.")
     con.execute("CREATE INDEX buildings_geom_rtree ON buildings USING RTREE (geom);")
     con.execute("CREATE INDEX buildings_geom_3035_rtree ON buildings USING RTREE (geom_3035);")
+    con.execute("CREATE INDEX buildings_quadkey_prefix_14_idx ON buildings(quadkey_prefix_14);")
 
     row_count = con.execute("SELECT COUNT(*) FROM buildings;").fetchone()[0]
     con.close()
@@ -584,6 +586,20 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
 
         return jsonify(result)
 
+    @app.route("/api/building-fields")
+    def building_fields():
+        db_path = app.config["DB_PATH"]
+        if not Path(db_path).exists():
+            return jsonify({"error": "Lookup database has not been prepared."}), 503
+
+        con = open_db(db_path, read_only=True)
+        try:
+            fields = lookup_display_columns(con)
+        finally:
+            con.close()
+
+        return jsonify({"fields": fields})
+
     @app.route("/api/search-address")
     def search_address():
         query = request.args.get("q", "").strip()
@@ -657,6 +673,7 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
         lat_col = str(payload.get("lat_col", ""))
         lon_col = str(payload.get("lon_col", ""))
         mode = str(payload.get("mode", "inside_nearest"))
+        requested_fields = payload.get("appended_fields")
 
         try:
             max_distance_m = float(payload.get("max_distance_m", app.config["NEAREST_RADIUS_M"]))
@@ -668,6 +685,25 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
 
         if mode not in {"centroid", "inside", "inside_nearest"}:
             return jsonify({"error": "Unknown matching mode."}), 400
+
+        db_path = app.config["DB_PATH"]
+        con = open_db(db_path, read_only=True)
+        try:
+            available_fields = lookup_display_columns(con)
+        finally:
+            con.close()
+
+        if requested_fields is None:
+            appended_fields = available_fields
+        elif not isinstance(requested_fields, list):
+            return jsonify({"error": "Appended fields must be a list."}), 400
+        else:
+            appended_fields = list(dict.fromkeys(str(field) for field in requested_fields))
+            invalid_fields = [field for field in appended_fields if field not in available_fields]
+            if invalid_fields:
+                return jsonify({
+                    "error": f"Unknown appended database field: {invalid_fields[0]}"
+                }), 400
 
         upload_path = find_upload(Path(app.config["UPLOAD_DIR"]), upload_id)
         if upload_path is None:
@@ -691,13 +727,14 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
 
             try:
                 summary = enrich_exposure_csv(
-                    db_path=app.config["DB_PATH"],
+                    db_path=db_path,
                     csv_path=upload_path,
                     output_path=output_path,
                     lat_col=lat_col,
                     lon_col=lon_col,
                     mode=mode,
                     max_distance_m=max_distance_m,
+                    appended_fields=appended_fields,
                     progress_callback=progress,
                 )
                 set_job(
@@ -761,20 +798,16 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
         if boundary_file and boundary_file.filename:
             filename = secure_filename(boundary_file.filename)
             ext = Path(filename).suffix.lower()
-            if ext not in {".zip", ".gpkg", ".shp"}:
-                return jsonify({"error": "Boundary file must be a .zip, .gpkg, or .shp."}), 400
+            if ext not in {".zip", ".gpkg"}:
+                return jsonify({
+                    "error": "Boundary file must be a .gpkg or a .zip containing the shapefile sidecars."
+                }), 400
             upload_dir = Path(app.config["UPLOAD_DIR"])
             saved_path = upload_dir / f"{uuid.uuid4().hex}_{filename}"
             boundary_file.save(saved_path)
             boundary_file_path = str(saved_path)
 
         # ---------- config fields ----------
-        def _float(key: str, default: float) -> float:
-            try:
-                return float(request.form.get(key, default))
-            except (TypeError, ValueError):
-                return default
-
         def _str(key: str, default: str) -> str:
             val = request.form.get(key, "").strip()
             return val if val else default
@@ -807,10 +840,6 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
             output_parquet=output_parquet,
             duckdb_file=duckdb_file,
             temp_directory=f"{output_dir}/duckdb_temp",
-            lon_min=_float("lon_min", 5.5),
-            lon_max=_float("lon_max", 15.5),
-            lat_min=_float("lat_min", 47.0),
-            lat_max=_float("lat_max", 55.3),
             boundary_file=boundary_file_path,
             force=True,
         )
@@ -832,6 +861,15 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
                 set_etl_job(job_id, phase="Initialising DuckDB", percent=5)
                 etl = OpenBuildingMapCountryETL(cfg)
                 etl.run()
+                set_etl_job(
+                    job_id,
+                    boundary_extent={
+                        "lon_min": cfg.lon_min,
+                        "lon_max": cfg.lon_max,
+                        "lat_min": cfg.lat_min,
+                        "lat_max": cfg.lat_max,
+                    },
+                )
                 set_etl_job(job_id, phase="Creating DuckDB lookup table", percent=85)
                 prepare_index(cfg.output_parquet, lookup_db_file, force=True, threads=8)
                 app.config["PARQUET_PATH"] = display_path(Path(cfg.output_parquet))
@@ -886,36 +924,43 @@ def csv_scan_options(csv_path: Path) -> str:
     return f"sample_size = 20480, ignore_errors = true, header = true, all_varchar = true, encoding = {encoding}"
 
 
-def b_select(alias: str = "b") -> str:
-    return ",\n            ".join(f"{alias}.{sql_identifier(col)} AS {sql_identifier(col)}" for col in BUILDING_COLUMNS)
+def b_select(alias: str = "b", columns: Optional[List[str]] = None) -> str:
+    selected_columns = columns if columns is not None else BUILDING_COLUMNS
+    return ",\n            ".join(f"{alias}.{sql_identifier(col)} AS {sql_identifier(col)}" for col in selected_columns)
 
 
 def null_building_select() -> str:
     return ",\n            ".join(f"NULL AS {sql_identifier(col)}" for col in BUILDING_COLUMNS)
 
 
-def final_building_select(source: str) -> str:
+def final_building_select(source: str, columns: Optional[List[str]] = None) -> str:
+    selected_columns = columns if columns is not None else BUILDING_COLUMNS
     return ",\n            ".join(
         f"{source}.{sql_identifier(col)} AS {sql_identifier('building_' + col)}"
-        for col in BUILDING_COLUMNS
+        for col in selected_columns
     )
 
 
-def final_coalesced_building_select() -> str:
+def final_coalesced_building_select(columns: Optional[List[str]] = None) -> str:
+    selected_columns = columns if columns is not None else BUILDING_COLUMNS
     return ",\n            ".join(
         f"COALESCE(i.{sql_identifier(col)}, n.{sql_identifier(col)}) AS {sql_identifier('building_' + col)}"
-        for col in BUILDING_COLUMNS
+        for col in selected_columns
     )
+
+
+def appended_select(sql: str) -> str:
+    return f",\n                {sql}" if sql else ""
 
 
 def exposure_select(columns: List[str]) -> str:
     return ",\n            ".join(f"e.{sql_identifier(col)}" for col in columns)
 
 
-def quadkey_prefix_sql(tile_x_sql: str, tile_y_sql: str) -> str:
+def quadkey_prefix_sql(tile_x_sql: str, tile_y_sql: str, zoom: int) -> str:
     digits = []
 
-    for level in range(QUADKEY_PREFIX_ZOOM, 0, -1):
+    for level in range(zoom, 0, -1):
         mask = 1 << (level - 1)
         digits.append(
             "CAST(("
@@ -927,6 +972,32 @@ def quadkey_prefix_sql(tile_x_sql: str, tile_y_sql: str) -> str:
     return f"CONCAT({', '.join(digits)})"
 
 
+def enrichment_quadkey_config(con: duckdb.DuckDBPyConnection) -> tuple[str, int, bool]:
+    columns = {
+        row[0]
+        for row in con.execute("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'buildings';
+        """).fetchall()
+    }
+    prefix_column = (
+        "quadkey_prefix_14"
+        if "quadkey_prefix_14" in columns
+        else "quadkey_prefix_6"
+    )
+    zoom = OPTIMIZED_QUADKEY_PREFIX_ZOOM if prefix_column == "quadkey_prefix_14" else DEFAULT_QUADKEY_PREFIX_ZOOM
+    has_null_prefixes = bool(con.execute(f"""
+        SELECT EXISTS (
+            SELECT 1
+            FROM buildings
+            WHERE {sql_identifier(prefix_column)} IS NULL
+            LIMIT 1
+        );
+    """).fetchone()[0])
+    return prefix_column, zoom, has_null_prefixes
+
+
 def enrich_exposure_csv(
     db_path: str,
     csv_path: Path,
@@ -935,6 +1006,7 @@ def enrich_exposure_csv(
     lon_col: str,
     mode: str,
     max_distance_m: float,
+    appended_fields: Optional[List[str]] = None,
     progress_callback=None,
 ) -> Dict[str, Any]:
     started_at = time.perf_counter()
@@ -952,9 +1024,15 @@ def enrich_exposure_csv(
         columns = csv_columns(con, csv_path)
         if lat_col not in columns or lon_col not in columns:
             raise ValueError("Selected latitude/longitude columns were not found in the CSV.")
+        available_fields = lookup_display_columns(con)
+        selected_fields = available_fields if appended_fields is None else appended_fields
+        invalid_fields = [field for field in selected_fields if field not in available_fields]
+        if invalid_fields:
+            raise ValueError(f"Unknown appended database field: {invalid_fields[0]}")
+        quadkey_prefix_column, quadkey_prefix_zoom, allow_null_quadkey_prefix = enrichment_quadkey_config(con)
 
         if progress_callback:
-            progress_callback("Running vectorized spatial enrichment", 20)
+            progress_callback("Running indexed spatial enrichment", 20)
 
         csv_sql = sql_string(str(csv_path.resolve()))
         output_sql = sql_string(str(output_path.resolve()))
@@ -967,6 +1045,10 @@ def enrich_exposure_csv(
             mode=mode,
             radius_sql=str(float(max_distance_m)),
             original_cols_sql=exposure_select(columns),
+            appended_fields=selected_fields,
+            quadkey_prefix_column=quadkey_prefix_column,
+            quadkey_prefix_zoom=quadkey_prefix_zoom,
+            allow_null_quadkey_prefix=allow_null_quadkey_prefix,
         )
 
         progress_stop = Event()
@@ -975,9 +1057,17 @@ def enrich_exposure_csv(
         if progress_callback:
             def advance_progress() -> None:
                 percent = 20
-                while not progress_stop.wait(3):
-                    percent = min(percent + 5, 90)
-                    progress_callback("Running vectorized spatial enrichment", percent)
+                while not progress_stop.wait(1):
+                    percent = min(percent + 1, 90)
+                    try:
+                        query_percent = con.query_progress()
+                    except duckdb.Error:
+                        query_percent = -1
+                    if query_percent > 0:
+                        if query_percent <= 1:
+                            query_percent *= 100
+                        percent = max(percent, min(round(20 + query_percent * 0.7), 90))
+                    progress_callback("Running indexed spatial enrichment", percent)
 
             progress_thread = Thread(target=advance_progress, daemon=True)
             progress_thread.start()
@@ -996,7 +1086,7 @@ def enrich_exposure_csv(
         if progress_callback:
             progress_callback("Finalizing summary", 95)
 
-        summary = summarize_enriched_output(con, output_path)
+        summary = summarize_enriched_output(con, output_path, selected_fields)
         summary["enrichment_elapsed_seconds"] = round(time.perf_counter() - started_at, 3)
         return summary
     finally:
@@ -1006,8 +1096,19 @@ def enrich_exposure_csv(
 def summarize_enriched_output(
     con: duckdb.DuckDBPyConnection,
     output_path: Path,
+    appended_fields: List[str],
 ) -> Dict[str, Any]:
     output_sql = sql_string(str(output_path.resolve()))
+    occupancy_raw_sql = (
+        "NULLIF(TRIM(CAST(building_occupancy_raw AS VARCHAR)), '')"
+        if "occupancy_raw" in appended_fields
+        else "NULL::VARCHAR"
+    )
+    occupancy_group_sql = (
+        "NULLIF(TRIM(CAST(building_occupancy_group AS VARCHAR)), '')"
+        if "occupancy_group" in appended_fields
+        else "NULL::VARCHAR"
+    )
 
     summary_rows = con.execute(f"""
         WITH enriched AS (
@@ -1015,8 +1116,8 @@ def summarize_enriched_output(
                 TRY_CAST(coordinate_valid AS BOOLEAN) AS coordinate_valid,
                 CAST(building_match_type AS VARCHAR) AS building_match_type,
                 TRY_CAST(building_distance_m AS DOUBLE) AS building_distance_m,
-                NULLIF(TRIM(CAST(building_occupancy_raw AS VARCHAR)), '') AS building_occupancy_raw,
-                NULLIF(TRIM(CAST(building_occupancy_group AS VARCHAR)), '') AS building_occupancy_group
+                {occupancy_raw_sql} AS building_occupancy_raw,
+                {occupancy_group_sql} AS building_occupancy_group
             FROM read_csv_auto({output_sql}, header = true, sample_size = 20480, all_varchar = true)
         ),
         rolled AS (
@@ -1463,16 +1564,31 @@ def enrichment_select_sql(
     mode: str,
     radius_sql: str,
     original_cols_sql: str,
+    appended_fields: List[str],
+    quadkey_prefix_column: str = "quadkey_prefix_6",
+    quadkey_prefix_zoom: int = DEFAULT_QUADKEY_PREFIX_ZOOM,
+    allow_null_quadkey_prefix: bool = True,
 ) -> str:
-    tile_count_sql = str(QUADKEY_TILE_COUNT)
-    max_tile_sql = str(QUADKEY_TILE_COUNT - 1)
+    tile_count = 1 << quadkey_prefix_zoom
+    tile_count_sql = str(tile_count)
+    max_tile_sql = str(tile_count - 1)
     candidate_limit_sql = str(NEAREST_CANDIDATE_LIMIT)
-    quadkey_expr_sql = quadkey_prefix_sql("tile_x", "tile_y")
-    ranked_building_cols_sql = ",\n                    ".join(sql_identifier(col) for col in BUILDING_COLUMNS)
+    quadkey_expr_sql = quadkey_prefix_sql("tile_x", "tile_y", quadkey_prefix_zoom)
+    working_building_columns = list(dict.fromkeys(["building_id", *appended_fields]))
+    ranked_building_cols_sql = ",\n                    ".join(sql_identifier(col) for col in working_building_columns)
     nearest_building_cols_sql = ",\n                ".join(
         f"c.{sql_identifier(col)} AS {sql_identifier(col)}"
-        for col in BUILDING_COLUMNS
+        for col in working_building_columns
     )
+    final_select_sql = appended_select(final_building_select("m", appended_fields))
+    final_coalesced_select_sql = appended_select(final_coalesced_building_select(appended_fields))
+    prefix_identifier = sql_identifier(quadkey_prefix_column)
+    quadkey_join_sql = f"b.{prefix_identifier} = t.__quadkey_prefix"
+    if allow_null_quadkey_prefix:
+        quadkey_join_sql = (
+            f"({quadkey_join_sql} "
+            f"OR (b.{prefix_identifier} IS NULL AND t.__is_primary_tile))"
+        )
 
     if mode == "centroid":
         mode_base_cols = f""",
@@ -1568,14 +1684,17 @@ def enrichment_select_sql(
         ),
         {projected_ctes},
         exposure_tiles AS (
-            SELECT DISTINCT
+            SELECT
                 t.__exposure_row_id,
-                {quadkey_expr_sql} AS __quadkey_prefix_6
+                {quadkey_expr_sql} AS __quadkey_prefix,
+                t.dx = 0 AND t.dy = 0 AS __is_primary_tile
             FROM (
                 SELECT
                     e.__exposure_row_id,
                     e.__tile_x + dx AS tile_x,
-                    e.__tile_y + dy AS tile_y
+                    e.__tile_y + dy AS tile_y,
+                    dx,
+                    dy
                 FROM exposure e
                 CROSS JOIN range(-1, 2) AS dx(dx)
                 CROSS JOIN range(-1, 2) AS dy(dy)
@@ -1597,11 +1716,11 @@ def enrichment_select_sql(
                         PARTITION BY e.__exposure_row_id
                         ORDER BY ST_Distance_Sphere(ST_Point(b.centroid_lon, b.centroid_lat), e.__pt)
                     ) AS candidate_rank,
-                    {b_select("b")}
+                    {b_select("b", working_building_columns)}
                 FROM exposure e
                 JOIN exposure_tiles t USING (__exposure_row_id)
                 JOIN buildings b
-                    ON b.quadkey_prefix_6 = t.__quadkey_prefix_6
+                    ON {quadkey_join_sql}
                     AND b.centroid_lon BETWEEN e.__lon - e.__lon_delta AND e.__lon + e.__lon_delta
                     AND b.centroid_lat BETWEEN e.__lat - e.__lat_delta AND e.__lat + e.__lat_delta
             ),
@@ -1630,8 +1749,8 @@ def enrichment_select_sql(
                     WHEN m.__exposure_row_id IS NULL THEN 'none'
                     WHEN m.distance_m <= 15 THEN 'medium'
                     ELSE 'low'
-                END AS building_confidence,
-                {final_building_select("m")}
+                END AS building_confidence
+                {final_select_sql}
             FROM exposure e
             LEFT JOIN matches m USING (__exposure_row_id)
             ORDER BY e.__exposure_row_id
@@ -1647,11 +1766,11 @@ def enrichment_select_sql(
                         PARTITION BY e.__exposure_row_id
                         ORDER BY b.footprint_area_m2 ASC NULLS LAST
                     ) AS rn,
-                    {b_select("b")}
+                    {b_select("b", working_building_columns)}
                 FROM exposure e
                 JOIN exposure_tiles t USING (__exposure_row_id)
                 JOIN buildings b
-                    ON b.quadkey_prefix_6 = t.__quadkey_prefix_6
+                    ON {quadkey_join_sql}
                     AND e.__lon BETWEEN b.bbox_xmin AND b.bbox_xmax
                     AND e.__lat BETWEEN b.bbox_ymin AND b.bbox_ymax
                     AND ST_Intersects(b.geom, e.__pt)
@@ -1664,8 +1783,8 @@ def enrichment_select_sql(
                 e.__valid_coordinates AS coordinate_valid,
                 CASE WHEN m.__exposure_row_id IS NOT NULL THEN 'inside_polygon' ELSE 'none' END AS building_match_type,
                 CASE WHEN m.__exposure_row_id IS NOT NULL THEN 0.0 ELSE NULL END AS building_distance_m,
-                CASE WHEN m.__exposure_row_id IS NOT NULL THEN 'high' ELSE 'none' END AS building_confidence,
-                {final_building_select("m")}
+                CASE WHEN m.__exposure_row_id IS NOT NULL THEN 'high' ELSE 'none' END AS building_confidence
+                {final_select_sql}
             FROM exposure e
             LEFT JOIN matches m USING (__exposure_row_id)
             ORDER BY e.__exposure_row_id
@@ -1681,11 +1800,11 @@ def enrichment_select_sql(
                     PARTITION BY e.__exposure_row_id
                     ORDER BY b.footprint_area_m2 ASC NULLS LAST
                 ) AS rn,
-                {b_select("b")}
+                {b_select("b", working_building_columns)}
             FROM exposure e
             JOIN exposure_tiles t USING (__exposure_row_id)
             JOIN buildings b
-                ON b.quadkey_prefix_6 = t.__quadkey_prefix_6
+                ON {quadkey_join_sql}
                 AND e.__lon BETWEEN b.bbox_xmin AND b.bbox_xmax
                 AND e.__lat BETWEEN b.bbox_ymin AND b.bbox_ymax
                 AND ST_Intersects(b.geom, e.__pt)
@@ -1709,11 +1828,11 @@ def enrichment_select_sql(
                     PARTITION BY e.__exposure_row_id
                     ORDER BY ST_Distance_Sphere(ST_Point(b.centroid_lon, b.centroid_lat), e.__pt)
                 ) AS candidate_rank,
-                {b_select("b")}
+                {b_select("b", working_building_columns)}
             FROM unmatched_exposure e
             JOIN exposure_tiles t USING (__exposure_row_id)
             JOIN buildings b
-                ON b.quadkey_prefix_6 = t.__quadkey_prefix_6
+                ON {quadkey_join_sql}
                 AND b.bbox_xmin <= e.__lon + e.__lon_delta
                 AND b.bbox_xmax >= e.__lon - e.__lon_delta
                 AND b.bbox_ymin <= e.__lat + e.__lat_delta
@@ -1757,8 +1876,8 @@ def enrichment_select_sql(
                 WHEN n.__exposure_row_id IS NULL THEN 'none'
                 WHEN n.distance_m <= 15 THEN 'medium'
                 ELSE 'low'
-            END AS building_confidence,
-            {final_coalesced_building_select()}
+            END AS building_confidence
+            {final_coalesced_select_sql}
         FROM exposure e
         LEFT JOIN inside_matches i USING (__exposure_row_id)
         LEFT JOIN nearest_matches n USING (__exposure_row_id)
@@ -1771,7 +1890,8 @@ def find_building(
     lat: float,
     nearest_radius_m: float,
 ) -> Optional[Dict[str, Any]]:
-    optional_columns = optional_lookup_select(con)
+    display_columns = lookup_display_columns(con)
+    display_select = ",\n            ".join(sql_identifier(column) for column in display_columns)
     inside = con.execute(f"""
         WITH click AS (
             SELECT ST_Point(?, ?) AS pt
@@ -1780,29 +1900,7 @@ def find_building(
             'inside_polygon' AS match_type,
             0.0 AS distance_m,
             'high' AS confidence,
-            building_id,
-            source,
-            relation_id,
-            quadkey,
-            last_update,
-            centroid_lon,
-            centroid_lat,
-            footprint_area_m2,
-            height_raw,
-            height_source_type,
-            height_m,
-            height_quality,
-            stories_exact,
-            stories_min,
-            stories_max,
-            occupancy_raw,
-            occupancy_code,
-            occupancy_group,
-            occupancy_quality,
-            floorspace_obm_m2,
-            floorspace_est_m2,
-            attribute_completeness_score,
-            {optional_columns},
+            {display_select},
             ST_AsGeoJSON(geom) AS geometry
         FROM buildings, click
         WHERE
@@ -1816,7 +1914,7 @@ def find_building(
     """, [lon, lat, lon, lon, lat, lat]).fetchone()
 
     if inside:
-        return row_to_response(con, inside)
+        return row_to_response(inside, display_columns)
 
     lat_delta = nearest_radius_m / 111_320.0
     lon_delta = nearest_radius_m / (111_320.0 * max(math.cos(math.radians(lat)), 0.2))
@@ -1832,29 +1930,7 @@ def find_building(
                 WHEN ST_Distance_Sphere(ST_Point(centroid_lon, centroid_lat), pt) <= 15 THEN 'medium'
                 ELSE 'low'
             END AS confidence,
-            building_id,
-            source,
-            relation_id,
-            quadkey,
-            last_update,
-            centroid_lon,
-            centroid_lat,
-            footprint_area_m2,
-            height_raw,
-            height_source_type,
-            height_m,
-            height_quality,
-            stories_exact,
-            stories_min,
-            stories_max,
-            occupancy_raw,
-            occupancy_code,
-            occupancy_group,
-            occupancy_quality,
-            floorspace_obm_m2,
-            floorspace_est_m2,
-            attribute_completeness_score,
-            {optional_columns},
+            {display_select},
             ST_AsGeoJSON(geom) AS geometry
         FROM buildings, click
         WHERE
@@ -1874,56 +1950,40 @@ def find_building(
     if nearest is None or nearest[1] is None or nearest[1] > nearest_radius_m:
         return None
 
-    return row_to_response(con, nearest)
+    return row_to_response(nearest, display_columns)
 
 
-def optional_lookup_select(con: duckdb.DuckDBPyConnection) -> str:
-    optional_columns = ("year_built", "construction", "roof_type", "basement")
-    available_columns = {
-        row[0]
-        for row in con.execute("""
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_name = 'buildings';
-        """).fetchall()
-    }
-    return ",\n            ".join(
-        sql_identifier(column) if column in available_columns else f"NULL AS {sql_identifier(column)}"
-        for column in optional_columns
+def lookup_display_columns(con: duckdb.DuckDBPyConnection) -> List[str]:
+    columns = con.execute("""
+        SELECT column_name, data_type
+        FROM information_schema.columns
+        WHERE table_name = 'buildings'
+        ORDER BY ordinal_position;
+    """).fetchall()
+
+    return [
+        str(column_name)
+        for column_name, data_type in columns
+        if not is_internal_lookup_column(str(column_name), str(data_type))
+    ]
+
+
+def is_internal_lookup_column(column_name: str, data_type: str) -> bool:
+    normalized_name = column_name.casefold()
+    return (
+        "geometry" in data_type.casefold()
+        or normalized_name.startswith("geom")
+        or normalized_name.startswith("bbox")
+        or normalized_name.startswith("quadkey")
     )
 
 
-def row_to_response(con: duckdb.DuckDBPyConnection, row: tuple) -> Dict[str, Any]:
+def row_to_response(row: tuple, building_columns: List[str]) -> Dict[str, Any]:
     columns = [
         "match_type",
         "distance_m",
         "confidence",
-        "building_id",
-        "source",
-        "relation_id",
-        "quadkey",
-        "last_update",
-        "centroid_lon",
-        "centroid_lat",
-        "footprint_area_m2",
-        "height_raw",
-        "height_source_type",
-        "height_m",
-        "height_quality",
-        "stories_exact",
-        "stories_min",
-        "stories_max",
-        "occupancy_raw",
-        "occupancy_code",
-        "occupancy_group",
-        "occupancy_quality",
-        "floorspace_obm_m2",
-        "floorspace_est_m2",
-        "attribute_completeness_score",
-        "year_built",
-        "construction",
-        "roof_type",
-        "basement",
+        *building_columns,
         "geometry",
     ]
     data = dict(zip(columns, row))

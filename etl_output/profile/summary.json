@@ -1,10 +1,10 @@
 {
-  "total_buildings": 1594321,
-  "min_area_m2": 0.005923652967040568,
-  "avg_area_m2": 90.6712233178174,
-  "max_area_m2": 71678.03243158852,
-  "unknown_occupancy_share": 0.6779556939913606,
-  "missing_height_share": 0.2517102892077568,
-  "missing_floorspace_share": 0.25171467979158524,
-  "avg_attribute_completeness_score": 0.683343003071527
+  "total_buildings": 4289036,
+  "min_area_m2": 3.419909738608959e-05,
+  "avg_area_m2": 197.3042538870479,
+  "max_area_m2": 214841.1694295646,
+  "unknown_occupancy_share": 0.5552541410237638,
+  "missing_height_share": 0.54990095676511,
+  "missing_floorspace_share": 0.5504206539651334,
+  "avg_attribute_completeness_score": 0.5858903725685679
 }
