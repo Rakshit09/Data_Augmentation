@@ -95,6 +95,11 @@
         </form>
         <div id="searchResults" class="search-results hidden"></div>
 
+        <details class="lookup-field-picker">
+          <summary>Choose displayed fields</summary>
+          <div id="buildingInfoFieldOptions" class="lookup-field-options"></div>
+        </details>
+
         <section id="empty" class="empty">
           <p>Select a building footprint on the map.</p>
         </section>
@@ -201,6 +206,40 @@
           </form>
 
           <div id="etlStatus" class="etl-status hidden"></div>
+
+          <form id="customParquetForm" class="etl-form">
+            <fieldset class="etl-fieldset">
+              <legend>Use Your Own Parquet</legend>
+              <p class="etl-hint">Point to an existing local Parquet file, inspect its columns, then map the available building attributes into a DuckDB lookup database.</p>
+              <label>Parquet path
+                <span class="path-picker-row">
+                  <input id="customParquetPath" type="text" list="parquetFileOptions" placeholder="/path/to/buildings.parquet">
+                  <button id="browseCustomParquet" class="etl-tab-button" type="button">Browse</button>
+                </span>
+              </label>
+              <button id="inspectCustomParquet" class="etl-tab-button" type="button">Inspect columns</button>
+            </fieldset>
+
+            <fieldset id="customParquetMappings" class="etl-fieldset hidden">
+              <legend>Column Mapping</legend>
+              <p class="etl-hint">Latitude, longitude, geometry, occupancy, and height are required. The remaining mappings are optional.</p>
+              <label>Latitude<select id="customLatitude"></select></label>
+              <label>Longitude<select id="customLongitude"></select></label>
+              <label>Geometry<select id="customGeometry"></select></label>
+              <label>Occupancy<select id="customOccupancy"></select></label>
+              <label>Height<select id="customHeight"></select></label>
+              <label>Year built (optional)<select id="customYearBuilt"></select></label>
+              <label>Construction (optional)<select id="customConstruction"></select></label>
+              <label>Roof type (optional)<select id="customRoofType"></select></label>
+              <label>Basement (optional)<select id="customBasement"></select></label>
+              <label>DuckDB lookup output
+                <input id="customDbPath" type="text" placeholder="/path/to/buildings_lookup.duckdb">
+              </label>
+              <button id="runCustomParquet" type="button">Create database from Parquet</button>
+            </fieldset>
+          </form>
+
+          <div id="customParquetStatus" class="etl-status hidden"></div>
         </section>
       </section>
     </aside>
@@ -208,5 +247,7 @@
 
   <script src="https://unpkg.com/maplibre-gl@5.22.0/dist/maplibre-gl.js"></script>
   <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <script src="{{ url_for('static', filename='building_lookup_fields.js') }}"></script>
+  <script src="{{ url_for('static', filename='custom_parquet_database.js') }}"></script>
 </body>
 </html>

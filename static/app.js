@@ -48,6 +48,7 @@ const statsGrid = document.getElementById("statsGrid");
 let currentUploadId = null;
 let availableParquetFiles = [];
 let availableDbFiles = [];
+let selectedBuilding = null;
 
 const selectedSource = {
   type: "FeatureCollection",
@@ -319,6 +320,7 @@ map.on("click", async (event) => {
 
 function renderBuilding(payload) {
   const building = payload.building;
+  selectedBuilding = building;
   const feature = {
     type: "Feature",
     geometry: building.geometry,
@@ -341,25 +343,12 @@ function renderBuilding(payload) {
     : `${Number(payload.distance_m).toFixed(1)} m`;
   buildingIdEl.textContent = building.building_id || "Building";
 
-  const rows = [
-    ["Use", building.occupancy_group],
-    ["Raw occupancy", building.occupancy_raw],
-    ["Occupancy code", building.occupancy_code],
-    ["Raw height", building.height_raw],
-    ["Height (m)", formatNumber(building.height_m, " m")],
-    ["Height quality", building.height_quality],
-    ["Footprint", formatNumber(building.footprint_area_m2, " m2")],
-    ["Floorspace", formatNumber(building.floorspace_est_m2, " m2")],
-    ["Completeness", formatPercent(building.attribute_completeness_score)],
-    ["Source", building.source],
-    ["Updated", building.last_update]
-  ];
-
-  attributesEl.innerHTML = rows
-    .filter(([, value]) => value !== null && value !== undefined && value !== "")
-    .map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`)
-    .join("");
+  attributesEl.innerHTML = buildingInfoFields.render(building);
 }
+
+window.addEventListener("building-info-fields-change", () => {
+  if (selectedBuilding) attributesEl.innerHTML = buildingInfoFields.render(selectedBuilding);
+});
 
 searchForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -723,6 +712,7 @@ function formatInteger(value) {
 }
 
 function clearSelection() {
+  selectedBuilding = null;
   map.getSource("selected-building")?.setData(selectedSource);
   detailsEl.classList.add("hidden");
   emptyEl.classList.remove("hidden");

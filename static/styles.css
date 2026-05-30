@@ -397,6 +397,40 @@ h2 {
   margin-top: -8px;
 }
 
+.lookup-field-picker {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: var(--soft);
+}
+
+.lookup-field-picker summary {
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.lookup-field-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+  margin-top: 12px;
+}
+
+.lookup-field-option {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.lookup-field-option input {
+  accent-color: var(--brand);
+}
+
 .search-results button,
 .search-results p {
   width: 100%;
@@ -773,7 +807,8 @@ dd {
 }
 
 .etl-fieldset input[type=text],
-.etl-fieldset input[type=number] {
+.etl-fieldset input[type=number],
+.etl-fieldset select {
   width: 100%;
   padding: 10px 14px;
   border: 2px solid var(--line);
@@ -785,7 +820,8 @@ dd {
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
-.etl-fieldset input:focus {
+.etl-fieldset input:focus,
+.etl-fieldset select:focus {
   outline: none;
   border-color: var(--brand);
   box-shadow: 0 0 0 3px var(--focus);
@@ -806,6 +842,32 @@ dd {
   text-transform: none;
 }
 
+.etl-tab-button {
+  height: 40px;
+  min-width: 0;
+  padding: 0 14px;
+  border: 2px solid transparent;
+  border-radius: 12px;
+  background: var(--soft);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.etl-tab-button:hover {
+  border-color: var(--brand);
+  background: rgba(0, 120, 212, 0.05);
+  color: var(--brand);
+}
+
+.etl-tab-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
 .file-chosen {
   color: var(--brand-dark);
   font-size: 13px;
@@ -813,7 +875,8 @@ dd {
   overflow-wrap: anywhere;
 }
 
-#runEtl {
+#runEtl,
+#runCustomParquet {
   height: 44px;
   padding: 0 16px;
   border: 2px solid var(--brand);
@@ -827,14 +890,16 @@ dd {
   transition: all var(--transition-fast);
 }
 
-#runEtl:hover {
+#runEtl:hover,
+#runCustomParquet:hover {
   border-color: var(--brand-dark);
   background: var(--brand-dark);
   transform: translateY(-1px);
   box-shadow: var(--shadow-lg);
 }
 
-#runEtl:disabled {
+#runEtl:disabled,
+#runCustomParquet:disabled {
   border-color: #94a3b8;
   background: #94a3b8;
   cursor: not-allowed;

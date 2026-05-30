@@ -19,6 +19,7 @@ import pandas as pd
 from flask import Flask, jsonify, render_template, request, send_file
 from werkzeug.utils import secure_filename
 
+from custom_parquet_database import register_custom_parquet_routes
 from obm_country_to_parquet import ETLConfig, OpenBuildingMapCountryETL
 
 
@@ -421,6 +422,7 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
     jobs_lock = Lock()
     Path(app.config["UPLOAD_DIR"]).mkdir(parents=True, exist_ok=True)
     Path(app.config["RESULT_DIR"]).mkdir(parents=True, exist_ok=True)
+    register_custom_parquet_routes(app)
 
     def set_job(job_id: str, **updates: Any) -> None:
         with jobs_lock:
@@ -1582,7 +1584,8 @@ def find_building(
     lat: float,
     nearest_radius_m: float,
 ) -> Optional[Dict[str, Any]]:
-    inside = con.execute("""
+    optional_columns = optional_lookup_select(con)
+    inside = con.execute(f"""
         WITH click AS (
             SELECT ST_Point(?, ?) AS pt
         )
@@ -1612,6 +1615,7 @@ def find_building(
             floorspace_obm_m2,
             floorspace_est_m2,
             attribute_completeness_score,
+            {optional_columns},
             ST_AsGeoJSON(geom) AS geometry
         FROM buildings, click
         WHERE
@@ -1630,7 +1634,7 @@ def find_building(
     lat_delta = nearest_radius_m / 111_320.0
     lon_delta = nearest_radius_m / (111_320.0 * max(math.cos(math.radians(lat)), 0.2))
 
-    nearest = con.execute("""
+    nearest = con.execute(f"""
         WITH click AS (
             SELECT ST_Point(?, ?) AS pt
         )
@@ -1663,6 +1667,7 @@ def find_building(
             floorspace_obm_m2,
             floorspace_est_m2,
             attribute_completeness_score,
+            {optional_columns},
             ST_AsGeoJSON(geom) AS geometry
         FROM buildings, click
         WHERE
@@ -1683,6 +1688,22 @@ def find_building(
         return None
 
     return row_to_response(con, nearest)
+
+
+def optional_lookup_select(con: duckdb.DuckDBPyConnection) -> str:
+    optional_columns = ("year_built", "construction", "roof_type", "basement")
+    available_columns = {
+        row[0]
+        for row in con.execute("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'buildings';
+        """).fetchall()
+    }
+    return ",\n            ".join(
+        sql_identifier(column) if column in available_columns else f"NULL AS {sql_identifier(column)}"
+        for column in optional_columns
+    )
 
 
 def row_to_response(con: duckdb.DuckDBPyConnection, row: tuple) -> Dict[str, Any]:
@@ -1712,6 +1733,10 @@ def row_to_response(con: duckdb.DuckDBPyConnection, row: tuple) -> Dict[str, Any
         "floorspace_obm_m2",
         "floorspace_est_m2",
         "attribute_completeness_score",
+        "year_built",
+        "construction",
+        "roof_type",
+        "basement",
         "geometry",
     ]
     data = dict(zip(columns, row))
