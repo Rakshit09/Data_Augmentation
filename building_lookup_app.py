@@ -185,7 +185,7 @@ def duckdb_csv_encoding(csv_path: Path) -> str:
 
 
 def open_db(db_path: str, read_only: bool = False) -> duckdb.DuckDBPyConnection:
-    con = duckdb.connect(db_path, read_only=read_only)
+    con = duckdb.connect(str(Path(db_path)), read_only=read_only)
     con.execute("LOAD spatial;")
     return con
 
@@ -358,7 +358,7 @@ def prepare_index(parquet_path: str, db_path: str, force: bool = False, threads:
             print("Use --force to rebuild it.")
             return
 
-    parquet_sql = sql_string(parquet.as_posix())
+    parquet_sql = sql_string(str(parquet))
 
     print("Creating lookup table from Parquet. This is a one-time step. Generating 3035 Projections (May take a few minutes)...")
     

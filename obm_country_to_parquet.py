@@ -184,7 +184,7 @@ class OpenBuildingMapCountryETL:
     def _initialize_duckdb(self):
         logger.info("Initializing DuckDB")
 
-        self.con = duckdb.connect(self.cfg.duckdb_file)
+        self.con = duckdb.connect(str(Path(self.cfg.duckdb_file)))
 
         _ensure_duckdb_extension(self.con, "spatial")
         self.con.execute("LOAD spatial;")
@@ -193,7 +193,7 @@ class OpenBuildingMapCountryETL:
 
         self.con.execute(f"SET threads = {self.cfg.threads};")
         self.con.execute(f"SET memory_limit = '{self.cfg.memory_limit}';")
-        self.con.execute(f"SET temp_directory = '{Path(self.cfg.temp_directory).as_posix()}';")
+        self.con.execute(f"SET temp_directory = '{str(Path(self.cfg.temp_directory))}';")
         self.con.execute("SET s3_use_ssl = false;")
         self.con.execute("SET enable_curl_server_cert_verification = false;")
 

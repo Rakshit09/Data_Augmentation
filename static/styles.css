@@ -773,6 +773,87 @@ dd {
   gap: 14px;
 }
 
+.etl-workflow {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid rgba(0, 31, 63, 0.1);
+  border-radius: 20px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.06);
+}
+
+.etl-workflow-header {
+  display: grid;
+  gap: 6px;
+}
+
+.etl-workflow-title {
+  overflow-wrap: anywhere;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.etl-workflow-toggle {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.etl-workflow-toggle::after {
+  content: "+";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin-top: 12px;
+  border-radius: 999px;
+  background: rgba(0, 120, 212, 0.1);
+  color: var(--brand);
+  font-size: 20px;
+  font-weight: 700;
+  transition: transform var(--transition-fast), background var(--transition-fast);
+}
+
+.etl-workflow-toggle[aria-expanded="true"]::after {
+  content: "-";
+  background: rgba(0, 120, 212, 0.16);
+}
+
+.etl-workflow-toggle:hover .etl-workflow-title,
+.etl-workflow-toggle:focus-visible .etl-workflow-title {
+  color: var(--brand);
+}
+
+.etl-workflow-toggle:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 6px;
+  border-radius: 14px;
+}
+
+.etl-workflow-body {
+  display: grid;
+  gap: 14px;
+}
+
+.etl-workflow-body.hidden {
+  display: none;
+}
+
+.etl-workflow-copy {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .etl-form {
   display: grid;
   gap: 14px;

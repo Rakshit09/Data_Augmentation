@@ -156,90 +156,109 @@
 
       <section id="etlTools" class="side-mode hidden">
         <section class="etl-tools">
-          <header>
-            <p class="eyebrow">ETL Configuration</p>
-          </header>
+          <section class="etl-workflow">
+            <button id="etlWorkflowToggle" class="etl-workflow-toggle" type="button" aria-expanded="false" aria-controls="etlWorkflowBody">
+              <span class="etl-workflow-header">
+                <span class="eyebrow">Workflow 1</span>
+                <span class="etl-workflow-title">Create OBM Database</span>
+                <span class="etl-workflow-copy">Download buildings from OpenBuildingMap, clip them to your selected extent, and generate fresh Parquet and DuckDB outputs.</span>
+              </span>
+            </button>
 
-          <form id="etlForm" class="etl-form">
+            <div id="etlWorkflowBody" class="etl-workflow-body hidden">
+              <form id="etlForm" class="etl-form">
+                <fieldset class="etl-fieldset">
+                  <legend>Boundary</legend>
+                  <label class="dropzone" for="boundaryFile">
+                    <span class="dropzone-title">Upload Boundary (optional)</span>
+                    <span class="dropzone-subtitle">.shp, .gpkg or .zip containing either</span>
+                  </label>
+                  <input id="boundaryFile" class="file-input" type="file" accept=".zip,.shp,.gpkg" tabindex="-1" aria-hidden="true">
+                  <span id="boundaryFileName" class="file-chosen hidden"></span>
+                  <p class="etl-hint">Upload a country boundary for non-Germany runs. Leave empty only for the default Germany boundary.</p>
+                </fieldset>
 
-            <fieldset class="etl-fieldset">
-              <legend>Boundary</legend>
-              <label class="dropzone" for="boundaryFile">
-                <span class="dropzone-title">Upload Boundary (optional)</span>
-                <span class="dropzone-subtitle">.shp, .gpkg or .zip containing either</span>
-              </label>
-              <input id="boundaryFile" class="file-input" type="file" accept=".zip,.shp,.gpkg" tabindex="-1" aria-hidden="true">
-              <span id="boundaryFileName" class="file-chosen hidden"></span>
-              <p class="etl-hint">Upload a country boundary for non-Germany runs. Leave empty only for the default Germany boundary.</p>
-            </fieldset>
+                <fieldset class="etl-fieldset">
+                  <legend>Bounding Box</legend>
+                  <div class="bbox-grid">
+                    <label>Lon min<input id="etlLonMin" type="number" step="any" value="5.5"></label>
+                    <label>Lon max<input id="etlLonMax" type="number" step="any" value="15.5"></label>
+                    <label>Lat min<input id="etlLatMin" type="number" step="any" value="47.0"></label>
+                    <label>Lat max<input id="etlLatMax" type="number" step="any" value="55.3"></label>
+                  </div>
+                </fieldset>
 
-            <fieldset class="etl-fieldset">
-              <legend>Bounding Box</legend>
-              <div class="bbox-grid">
-                <label>Lon min<input id="etlLonMin" type="number" step="any" value="5.5"></label>
-                <label>Lon max<input id="etlLonMax" type="number" step="any" value="15.5"></label>
-                <label>Lat min<input id="etlLatMin" type="number" step="any" value="47.0"></label>
-                <label>Lat max<input id="etlLatMax" type="number" step="any" value="55.3"></label>
-              </div>
-            </fieldset>
+                <fieldset class="etl-fieldset">
+                  <legend>Output Paths</legend>
+                  <label>Output folder
+                    <span class="path-picker-row">
+                      <input id="etlOutputDir" type="text" value="./etl_output" placeholder="./etl_output">
+                      <button id="browseOutputDir" type="button">Browse</button>
+                    </span>
+                  </label>
+                  <label>Parquet filename
+                    <input id="etlOutputParquet" type="text" placeholder="buildings_cleaned.parquet">
+                  </label>
+                  <label>DuckDB work file
+                    <input id="etlDuckdbFile" type="text" placeholder="work_obm.duckdb">
+                  </label>
+                  <label>DuckDB lookup table
+                    <input id="etlLookupDbFile" type="text" placeholder="building_lookup.duckdb">
+                  </label>
+                </fieldset>
 
-            <fieldset class="etl-fieldset">
-              <legend>Output Paths</legend>
-              <label>Output folder
-                <span class="path-picker-row">
-                  <input id="etlOutputDir" type="text" value="./etl_output" placeholder="./etl_output">
-                  <button id="browseOutputDir" type="button">Browse</button>
-                </span>
-              </label>
-              <label>Parquet filename
-                <input id="etlOutputParquet" type="text" placeholder="buildings_cleaned.parquet">
-              </label>
-              <label>DuckDB work file
-                <input id="etlDuckdbFile" type="text" placeholder="work_obm.duckdb">
-              </label>
-              <label>DuckDB lookup table
-                <input id="etlLookupDbFile" type="text" placeholder="building_lookup.duckdb">
-              </label>
-            </fieldset>
+                <button id="runEtl" type="button">Create database</button>
+              </form>
 
-            <button id="runEtl" type="button">Create database</button>
-          </form>
+              <div id="etlStatus" class="etl-status hidden"></div>
+            </div>
+          </section>
 
-          <div id="etlStatus" class="etl-status hidden"></div>
+          <section class="etl-workflow etl-workflow--secondary">
+            <button id="customParquetToggle" class="etl-workflow-toggle" type="button" aria-expanded="false" aria-controls="customParquetBody">
+              <span class="etl-workflow-header">
+                <span class="eyebrow">Workflow 2</span>
+                <span class="etl-workflow-title">Use Custom Parquet</span>
+                <span class="etl-workflow-copy">Start from an existing local Parquet file, inspect its schema, and map the available columns into a DuckDB lookup database.</span>
+              </span>
+            </button>
 
-          <form id="customParquetForm" class="etl-form">
-            <fieldset class="etl-fieldset">
-              <legend>Use Your Own Parquet</legend>
-              <p class="etl-hint">Point to an existing local Parquet file, inspect its columns, then map the available building attributes into a DuckDB lookup database.</p>
-              <label>Parquet path
-                <span class="path-picker-row">
-                  <input id="customParquetPath" type="text" list="parquetFileOptions" placeholder="/path/to/buildings.parquet">
-                  <button id="browseCustomParquet" class="etl-tab-button" type="button">Browse</button>
-                </span>
-              </label>
-              <button id="inspectCustomParquet" class="etl-tab-button" type="button">Inspect columns</button>
-            </fieldset>
+            <div id="customParquetBody" class="etl-workflow-body hidden">
+              <form id="customParquetForm" class="etl-form">
+                <fieldset class="etl-fieldset">
+                  <legend>Use Your Own Parquet</legend>
+                  <p class="etl-hint">Point to an existing local Parquet file, inspect its columns, then map the available building attributes into a DuckDB lookup database.</p>
+                  <label>Parquet path
+                    <span class="path-picker-row">
+                      <input id="customParquetPath" type="text" list="parquetFileOptions" placeholder="/path/to/buildings.parquet">
+                      <button id="browseCustomParquet" class="etl-tab-button" type="button">Browse</button>
+                    </span>
+                  </label>
+                  <button id="inspectCustomParquet" class="etl-tab-button" type="button">Inspect columns</button>
+                </fieldset>
 
-            <fieldset id="customParquetMappings" class="etl-fieldset hidden">
-              <legend>Column Mapping</legend>
-              <p class="etl-hint">Latitude, longitude, geometry, occupancy, and height are required. The remaining mappings are optional.</p>
-              <label>Latitude<select id="customLatitude"></select></label>
-              <label>Longitude<select id="customLongitude"></select></label>
-              <label>Geometry<select id="customGeometry"></select></label>
-              <label>Occupancy<select id="customOccupancy"></select></label>
-              <label>Height<select id="customHeight"></select></label>
-              <label>Year built (optional)<select id="customYearBuilt"></select></label>
-              <label>Construction (optional)<select id="customConstruction"></select></label>
-              <label>Roof type (optional)<select id="customRoofType"></select></label>
-              <label>Basement (optional)<select id="customBasement"></select></label>
-              <label>DuckDB lookup output
-                <input id="customDbPath" type="text" placeholder="/path/to/buildings_lookup.duckdb">
-              </label>
-              <button id="runCustomParquet" type="button">Create database from Parquet</button>
-            </fieldset>
-          </form>
+                <fieldset id="customParquetMappings" class="etl-fieldset hidden">
+                  <legend>Column Mapping</legend>
+                  <p class="etl-hint">Latitude, longitude, geometry, occupancy, and height are required. The remaining mappings are optional.</p>
+                  <label>Latitude<select id="customLatitude"></select></label>
+                  <label>Longitude<select id="customLongitude"></select></label>
+                  <label>Geometry<select id="customGeometry"></select></label>
+                  <label>Occupancy<select id="customOccupancy"></select></label>
+                  <label>Height<select id="customHeight"></select></label>
+                  <label>Year built (optional)<select id="customYearBuilt"></select></label>
+                  <label>Construction (optional)<select id="customConstruction"></select></label>
+                  <label>Roof type (optional)<select id="customRoofType"></select></label>
+                  <label>Basement (optional)<select id="customBasement"></select></label>
+                  <label>DuckDB lookup output
+                    <input id="customDbPath" type="text" placeholder="/path/to/buildings_lookup.duckdb">
+                  </label>
+                  <button id="runCustomParquet" type="button">Create database from Parquet</button>
+                </fieldset>
+              </form>
 
-          <div id="customParquetStatus" class="etl-status hidden"></div>
+              <div id="customParquetStatus" class="etl-status hidden"></div>
+            </div>
+          </section>
         </section>
       </section>
     </aside>

@@ -114,7 +114,7 @@ function switchMode(mode) {
   modeEyebrow.textContent = isLookup ? "Germany" : " ";
   modeTitle.textContent = isLookup ? "Building Lookup"
     : isExposure ? "Enrich Exposure"
-    : "Create OBM Database";
+    : "Create Lookup Database";
 
   if (isLookup) {
     window.setTimeout(() => map.resize(), 50);
@@ -755,6 +755,32 @@ const etlDuckdbFile = document.getElementById("etlDuckdbFile");
 const etlLookupDbFile = document.getElementById("etlLookupDbFile");
 const runEtlBtn = document.getElementById("runEtl");
 const etlStatusEl = document.getElementById("etlStatus");
+const etlWorkflowToggle = document.getElementById("etlWorkflowToggle");
+const etlWorkflowBody = document.getElementById("etlWorkflowBody");
+const customParquetToggle = document.getElementById("customParquetToggle");
+const customParquetBody = document.getElementById("customParquetBody");
+
+function setExpandedEtlWorkflow(workflow) {
+  const showCreate = workflow === "create";
+  const showCustom = workflow === "custom";
+
+  etlWorkflowToggle.setAttribute("aria-expanded", String(showCreate));
+  customParquetToggle.setAttribute("aria-expanded", String(showCustom));
+  etlWorkflowBody.classList.toggle("hidden", !showCreate);
+  customParquetBody.classList.toggle("hidden", !showCustom);
+}
+
+etlWorkflowToggle.addEventListener("click", () => {
+  const isExpanded = etlWorkflowToggle.getAttribute("aria-expanded") === "true";
+  setExpandedEtlWorkflow(isExpanded ? null : "create");
+});
+
+customParquetToggle.addEventListener("click", () => {
+  const isExpanded = customParquetToggle.getAttribute("aria-expanded") === "true";
+  setExpandedEtlWorkflow(isExpanded ? null : "custom");
+});
+
+setExpandedEtlWorkflow(null);
 
 boundaryFile.addEventListener("change", () => {
   if (boundaryFile.files.length) {

@@ -56,7 +56,7 @@ def _parquet_columns(parquet_path: Path) -> List[Dict[str, str]]:
         con.execute("SET enable_geoparquet_conversion = false;")
         rows = con.execute(
             "DESCRIBE SELECT * FROM read_parquet(?)",
-            [parquet_path.as_posix()],
+            [str(parquet_path)],
         ).fetchall()
     finally:
         con.close()
@@ -129,14 +129,14 @@ def prepare_custom_parquet_database(
     types = {column["name"]: column["type"] for column in columns}
     geometry_column = str(mappings["geometry"])
     geometry_sql = _geometry_sql(geometry_column, types[geometry_column])
-    parquet_sql = _sql_string(parquet_path.as_posix())
+    parquet_sql = _sql_string(str(parquet_path))
     latitude = _mapped_identifier(mappings, "latitude")
     longitude = _mapped_identifier(mappings, "longitude")
     occupancy = _mapped_identifier(mappings, "occupancy")
     height = _mapped_identifier(mappings, "height")
     source = _sql_string(f"custom_parquet:{parquet_path.stem}")
 
-    con = duckdb.connect(db_path.as_posix())
+    con = duckdb.connect(str(db_path))
     try:
         con.execute("LOAD spatial;")
         con.execute("SET enable_geoparquet_conversion = false;")
