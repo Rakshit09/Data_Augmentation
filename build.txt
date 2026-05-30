@@ -1,0 +1,17 @@
+pyinstaller .\run_app.py `
+>>   --name DataAugmentation `
+>>   --onedir `
+>>   --clean `
+>>   --noconfirm `
+>>   --console `
+>>   --icon favicon.ico `
+>>   --add-data "templates;templates" `
+>>   --add-data "static;static" `
+>>   --add-data "favicon.ico;." `
+>>   --hidden-import duckdb `
+>>   --hidden-import pandas `
+>>   --hidden-import pyarrow `
+>>   --hidden-import pyarrow.parquet `
+>>   --hidden-import waitress `
+>>   --hidden-import webview `
+>>   --hidden-import tkinter

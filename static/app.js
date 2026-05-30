@@ -126,7 +126,7 @@ async function loadDataSources() {
   refreshSources.disabled = true;
 
   try {
-    const response = await fetch("/api/data-source");
+    const response = await fetch("api/data-source");
     const payload = await response.json();
 
     if (!response.ok) {
@@ -197,7 +197,7 @@ async function browseLocalFile(kind) {
   setDataSourceMessage(`Opening ${label} file picker...`);
 
   try {
-    const response = await fetch(`/api/browse-file?kind=${encodeURIComponent(kind)}`);
+    const response = await fetch(`api/browse-file?kind=${encodeURIComponent(kind)}`);
     const payload = await response.json();
 
     if (!response.ok) {
@@ -225,7 +225,7 @@ async function applySelectedDataSource() {
   setDataSourceMessage("Applying selected files...");
 
   try {
-    const response = await fetch("/api/data-source", {
+    const response = await fetch("api/data-source", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -298,7 +298,7 @@ map.on("click", async (event) => {
   statusEl.textContent = "Searching";
 
   try {
-    const response = await fetch(`/api/building-at?lon=${lng}&lat=${lat}`);
+    const response = await fetch(`api/building-at?lon=${lng}&lat=${lat}`);
     const payload = await response.json();
 
     if (!response.ok) {
@@ -365,7 +365,7 @@ searchForm.addEventListener("submit", async (event) => {
   statusEl.textContent = "Searching";
 
   try {
-    const response = await fetch(`/api/search-address?q=${encodeURIComponent(query)}`);
+    const response = await fetch(`api/search-address?q=${encodeURIComponent(query)}`);
     const payload = await response.json();
 
     if (!response.ok) {
@@ -441,7 +441,7 @@ async function uploadSelectedCsv() {
   downloadLink.classList.add("hidden");
 
   try {
-    const response = await fetch("/api/exposure/preview", {
+    const response = await fetch("api/exposure/preview", {
       method: "POST",
       body: formData
     });
@@ -478,7 +478,7 @@ runEnrichment.addEventListener("click", async () => {
   statsPanel.classList.add("hidden");
 
   try {
-    const response = await fetch("/api/exposure/enrich", {
+    const response = await fetch("api/exposure/enrich", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -508,7 +508,7 @@ runEnrichment.addEventListener("click", async () => {
 
 async function pollEnrichmentProgress(jobId) {
   try {
-    const response = await fetch(`/api/exposure/progress/${jobId}`);
+    const response = await fetch(`api/exposure/progress/${jobId}`);
     const payload = await response.json();
 
     if (!response.ok) {
@@ -821,7 +821,7 @@ browseOutputDir.addEventListener("click", async () => {
   showEtlStatus("info", "Opening output folder picker...");
 
   try {
-    const response = await fetch("/api/browse-folder");
+    const response = await fetch("api/browse-folder");
     const payload = await response.json();
 
     if (!response.ok) {
@@ -859,7 +859,7 @@ runEtlBtn.addEventListener("click", async () => {
   formData.append("duckdb_file", etlDuckdbFile.value.trim() || `${dir}/work_obm.duckdb`);
   formData.append("lookup_db_file", etlLookupDbFile.value.trim() || `${dir}/building_lookup.duckdb`);
   try {
-    const response = await fetch("/api/etl/create-database", {
+    const response = await fetch("api/etl/create-database", {
       method: "POST",
       body: formData
     });
@@ -879,7 +879,7 @@ runEtlBtn.addEventListener("click", async () => {
 
 async function pollEtlProgress(jobId) {
   try {
-    const response = await fetch(`/api/etl/progress/${jobId}`);
+    const response = await fetch(`api/etl/progress/${jobId}`);
     const payload = await response.json();
 
     if (!response.ok) throw new Error(payload.error || "Could not read ETL progress");

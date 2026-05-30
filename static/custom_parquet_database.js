@@ -24,7 +24,7 @@
     showStatus("info", "Opening Parquet file picker...");
 
     try {
-      const response = await fetch("/api/browse-file?kind=parquet");
+      const response = await fetch("api/browse-file?kind=parquet");
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Could not open file picker");
       if (payload.cancelled) {
@@ -46,7 +46,7 @@
     showStatus("info", "Inspecting Parquet columns...");
 
     try {
-      const response = await fetch("/api/custom-parquet/inspect", {
+      const response = await fetch("api/custom-parquet/inspect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ parquet_path: parquetPath.value.trim() })
@@ -72,7 +72,7 @@
     showStatus("info", "Submitting Parquet lookup database job...");
 
     try {
-      const response = await fetch("/api/custom-parquet/create-database", {
+      const response = await fetch("api/custom-parquet/create-database", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -109,7 +109,7 @@
 
   async function pollProgress(jobId) {
     try {
-      const response = await fetch(`/api/custom-parquet/progress/${jobId}`);
+      const response = await fetch(`api/custom-parquet/progress/${jobId}`);
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Could not read database progress");
 

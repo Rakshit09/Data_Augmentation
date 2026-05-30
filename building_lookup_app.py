@@ -438,8 +438,12 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
     last_geocode_at = [0.0]
     jobs: Dict[str, Dict[str, Any]] = {}
     jobs_lock = Lock()
-    Path(app.config["UPLOAD_DIR"]).mkdir(parents=True, exist_ok=True)
-    Path(app.config["RESULT_DIR"]).mkdir(parents=True, exist_ok=True)
+    for _startup_dir in (app.config["UPLOAD_DIR"], app.config["RESULT_DIR"]):
+        _dir = Path(_startup_dir)
+        _dir.mkdir(parents=True, exist_ok=True)
+        for _f in _dir.iterdir():
+            if _f.is_file():
+                _f.unlink(missing_ok=True)
     register_custom_parquet_routes(app)
 
     def set_job(job_id: str, **updates: Any) -> None:
@@ -450,15 +454,24 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
     def index():
         return render_template("index.html")
 
+    
     @app.route("/api/health")
     def health():
-        db = Path(app.config["DB_PATH"])
-        parquet = Path(app.config["PARQUET_PATH"])
+        db_path = app.config.get("DB_PATH") or ""
+        parquet_path = app.config.get("PARQUET_PATH") or ""
+
+        db_exists = bool(db_path) and Path(db_path).is_file()
+        parquet_exists = bool(parquet_path) and Path(parquet_path).is_file()
+
         return jsonify({
-            "ok": db.exists(),
-            "db_path": str(db),
-            "parquet_path": str(parquet),
+            "ok": db_exists,
+            "db_path": db_path,
+            "parquet_path": parquet_path,
+            "db_exists": db_exists,
+            "parquet_exists": parquet_exists,
         })
+
+
 
     @app.route("/api/data-source", methods=["GET", "POST"])
     def data_source():
@@ -563,12 +576,15 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
         if not (-180 <= lon <= 180 and -90 <= lat <= 90):
             return jsonify({"error": "Coordinates are out of range."}), 400
 
-        db_path = app.config["DB_PATH"]
-        if not Path(db_path).exists():
+
+        db_path = app.config.get("DB_PATH") or ""
+
+        if not db_path or not Path(db_path).is_file():
             return jsonify({
-                "error": "Lookup database has not been prepared.",
-                "hint": "Run: python building_lookup_app.py prepare-index"
+                "error": "Lookup database has not been selected or prepared.",
+                "hint": "Create/select a lookup database from the app first."
             }), 503
+
 
         con = open_db(db_path, read_only=True)
         try:
@@ -588,9 +604,13 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
 
     @app.route("/api/building-fields")
     def building_fields():
-        db_path = app.config["DB_PATH"]
-        if not Path(db_path).exists():
-            return jsonify({"error": "Lookup database has not been prepared."}), 503
+        db_path = app.config.get("DB_PATH") or ""
+
+        if not db_path or not Path(db_path).is_file():
+            return jsonify({
+                "fields": [],
+                "error": "Lookup database has not been selected or prepared."
+            }), 200
 
         con = open_db(db_path, read_only=True)
         try:
@@ -599,6 +619,7 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
             con.close()
 
         return jsonify({"fields": fields})
+
 
     @app.route("/api/search-address")
     def search_address():
@@ -686,8 +707,16 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
         if mode not in {"centroid", "inside", "inside_nearest"}:
             return jsonify({"error": "Unknown matching mode."}), 400
 
-        db_path = app.config["DB_PATH"]
+        
+        db_path = app.config.get("DB_PATH") or ""
+
+        if not db_path or not Path(db_path).is_file():
+            return jsonify({
+                "error": "Lookup database has not been selected or prepared. Create/select a lookup database first."
+            }), 400
+
         con = open_db(db_path, read_only=True)
+
         try:
             available_fields = lookup_display_columns(con)
         finally:

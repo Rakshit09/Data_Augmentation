@@ -25,7 +25,7 @@
     controls.innerHTML = "<p>Loading database fields...</p>";
 
     try {
-      const response = await fetch("/api/building-fields");
+      const response = await fetch("api/building-fields");
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Could not load database fields");
 

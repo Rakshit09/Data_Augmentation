@@ -1,0 +1,12 @@
+{
+    "https://rconnect.dev.ajgco.com/": {
+        "server_url": "https://rconnect.dev.ajgco.com/",
+        "filename": "C:\\Users\\rajoshi\\Data Augmentation",
+        "app_url": "https://rconnect.dev.ajgco.com/content/e076280e-0c32-4780-b779-375ab12d48d4/",
+        "app_id": "446",
+        "app_guid": "e076280e-0c32-4780-b779-375ab12d48d4",
+        "title": "EMEA Data Augmentation",
+        "app_mode": "python-api",
+        "app_store_version": 1
+    }
+}
