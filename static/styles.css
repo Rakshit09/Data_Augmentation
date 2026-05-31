@@ -12,6 +12,12 @@
   --shadow-lg: 0 8px 30px rgba(0, 31, 63, 0.12);
   --transition-fast: 100ms ease-out;
   --brand-dark2: #00263E;
+  --button-primary: var(--brand-dark2);
+  --button-primary-hover: var(--brand-dark);
+  --button-secondary: #fff;
+  --button-secondary-hover: #edf7ff;
+  --button-text: var(--brand-dark2);
+  --button-disabled: #94a3b8;
 }
 
 * {
@@ -108,7 +114,7 @@ input[type=number] {
   border: 2px solid transparent;
   border-radius: 8px;
   background: transparent;
-  color: var(--ink);
+  color: var(--button-text);
   font: inherit;
   font-size: 14px;
   font-weight: 700;
@@ -118,14 +124,14 @@ input[type=number] {
 
 .tab:hover {
   border-color: var(--brand);
-  background: rgba(0, 120, 212, 0.05);
-  color: var(--brand-dark2);
+  background: var(--button-secondary-hover);
+  color: var(--button-text);
 }
 
 .tab.active {
   border-color: var(--brand);
   background: var(--brand);
-  color: var(--brand-dark2);
+  color: var(--button-text);
   box-shadow: var(--shadow-md);
 }
 
@@ -224,10 +230,10 @@ h2 {
 .file-picker button {
   height: auto;
   padding: 8px 10px;
-  border: 1px solid rgba(0, 120, 212, 0.18);
+  border: 1px solid var(--brand);
   border-radius: 8px;
-  background: #fff;
-  color: var(--ink);
+  background: var(--button-secondary);
+  color: var(--button-text);
   box-shadow: none;
   text-align: left;
   font-size: 12px;
@@ -236,9 +242,9 @@ h2 {
 }
 
 .file-picker button:hover {
-  border-color: var(--brand);
-  background: #edf7ff;
-  color: var(--brand-dark);
+  border-color: var(--button-primary-hover);
+  background: var(--button-secondary-hover);
+  color: var(--button-text);
   transform: none;
   box-shadow: none;
 }
@@ -308,9 +314,9 @@ h2 {
 .upload-form button,
 .mapping button,
 .download {
-  border: 2px solid var(--brand);
+  border: 2px solid var(--button-primary);
   border-radius: 12px;
-  background: var(--brand);
+  background: var(--button-primary);
   color: #fff;
   font: inherit;
   font-weight: 700;
@@ -340,28 +346,69 @@ h2 {
 .upload-form button:hover,
 .mapping button:hover,
 .download:hover {
-  border-color: var(--brand-dark);
-  background: var(--brand-dark);
+  border-color: var(--button-primary-hover);
+  background: var(--button-primary-hover);
+  color: #fff;
   transform: translateY(-1px);
   box-shadow: var(--shadow-lg);
 }
 
 .mapping button:disabled,
 .data-source button:disabled {
-  border-color: #94a3b8;
-  background: #94a3b8;
+  border-color: var(--button-disabled);
+  background: var(--button-disabled);
   cursor: not-allowed;
   transform: none;
   box-shadow: none;
 }
 
+.data-source-header button,
+.data-source .path-picker-row button,
+.etl-fieldset .path-picker-row button,
+.etl-tab-button {
+  border-color: var(--brand);
+  background: var(--button-secondary);
+  color: var(--button-text);
+  box-shadow: none;
+}
+
+.data-source-header button:hover,
+.data-source .path-picker-row button:hover,
+.etl-fieldset .path-picker-row button:hover,
+.etl-tab-button:hover {
+  border-color: var(--button-primary-hover);
+  background: var(--button-secondary-hover);
+  color: var(--button-text);
+  transform: none;
+  box-shadow: none;
+}
+
+.etl-fieldset .path-picker-row button {
+  min-width: 0;
+  padding: 0 14px;
+  border-style: solid;
+  border-width: 2px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+button:focus-visible,
+.download:focus-visible {
+  outline: 3px solid var(--brand);
+  outline-offset: 2px;
+}
+
 .data-source .file-picker button {
   height: auto;
   padding: 8px 10px;
-  border: 1px solid rgba(0, 120, 212, 0.18);
+  border: 1px solid var(--brand);
   border-radius: 8px;
-  background: #fff;
-  color: var(--ink);
+  background: var(--button-secondary);
+  color: var(--button-text);
   box-shadow: none;
   text-align: left;
   font-size: 12px;
@@ -369,9 +416,9 @@ h2 {
 }
 
 .data-source .file-picker button:hover {
-  border-color: var(--brand);
-  background: #edf7ff;
-  color: var(--brand-dark);
+  border-color: var(--button-primary-hover);
+  background: var(--button-secondary-hover);
+  color: var(--button-text);
   transform: none;
   box-shadow: none;
 }
@@ -444,17 +491,18 @@ h2 {
 .search-results button {
   border: 2px solid var(--line);
   border-radius: 12px;
-  background: #fff;
-  color: var(--ink);
+  background: var(--button-secondary);
+  color: var(--button-text);
   font-size: 13px;
   font-weight: 700;
+  cursor: pointer;
   box-shadow: none;
 }
 
 .search-results button:hover {
-  border-color: var(--brand);
-  background: rgba(0, 120, 212, 0.05);
-  color: var(--brand);
+  border-color: var(--button-primary-hover);
+  background: var(--button-secondary-hover);
+  color: var(--button-text);
 }
 
 .mapping > label {
@@ -525,25 +573,73 @@ h2 {
   font-size: 13px;
 }
 
-dl {
-  display: grid;
-  grid-template-columns: 130px minmax(0, 1fr);
-  gap: 10px 14px;
-  margin: 18px 0 0;
+.building-info-table {
+  margin-top: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(0, 31, 63, 0.1);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: var(--shadow-sm);
 }
 
-dt {
+.building-info-table table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.building-info-table th,
+.building-info-table td {
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.building-info-table thead th {
+  background: var(--brand);
+  color: var(--brand-dark2);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.55px;
+  text-transform: uppercase;
+}
+
+.building-info-table th:first-child {
+  width: 35%;
+}
+
+.building-info-table tbody th {
+  background: var(--soft);
   color: var(--muted);
-  font-size: 13px;
+  font-weight: 700;
 }
 
-dd {
-  min-width: 0;
-  margin: 0;
+.building-info-table tbody td {
   color: var(--ink);
-  font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
+  overflow-wrap: break-word;
+}
+
+.building-info-table tbody tr:nth-child(even) td {
+  background: rgba(248, 250, 252, 0.58);
+}
+
+.building-info-table tbody tr:hover th,
+.building-info-table tbody tr:hover td {
+  background: rgba(164, 200, 225, 0.16);
+}
+
+.building-info-table tbody tr:last-child th,
+.building-info-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.building-info-table .building-info-source td {
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .preview-panel {
@@ -763,7 +859,7 @@ dd {
 }
 
 .etl-splash-sub {
-  max-width: 520px;
+  max-width: 660px;
   color: var(--muted);
   font-size: 15px;
   line-height: 1.55;
@@ -771,7 +867,12 @@ dd {
 
 .etl-tools {
   display: grid;
-  gap: 14px;
+  gap: 20px;
+}
+
+#etlTools {
+  border-top: 1px solid var(--line);
+  padding-top: 22px;
 }
 
 .etl-workflow {
@@ -779,7 +880,7 @@ dd {
   gap: 14px;
   padding: 18px;
   border: 1px solid rgba(0, 31, 63, 0.1);
-  border-radius: 20px;
+  border-radius: 12px;
   background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
   box-shadow: 0 12px 24px rgba(15, 23, 42, 0.06);
 }
@@ -817,8 +918,8 @@ dd {
   height: 32px;
   margin-top: 12px;
   border-radius: 999px;
-  background: rgba(0, 120, 212, 0.1);
-  color: var(--brand);
+  background: var(--button-secondary-hover);
+  color: var(--button-text);
   font-size: 20px;
   font-weight: 700;
   transition: transform var(--transition-fast), background var(--transition-fast);
@@ -826,12 +927,17 @@ dd {
 
 .etl-workflow-toggle[aria-expanded="true"]::after {
   content: "-";
-  background: rgba(0, 120, 212, 0.16);
+  background: var(--brand);
+}
+
+.etl-workflow-toggle:hover::after,
+.etl-workflow-toggle:focus-visible::after {
+  background: var(--brand);
 }
 
 .etl-workflow-toggle:hover .etl-workflow-title,
 .etl-workflow-toggle:focus-visible .etl-workflow-title {
-  color: var(--brand);
+  color: var(--button-primary-hover);
 }
 
 .etl-workflow-toggle:focus-visible {
@@ -922,10 +1028,10 @@ dd {
   height: 40px;
   min-width: 0;
   padding: 0 14px;
-  border: 2px solid transparent;
-  border-radius: 12px;
-  background: var(--soft);
-  color: var(--ink);
+  border: 2px solid var(--brand);
+  border-radius: 1px;
+  background: var(--button-secondary);
+  color: var(--button-text);
   font: inherit;
   font-size: 13px;
   font-weight: 700;
@@ -934,14 +1040,22 @@ dd {
 }
 
 .etl-tab-button:hover {
-  border-color: var(--brand);
-  background: rgba(0, 120, 212, 0.05);
-  color: var(--brand);
+  border-color: var(--button-primary-hover);
+  background: var(--button-secondary-hover);
+  color: var(--button-text);
 }
 
+.data-source-header button:disabled,
+.data-source .path-picker-row button:disabled,
+.etl-fieldset .path-picker-row button:disabled,
 .etl-tab-button:disabled {
+  border-color: var(--line);
+  background: var(--soft);
+  color: var(--muted);
   cursor: not-allowed;
-  opacity: 0.65;
+  opacity: 0.75;
+  transform: none;
+  box-shadow: none;
 }
 
 .file-chosen {
@@ -955,9 +1069,9 @@ dd {
 #runCustomParquet {
   height: 44px;
   padding: 0 16px;
-  border: 2px solid var(--brand);
+  border: 2px solid var(--button-primary);
   border-radius: 12px;
-  background: var(--brand);
+  background: var(--button-primary);
   color: #fff;
   font: inherit;
   font-weight: 700;
@@ -968,16 +1082,16 @@ dd {
 
 #runEtl:hover,
 #runCustomParquet:hover {
-  border-color: var(--brand-dark);
-  background: var(--brand-dark);
+  border-color: var(--button-primary-hover);
+  background: var(--button-primary-hover);
   transform: translateY(-1px);
   box-shadow: var(--shadow-lg);
 }
 
 #runEtl:disabled,
 #runCustomParquet:disabled {
-  border-color: #94a3b8;
-  background: #94a3b8;
+  border-color: var(--button-disabled);
+  background: var(--button-disabled);
   cursor: not-allowed;
   transform: none;
   box-shadow: none;

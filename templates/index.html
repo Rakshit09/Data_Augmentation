@@ -34,9 +34,9 @@
 
     <section id="etlMain" class="main-view hidden">
       <div class="etl-splash">
-        <p class="eyebrow">OpenBuildingMap ETL</p>
-        <h2>Create a new building database for any country</h2>
-        <p class="etl-splash-sub">Configure the parameters in the panel on the right, then press <strong>Create database</strong>. The ETL downloads buildings from the OpenBuildingMap S3 bucket, clips them to your boundary, and writes a DuckDB lookup database.</p>
+        <p class="eyebrow">Database Setup</p>
+        <h2>Prepare a building lookup database for your project</h2>
+        <p class="etl-splash-sub">This database powers building searches and exposure enrichment. Start with OpenBuildingMap when you need a new extract for a country or selected boundary. If you already have building data in a Parquet file, use that as your starting point instead. Open the relevant workflow on the right to configure your source and create the local lookup database.</p>
       </div>
     </section>
 
@@ -110,7 +110,17 @@
             <span id="distance"></span>
           </div>
           <h2 id="buildingId"></h2>
-          <dl id="attributes"></dl>
+          <div class="building-info-table">
+            <table aria-label="Selected building information">
+              <thead>
+                <tr>
+                  <th scope="col">Field</th>
+                  <th scope="col">Value</th>
+                </tr>
+              </thead>
+              <tbody id="attributes"></tbody>
+            </table>
+          </div>
         </section>
       </section>
 

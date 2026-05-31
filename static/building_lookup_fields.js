@@ -53,6 +53,15 @@
     window.dispatchEvent(new CustomEvent("building-info-fields-change"));
   }
 
+  function formatLabel(field) {
+    return field
+      .replaceAll("_", " ")
+      .replace(/\b\w/g, (character) => character.toUpperCase())
+      .replace(/\bM2\b/g, "m2")
+      .replace(/\bObm\b/g, "OBM")
+      .replace(/\bId\b/g, "ID");
+  }
+
   window.buildingInfoFields = {
     load,
     render(building) {
@@ -64,7 +73,12 @@
           return [field, value];
         })
         .filter(([, value]) => value !== null && value !== undefined && value !== "")
-        .map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`)
+        .map(([field, value]) => `
+          <tr${field.toLowerCase() === "source" ? ' class="building-info-source"' : ""}>
+            <th scope="row">${escapeHtml(formatLabel(field))}</th>
+            <td>${escapeHtml(value)}</td>
+          </tr>
+        `)
         .join("");
     }
   };
