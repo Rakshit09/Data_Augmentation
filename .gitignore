@@ -26,7 +26,8 @@ __pycache__/
 *.pyd
 .venv/
 .env
-
+*.zip
+*.spec
 
 # VS Code
 .vscode/

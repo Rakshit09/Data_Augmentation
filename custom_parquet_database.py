@@ -1,3 +1,4 @@
+import re
 import uuid
 from pathlib import Path
 from threading import Lock, Thread
@@ -7,8 +8,50 @@ import duckdb
 from flask import Flask, jsonify, request
 
 
-REQUIRED_MAPPINGS = ("latitude", "longitude", "geometry", "occupancy", "height")
-OPTIONAL_MAPPINGS = ("year_built", "construction", "roof_type", "basement")
+REQUIRED_MAPPINGS = ("latitude", "longitude", "geometry", "occupancy")
+OPTIONAL_MAPPINGS = ("height", "year_built", "construction", "roof_type", "basement")
+EXTRA_FIELD_LIMIT = 10
+EXTRA_FIELD_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+CUSTOM_BUILDING_RESERVED_COLUMNS = {
+    "building_id",
+    "source",
+    "relation_id",
+    "quadkey",
+    "quadkey_prefix_6",
+    "quadkey_prefix_14",
+    "last_update",
+    "centroid_lon",
+    "centroid_lat",
+    "bbox_xmin",
+    "bbox_ymin",
+    "bbox_xmax",
+    "bbox_ymax",
+    "footprint_area_m2",
+    "height_raw",
+    "occupancy_raw",
+    "floorspace_obm_m2",
+    "height_source_type",
+    "height_m",
+    "stories_exact",
+    "stories_min",
+    "stories_max",
+    "height_quality",
+    "occupancy_code",
+    "occupancy_group",
+    "occupancy_quality",
+    "floorspace_est_m2",
+    "attribute_completeness_score",
+    "year_built",
+    "construction",
+    "roof_type",
+    "basement",
+    "geom",
+    "geom_3035",
+    "bbox_3035_xmin",
+    "bbox_3035_ymin",
+    "bbox_3035_xmax",
+    "bbox_3035_ymax",
+}
 MAPPING_GUESSES = {
     "latitude": ("lat", "latitude", "centroid_lat", "y"),
     "longitude": ("lon", "lng", "longitude", "centroid_lon", "x"),
@@ -19,6 +62,16 @@ MAPPING_GUESSES = {
     "construction": ("con", "construction", "construction_type"),
     "roof_type": ("roof_type", "rooftype", "roof"),
     "basement": ("basement", "has_basement"),
+}
+DISPLAY_FIELD_LABELS = {
+    "latitude": ("centroid_lat", "Latitude"),
+    "longitude": ("centroid_lon", "Longitude"),
+    "occupancy": ("occupancy_raw", "Occupancy"),
+    "height": ("height_raw", "Height"),
+    "year_built": ("year_built", "Year built"),
+    "construction": ("construction", "Construction"),
+    "roof_type": ("roof_type", "Roof type"),
+    "basement": ("basement", "Basement"),
 }
 
 
@@ -136,11 +189,50 @@ def _quadkey_prefix_sql(lon_sql: str, lat_sql: str, zoom: int = 6) -> str:
     return f"CONCAT({', '.join(digits)})"
 
 
+def _extra_field_raw_select_sql(extra_fields: List[tuple[str, str]]) -> str:
+    if not extra_fields:
+        return ""
+    return ",\n                    " + ",\n                    ".join(
+        f"TRY_CAST(src.{_sql_identifier(source_column)} AS VARCHAR) AS {_sql_identifier(field_name)}"
+        for field_name, source_column in extra_fields
+    )
+
+
+def _extra_field_final_select_sql(extra_fields: List[tuple[str, str]]) -> str:
+    if not extra_fields:
+        return ""
+    return ",\n                " + ",\n                ".join(
+        _sql_identifier(field_name)
+        for field_name, _ in extra_fields
+    )
+
+
+def _preferred_display_fields(
+    mappings: Dict[str, Optional[str]],
+    extra_fields: List[tuple[str, str]],
+) -> List[tuple[str, str, int]]:
+    display_fields: List[tuple[str, str, int]] = []
+    order = 1
+
+    for key in ("latitude", "longitude", "occupancy", "height", "year_built", "construction", "roof_type", "basement"):
+        if mappings.get(key):
+            field_name, label = DISPLAY_FIELD_LABELS[key]
+            display_fields.append((field_name, label, order))
+            order += 1
+
+    for field_name, _ in extra_fields:
+        display_fields.append((field_name, field_name, order))
+        order += 1
+
+    return display_fields
+
+
 def prepare_custom_parquet_database(
     parquet_path: Path,
     db_path: Path,
     mappings: Dict[str, Optional[str]],
     columns: List[Dict[str, str]],
+    extra_fields: Optional[List[tuple[str, str]]] = None,
     threads: int = 8,
 ) -> int:
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -154,10 +246,16 @@ def prepare_custom_parquet_database(
     latitude = _mapped_identifier(mappings, "latitude")
     longitude = _mapped_identifier(mappings, "longitude")
     occupancy = _mapped_identifier(mappings, "occupancy")
-    height = _mapped_identifier(mappings, "height")
+    height_column = mappings.get("height")
+    height_m_sql = f"TRY_CAST({_sql_identifier(str(height_column))} AS DOUBLE)" if height_column else "NULL::DOUBLE"
+    height_raw_sql = f"CAST({_sql_identifier(str(height_column))} AS VARCHAR)" if height_column else "NULL::VARCHAR"
     source = _sql_string(f"custom_parquet:{parquet_path.stem}")
     quadkey_prefix_6 = _quadkey_prefix_sql("centroid_lon", "centroid_lat", zoom=6)
     quadkey_prefix_14 = _quadkey_prefix_sql("centroid_lon", "centroid_lat", zoom=14)
+    normalized_extra_fields = extra_fields or []
+    extra_field_raw_sql = _extra_field_raw_select_sql(normalized_extra_fields)
+    extra_field_final_sql = _extra_field_final_select_sql(normalized_extra_fields)
+    preferred_display_fields = _preferred_display_fields(mappings, normalized_extra_fields)
 
     con = duckdb.connect(str(db_path))
     try:
@@ -172,14 +270,14 @@ def prepare_custom_parquet_database(
                     TRY_CAST({longitude} AS DOUBLE) AS centroid_lon,
                     TRY_CAST({latitude} AS DOUBLE) AS centroid_lat,
                     CAST({occupancy} AS VARCHAR) AS occupancy_raw,
-                    TRY_CAST({height} AS DOUBLE) AS height_m,
-                    CAST({height} AS VARCHAR) AS height_raw,
+                    {height_m_sql} AS height_m,
+                    {height_raw_sql} AS height_raw,
                     {_optional_select(mappings, "year_built")} AS year_built,
                     {_optional_select(mappings, "construction")} AS construction,
                     {_optional_select(mappings, "roof_type")} AS roof_type,
                     {_optional_select(mappings, "basement")} AS basement,
-                    {geometry_sql} AS geom
-                FROM read_parquet({parquet_sql})
+                    {geometry_sql} AS geom{extra_field_raw_sql}
+                FROM read_parquet({parquet_sql}) AS src
             ),
             projected_buildings AS (
                 SELECT
@@ -209,7 +307,7 @@ def prepare_custom_parquet_database(
                 height_raw,
                 occupancy_raw,
                 NULL::DOUBLE AS floorspace_obm_m2,
-                'provided'::VARCHAR AS height_source_type,
+                CASE WHEN height_m IS NULL THEN NULL ELSE 'provided' END AS height_source_type,
                 height_m,
                 NULL::INTEGER AS stories_exact,
                 NULL::INTEGER AS stories_min,
@@ -226,7 +324,7 @@ def prepare_custom_parquet_database(
                 year_built,
                 construction,
                 roof_type,
-                basement,
+                basement{extra_field_final_sql},
                 geom,
                 geom_3035,
                 ST_XMin(geom_3035) AS bbox_3035_xmin,
@@ -239,6 +337,18 @@ def prepare_custom_parquet_database(
         con.execute("CREATE INDEX buildings_geom_rtree ON buildings USING RTREE (geom);")
         con.execute("CREATE INDEX buildings_geom_3035_rtree ON buildings USING RTREE (geom_3035);")
         con.execute("CREATE INDEX buildings_quadkey_prefix_14_idx ON buildings(quadkey_prefix_14);")
+        con.execute("""
+            CREATE TABLE building_display_fields (
+                field_name VARCHAR PRIMARY KEY,
+                display_label VARCHAR NOT NULL,
+                display_order INTEGER NOT NULL
+            );
+        """)
+        if preferred_display_fields:
+            con.executemany(
+                "INSERT INTO building_display_fields(field_name, display_label, display_order) VALUES (?, ?, ?)",
+                preferred_display_fields,
+            )
         return int(con.execute("SELECT COUNT(*) FROM buildings;").fetchone()[0])
     finally:
         con.close()
@@ -278,6 +388,7 @@ def register_custom_parquet_routes(app: Flask) -> None:
     def custom_parquet_create_database():
         payload = request.get_json(silent=True) or {}
         mappings = payload.get("mappings") or {}
+        extra_fields = payload.get("extra_fields") or []
 
         try:
             parquet_path = _resolve_local_path(
@@ -304,6 +415,37 @@ def register_custom_parquet_routes(app: Flask) -> None:
                 if value is not None and value not in column_names:
                     raise ValueError(f"Mapped column does not exist in the Parquet file: {value}")
                 normalized_mappings[key] = value
+
+            if not isinstance(extra_fields, list):
+                raise ValueError("Additional mapped fields must be a list.")
+            if len(extra_fields) > EXTRA_FIELD_LIMIT:
+                raise ValueError(f"You can add up to {EXTRA_FIELD_LIMIT} additional mapped fields.")
+
+            existing_output_names = {column.casefold() for column in CUSTOM_BUILDING_RESERVED_COLUMNS}
+
+            normalized_extra_fields: List[tuple[str, str]] = []
+            extra_field_names: set[str] = set()
+            for index, field in enumerate(extra_fields, start=1):
+                if not isinstance(field, dict):
+                    raise ValueError("Each additional mapped field must include a name and source column.")
+
+                field_name = str(field.get("name", "")).strip()
+                source_column = str(field.get("column", "")).strip()
+                if not field_name and not source_column:
+                    continue
+                if not field_name or not source_column:
+                    raise ValueError(f"Additional field #{index} needs both a name and a source column.")
+                if not EXTRA_FIELD_NAME_PATTERN.fullmatch(field_name):
+                    raise ValueError(
+                        f"Additional field '{field_name}' must start with a letter or underscore and use only letters, numbers, and underscores."
+                    )
+                if source_column not in column_names:
+                    raise ValueError(f"Additional field source column does not exist in the Parquet file: {source_column}")
+                if field_name.casefold() in existing_output_names or field_name.casefold() in extra_field_names:
+                    raise ValueError(f"Additional field name is already in use: {field_name}")
+
+                extra_field_names.add(field_name.casefold())
+                normalized_extra_fields.append((field_name, source_column))
         except (ValueError, duckdb.Error) as exc:
             return jsonify({"error": str(exc)}), 400
 
@@ -326,6 +468,7 @@ def register_custom_parquet_routes(app: Flask) -> None:
                     temp_db_path,
                     normalized_mappings,
                     columns,
+                    normalized_extra_fields,
                 )
                 temp_db_path.replace(db_path)
                 app.config["PARQUET_PATH"] = _display_path(parquet_path)

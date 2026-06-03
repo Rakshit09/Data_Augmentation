@@ -3,9 +3,12 @@
   const browseButton = document.getElementById("browseCustomParquet");
   const inspectButton = document.getElementById("inspectCustomParquet");
   const mappingsPanel = document.getElementById("customParquetMappings");
+  const addFieldButton = document.getElementById("addCustomField");
+  const extraFieldsContainer = document.getElementById("customExtraFields");
   const dbPath = document.getElementById("customDbPath");
   const runButton = document.getElementById("runCustomParquet");
   const customStatus = document.getElementById("customParquetStatus");
+  const maxExtraFields = 10;
   const selectors = {
     latitude: document.getElementById("customLatitude"),
     longitude: document.getElementById("customLongitude"),
@@ -17,7 +20,13 @@
     roof_type: document.getElementById("customRoofType"),
     basement: document.getElementById("customBasement")
   };
-  const optionalMappings = new Set(["year_built", "construction", "roof_type", "basement"]);
+  const optionalMappings = new Set(["height", "year_built", "construction", "roof_type", "basement"]);
+  let inspectedColumns = [];
+
+  addFieldButton.addEventListener("click", () => {
+    if (extraFieldCount() >= maxExtraFields) return;
+    addExtraFieldRow();
+  });
 
   browseButton.addEventListener("click", async () => {
     browseButton.disabled = true;
@@ -56,10 +65,14 @@
 
       parquetPath.value = payload.parquet_path || parquetPath.value;
       dbPath.value = payload.default_db_path || "";
-      populateMappings(payload.columns || [], payload.suggested_mappings || {});
+      inspectedColumns = payload.columns || [];
+      populateMappings(inspectedColumns, payload.suggested_mappings || {});
+      renderExtraFieldRows();
       mappingsPanel.classList.remove("hidden");
-      showStatus("success", `Found ${formatInteger((payload.columns || []).length)} columns. Review the mappings, then create the database.`);
+      showStatus("success", `Found ${formatInteger(inspectedColumns.length)} columns. Review the mappings, then create the database.`);
     } catch (error) {
+      inspectedColumns = [];
+      renderExtraFieldRows();
       showStatus("error", error.message);
     } finally {
       inspectButton.disabled = false;
@@ -80,7 +93,8 @@
           db_path: dbPath.value.trim(),
           mappings: Object.fromEntries(
             Object.entries(selectors).map(([key, select]) => [key, select.value])
-          )
+          ),
+          extra_fields: collectExtraFields()
         })
       });
       const payload = await response.json();
@@ -105,6 +119,64 @@
       select.innerHTML = emptyOption + columnOptions;
       if (suggestedMappings[key]) select.value = suggestedMappings[key];
     });
+
+    extraFieldsContainer.querySelectorAll("select").forEach((select) => {
+      const currentValue = select.value;
+      select.innerHTML = '<option value="">Select column</option>' + columnOptions;
+      if (currentValue) select.value = currentValue;
+    });
+    updateAddFieldButton();
+  }
+
+  function addExtraFieldRow(field = {}) {
+    const row = document.createElement("div");
+    row.className = "custom-field-row";
+    row.innerHTML = `
+      <label>Field name
+        <input type="text" data-role="name" placeholder="custom_field" value="${escapeHtml(field.name || "")}">
+      </label>
+      <label>Source column
+        <select data-role="column"></select>
+      </label>
+      <button class="etl-tab-button" type="button" data-role="remove">Remove</button>
+    `;
+
+    const select = row.querySelector('select[data-role="column"]');
+    select.innerHTML = '<option value="">Select column</option>' + inspectedColumns
+      .map((column) => `<option value="${escapeHtml(column.name)}">${escapeHtml(column.name)} (${escapeHtml(column.type)})</option>`)
+      .join("");
+    if (field.column) select.value = field.column;
+
+    row.querySelector('[data-role="remove"]').addEventListener("click", () => {
+      row.remove();
+      updateAddFieldButton();
+    });
+
+    extraFieldsContainer.append(row);
+    updateAddFieldButton();
+  }
+
+  function renderExtraFieldRows(fields = []) {
+    extraFieldsContainer.innerHTML = "";
+    fields.forEach((field) => addExtraFieldRow(field));
+    updateAddFieldButton();
+  }
+
+  function collectExtraFields() {
+    return Array.from(extraFieldsContainer.querySelectorAll(".custom-field-row"))
+      .map((row) => ({
+        name: row.querySelector('[data-role="name"]').value.trim(),
+        column: row.querySelector('[data-role="column"]').value.trim()
+      }))
+      .filter((field) => field.name || field.column);
+  }
+
+  function extraFieldCount() {
+    return extraFieldsContainer.querySelectorAll(".custom-field-row").length;
+  }
+
+  function updateAddFieldButton() {
+    addFieldButton.disabled = !inspectedColumns.length || extraFieldCount() >= maxExtraFields;
   }
 
   async function pollProgress(jobId) {
@@ -148,4 +220,6 @@
     if (type === "success") customStatus.classList.add("etl-status--success");
     customStatus.innerHTML = html;
   }
+
+  updateAddFieldButton();
 })();

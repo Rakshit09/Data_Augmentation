@@ -184,6 +184,16 @@ def duckdb_csv_encoding(csv_path: Path) -> str:
     return encoding
 
 
+def duckdb_csv_encoding_candidates(csv_path: Path) -> List[str]:
+    detected = duckdb_csv_encoding(csv_path)
+    candidates = [detected, "utf-8", "latin-1"]
+    ordered_candidates: List[str] = []
+    for candidate in candidates:
+        if candidate not in ordered_candidates:
+            ordered_candidates.append(candidate)
+    return ordered_candidates
+
+
 def open_db(db_path: str, read_only: bool = False) -> duckdb.DuckDBPyConnection:
     con = duckdb.connect(str(Path(db_path)), read_only=read_only)
     con.execute("LOAD spatial;")
@@ -615,10 +625,11 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
         con = open_db(db_path, read_only=True)
         try:
             fields = lookup_display_columns(con)
+            preferred_fields = preferred_display_fields(con)
         finally:
             con.close()
 
-        return jsonify({"fields": fields})
+        return jsonify({"fields": fields, "preferred_fields": preferred_fields})
 
 
     @app.route("/api/search-address")
@@ -928,7 +939,7 @@ def find_upload(upload_dir: Path, upload_id: str) -> Optional[Path]:
 
 def preview_csv(csv_path: Path) -> tuple[List[str], List[Dict[str, Any]]]:
     encoding = detect_csv_encoding(csv_path)
-    frame = pd.read_csv(csv_path, nrows=10, encoding=encoding)
+    frame = pd.read_csv(csv_path, nrows=10, encoding=encoding, encoding_errors="replace")
     columns = list(frame.columns)
     rows = [
         {column: json_safe(value) for column, value in row.items()}
@@ -938,18 +949,43 @@ def preview_csv(csv_path: Path) -> tuple[List[str], List[Dict[str, Any]]]:
     return columns, rows
 
 
-def csv_columns(con: duckdb.DuckDBPyConnection, csv_path: Path) -> List[str]:
+def resolve_csv_scan_options(con: duckdb.DuckDBPyConnection, csv_path: Path) -> str:
     csv_sql = sql_string(str(csv_path.resolve()))
-    scan_options_sql = csv_scan_options(csv_path)
+    errors: List[str] = []
+
+    for encoding in duckdb_csv_encoding_candidates(csv_path):
+        scan_options_sql = csv_scan_options(encoding)
+        try:
+            con.execute(f"""
+                SELECT *
+                FROM read_csv_auto({csv_sql}, {scan_options_sql})
+                LIMIT 1;
+            """)
+            return scan_options_sql
+        except duckdb.Error as exc:
+            errors.append(f"{encoding}: {exc}")
+
+    raise ValueError(
+        "Could not read the CSV with the supported encodings. " + " | ".join(errors)
+    )
+
+
+def csv_columns(
+    con: duckdb.DuckDBPyConnection,
+    csv_path: Path,
+    scan_options_sql: Optional[str] = None,
+) -> List[str]:
+    csv_sql = sql_string(str(csv_path.resolve()))
+    resolved_scan_options_sql = scan_options_sql or resolve_csv_scan_options(con, csv_path)
     rows = con.execute(f"""
         DESCRIBE SELECT *
-        FROM read_csv_auto({csv_sql}, {scan_options_sql});
+        FROM read_csv_auto({csv_sql}, {resolved_scan_options_sql});
     """).fetchall()
     return [row[0] for row in rows]
 
 
-def csv_scan_options(csv_path: Path) -> str:
-    encoding = sql_string(duckdb_csv_encoding(csv_path))
+def csv_scan_options(encoding: str) -> str:
+    encoding = sql_string(encoding)
     return f"sample_size = 20480, ignore_errors = true, header = true, all_varchar = true, encoding = {encoding}"
 
 
@@ -1050,7 +1086,8 @@ def enrich_exposure_csv(
         if progress_callback:
             progress_callback("Inspecting CSV columns", 10)
 
-        columns = csv_columns(con, csv_path)
+        scan_options_sql = resolve_csv_scan_options(con, csv_path)
+        columns = csv_columns(con, csv_path, scan_options_sql=scan_options_sql)
         if lat_col not in columns or lon_col not in columns:
             raise ValueError("Selected latitude/longitude columns were not found in the CSV.")
         available_fields = lookup_display_columns(con)
@@ -1065,7 +1102,6 @@ def enrich_exposure_csv(
 
         csv_sql = sql_string(str(csv_path.resolve()))
         output_sql = sql_string(str(output_path.resolve()))
-        scan_options_sql = csv_scan_options(csv_path)
         select_sql = enrichment_select_sql(
             csv_sql=csv_sql,
             scan_options_sql=scan_options_sql,
@@ -1994,6 +2030,22 @@ def lookup_display_columns(con: duckdb.DuckDBPyConnection) -> List[str]:
         str(column_name)
         for column_name, data_type in columns
         if not is_internal_lookup_column(str(column_name), str(data_type))
+    ]
+
+
+def preferred_display_fields(con: duckdb.DuckDBPyConnection) -> List[Dict[str, str]]:
+    try:
+        rows = con.execute("""
+            SELECT field_name, display_label
+            FROM building_display_fields
+            ORDER BY display_order, field_name;
+        """).fetchall()
+    except duckdb.Error:
+        return []
+
+    return [
+        {"field": str(field_name), "label": str(display_label)}
+        for field_name, display_label in rows
     ]
 
 

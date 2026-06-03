@@ -2,6 +2,7 @@
   const controls = document.getElementById("buildingInfoFieldOptions");
   const selected = new Set();
   let fields = [];
+  let labels = new Map();
 
   const formatters = {
     height_m: (value) => formatNumber(value, " m"),
@@ -29,20 +30,26 @@
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Could not load database fields");
 
-      fields = payload.fields || [];
+      const preferredFields = Array.isArray(payload.preferred_fields) ? payload.preferred_fields : [];
+      const fieldEntries = preferredFields.length
+        ? preferredFields
+        : (payload.fields || []).map((field) => ({ field, label: formatLabel(field) }));
+      fields = fieldEntries.map((entry) => entry.field);
+      labels = new Map(fieldEntries.map((entry) => [entry.field, entry.label || formatLabel(entry.field)]));
       selected.clear();
       fields.forEach((field) => selected.add(field));
       controls.innerHTML = fields.length
-        ? fields.map((field) => `
+        ? fieldEntries.map((entry) => `
             <label class="lookup-field-option">
-              <input type="checkbox" value="${escapeHtml(field)}" checked>
-              <span>${escapeHtml(field)}</span>
+              <input type="checkbox" value="${escapeHtml(entry.field)}" checked>
+              <span>${escapeHtml(entry.label || formatLabel(entry.field))}</span>
             </label>
           `).join("")
         : "<p>No displayable database fields found.</p>";
       notifyChange();
     } catch (error) {
       fields = [];
+      labels = new Map();
       selected.clear();
       controls.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
       notifyChange();
@@ -75,7 +82,7 @@
         .filter(([, value]) => value !== null && value !== undefined && value !== "")
         .map(([field, value]) => `
           <tr${field.toLowerCase() === "source" ? ' class="building-info-source"' : ""}>
-            <th scope="row">${escapeHtml(formatLabel(field))}</th>
+            <th scope="row">${escapeHtml(labels.get(field) || formatLabel(field))}</th>
             <td>${escapeHtml(value)}</td>
           </tr>
         `)

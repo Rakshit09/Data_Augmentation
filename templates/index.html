@@ -243,16 +243,24 @@
 
                 <fieldset id="customParquetMappings" class="etl-fieldset hidden">
                   <legend>Column Mapping</legend>
-                  <p class="etl-hint">Latitude, longitude, geometry, occupancy, and height are required. The remaining mappings are optional.</p>
+                  <p class="etl-hint">Latitude, longitude, geometry, and occupancy are required. Height and the remaining mappings are optional.</p>
                   <label>Latitude<select id="customLatitude"></select></label>
                   <label>Longitude<select id="customLongitude"></select></label>
                   <label>Geometry<select id="customGeometry"></select></label>
                   <label>Occupancy<select id="customOccupancy"></select></label>
-                  <label>Height<select id="customHeight"></select></label>
+                  <label>Height (optional)<select id="customHeight"></select></label>
                   <label>Year built (optional)<select id="customYearBuilt"></select></label>
                   <label>Construction (optional)<select id="customConstruction"></select></label>
                   <label>Roof type (optional)<select id="customRoofType"></select></label>
                   <label>Basement (optional)<select id="customBasement"></select></label>
+                  <div class="custom-field-section">
+                    <div class="custom-field-header">
+                      <span>Additional mapped fields</span>
+                      <button id="addCustomField" class="etl-tab-button" type="button">Add field</button>
+                    </div>
+                    <p class="etl-hint">Add up to 10 extra fields. Use letters, numbers, and underscores for the field name.</p>
+                    <div id="customExtraFields" class="custom-field-list"></div>
+                  </div>
                   <label>DuckDB lookup output
                     <input id="customDbPath" type="text" placeholder="/path/to/buildings_lookup.duckdb">
                   </label>

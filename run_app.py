@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import shutil
 import socket
 import threading
 import traceback
@@ -228,10 +229,44 @@ def run_server():
         print(server_error)
 
 
+def _install_bundled_duckdb_extensions():
+    """
+    When running as a frozen exe, copy bundled DuckDB extensions into the user's
+    DuckDB extension directory so they can be loaded with 'LOAD spatial;' as normal.
+    Does nothing when running from source (extensions are expected to be installed already).
+    """
+    if not getattr(sys, 'frozen', False):
+        return
+
+    bundled_dir = os.path.join(sys._MEIPASS, "duckdb_extensions")
+    if not os.path.isdir(bundled_dir):
+        return
+
+    try:
+        import duckdb
+        version = duckdb.__version__
+        platform = "windows_amd64"
+        dest_dir = os.path.join(
+            os.path.expanduser("~"), ".duckdb", "extensions", f"v{version}", platform
+        )
+        os.makedirs(dest_dir, exist_ok=True)
+
+        for ext_file in os.listdir(bundled_dir):
+            if ext_file.endswith(".duckdb_extension"):
+                src = os.path.join(bundled_dir, ext_file)
+                dst = os.path.join(dest_dir, ext_file)
+                if not os.path.exists(dst):
+                    shutil.copy2(src, dst)
+    except Exception as e:
+        write_log(f"Warning: Could not install bundled DuckDB extensions: {e}")
+
+
 def main():
     global server_error
 
     write_log("Application starting...")
+
+    _install_bundled_duckdb_extensions()
 
     splash_root, status_label, progress_label = create_splash()
 
@@ -278,21 +313,17 @@ def main():
     control_window.withdraw()
 
     try:
-        import webview
+        splash_root.destroy()
     except Exception:
-        raise RuntimeError("pywebview import failed:\n" + traceback.format_exc())
+        pass
 
-    def open_app():
-        try:
-            splash_root.destroy()
-        except Exception:
-            pass
+    control_window.deiconify()
+    control_window.lift()
 
-        webview.create_window(APP_NAME, URL, width=1400, height=900)
-        webview.start()
+    if not webbrowser.open(URL, new=1, autoraise=True):
+        write_log(f"Warning: Could not open browser automatically. Open {URL} manually.")
 
-    splash_root.after(500, open_app)
-    splash_root.mainloop()
+    control_window.mainloop()
 
     cleanup()
 

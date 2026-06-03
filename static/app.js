@@ -245,6 +245,7 @@ async function applySelectedDataSource() {
     activeDbPath.value = payload.db_path || "";
     clearSelection();
     await window.buildingInfoFields?.load();
+    await window.exposureEnrichmentFields?.load();
     const message = payload.generated_lookup
       ? `Created lookup DB and switched to ${payload.db_path}.`
       : "Active data source updated.";

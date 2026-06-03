@@ -216,6 +216,33 @@ h2 {
   gap: 8px;
 }
 
+.custom-field-section {
+  display: grid;
+  gap: 10px;
+}
+
+.custom-field-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.custom-field-list {
+  display: grid;
+  gap: 10px;
+}
+
+.custom-field-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
 .file-picker {
   display: grid;
   gap: 6px;
