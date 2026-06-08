@@ -1663,7 +1663,7 @@ def enrichment_select_sql(
         ) AS __lon_delta
         """
         projected_ctes = """
-        exposure AS (
+        exposure AS MATERIALIZED (
             SELECT *
             FROM exposure_base
         )
@@ -1676,7 +1676,7 @@ def enrichment_select_sql(
         ) AS __lon_delta
         """
         projected_ctes = """
-        exposure_projected AS (
+        exposure_projected AS MATERIALIZED (
             SELECT
                 *,
                 CASE
@@ -1686,7 +1686,7 @@ def enrichment_select_sql(
                 END AS __pt_m
             FROM exposure_base
         ),
-        exposure AS (
+        exposure AS MATERIALIZED (
             SELECT
                 *,
                 CASE WHEN __pt_m IS NOT NULL THEN ST_X(__pt_m) ELSE NULL END AS __pt_m_x,
@@ -1697,27 +1697,27 @@ def enrichment_select_sql(
     else:
         mode_base_cols = ""
         projected_ctes = """
-        exposure AS (
+        exposure AS MATERIALIZED (
             SELECT *
             FROM exposure_base
         )
         """
 
     exposure_ctes = f"""
-        WITH exposure_raw AS (
+        WITH exposure_raw AS MATERIALIZED (
             SELECT
                 ROW_NUMBER() OVER () AS __exposure_row_id,
                 *
             FROM read_csv_auto({csv_sql}, {scan_options_sql})
         ),
-        exposure_parsed AS (
+        exposure_parsed AS MATERIALIZED (
             SELECT
                 *,
                 TRY_CAST({lon_sql} AS DOUBLE) AS __lon,
                 TRY_CAST({lat_sql} AS DOUBLE) AS __lat
             FROM exposure_raw
         ),
-        exposure_base AS (
+        exposure_base AS MATERIALIZED (
             SELECT
                 *,
                 __lon BETWEEN -180 AND 180
@@ -1748,7 +1748,7 @@ def enrichment_select_sql(
             FROM exposure_parsed
         ),
         {projected_ctes},
-        exposure_tiles AS (
+        exposure_tiles AS MATERIALIZED (
             SELECT
                 t.__exposure_row_id,
                 {quadkey_expr_sql} AS __quadkey_prefix,
@@ -1773,7 +1773,7 @@ def enrichment_select_sql(
     if mode == "centroid":
         return f"""
             {exposure_ctes},
-            centroid_candidates AS (
+            centroid_candidates AS MATERIALIZED (
                 SELECT
                     e.__exposure_row_id,
                     ST_Distance_Sphere(ST_Point(b.centroid_lon, b.centroid_lat), e.__pt) AS distance_m,
@@ -1789,7 +1789,7 @@ def enrichment_select_sql(
                     AND b.centroid_lon BETWEEN e.__lon - e.__lon_delta AND e.__lon + e.__lon_delta
                     AND b.centroid_lat BETWEEN e.__lat - e.__lat_delta AND e.__lat + e.__lat_delta
             ),
-            centroid_ranked AS (
+            centroid_ranked AS MATERIALIZED (
                 SELECT
                     __exposure_row_id,
                     distance_m,
@@ -1802,7 +1802,7 @@ def enrichment_select_sql(
                 WHERE candidate_rank <= {candidate_limit_sql}
                   AND distance_m <= {radius_sql}
             ),
-            matches AS (
+            matches AS MATERIALIZED (
                 SELECT * FROM centroid_ranked WHERE rn = 1
             )
             SELECT
@@ -1824,7 +1824,7 @@ def enrichment_select_sql(
     if mode == "inside":
         return f"""
             {exposure_ctes},
-            inside_ranked AS (
+            inside_ranked AS MATERIALIZED (
                 SELECT
                     e.__exposure_row_id,
                     ROW_NUMBER() OVER (
@@ -1840,7 +1840,7 @@ def enrichment_select_sql(
                     AND e.__lat BETWEEN b.bbox_ymin AND b.bbox_ymax
                     AND ST_Intersects(b.geom, e.__pt)
             ),
-            matches AS (
+            matches AS MATERIALIZED (
                 SELECT * FROM inside_ranked WHERE rn = 1
             )
             SELECT
@@ -1858,7 +1858,7 @@ def enrichment_select_sql(
     # inside_nearest mode
     return f"""
         {exposure_ctes},
-        inside_ranked AS (
+        inside_ranked AS MATERIALIZED (
             SELECT
                 e.__exposure_row_id,
                 ROW_NUMBER() OVER (
@@ -1874,17 +1874,17 @@ def enrichment_select_sql(
                 AND e.__lat BETWEEN b.bbox_ymin AND b.bbox_ymax
                 AND ST_Intersects(b.geom, e.__pt)
         ),
-        inside_matches AS (
+        inside_matches AS MATERIALIZED (
             SELECT * FROM inside_ranked WHERE rn = 1
         ),
-        unmatched_exposure AS (
+        unmatched_exposure AS MATERIALIZED (
             SELECT e.*
             FROM exposure e
             LEFT JOIN inside_matches i USING (__exposure_row_id)
             WHERE e.__valid_coordinates
               AND i.__exposure_row_id IS NULL
         ),
-        nearest_candidates AS (
+        nearest_candidates AS MATERIALIZED (
             SELECT
                 e.__exposure_row_id,
                 b.geom_3035 AS __geom_3035,
@@ -1907,7 +1907,7 @@ def enrichment_select_sql(
                 AND b.bbox_3035_ymin <= e.__pt_m_y + {radius_sql}
                 AND b.bbox_3035_ymax >= e.__pt_m_y - {radius_sql}
         ),
-        nearest_ranked AS (
+        nearest_ranked AS MATERIALIZED (
             SELECT
                 c.__exposure_row_id,
                 ST_Distance(c.__geom_3035, e.__pt_m) AS distance_m,
@@ -1921,7 +1921,7 @@ def enrichment_select_sql(
             WHERE c.candidate_rank <= {candidate_limit_sql}
               AND ST_DWithin(c.__geom_3035, e.__pt_m, {radius_sql})
         ),
-        nearest_matches AS (
+        nearest_matches AS MATERIALIZED (
             SELECT * FROM nearest_ranked WHERE rn = 1
         )
         SELECT
@@ -2123,7 +2123,7 @@ def main() -> None:
             "--db etl_output/building_lookup.duckdb --force"
         )
 
-    app.run(host=args.host, port=args.port, debug=True)
+    app.run(host=args.host, port=args.port, debug=args.debug, use_reloader=False)
 
 
 if __name__ == "__main__":

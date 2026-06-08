@@ -6,6 +6,8 @@
 etl_output/*.parquet
 etl_output/*.duckdb
 etl_output_test/*
+etl_output2/*.parquet
+etl_output2/*.duckdb
 
 
 #Ignore all boundary files (large data, not tracked in git)
@@ -14,6 +16,7 @@ etl_output/boundary/*.gpkg
 etl_output/boundary/user_boundary/
 etl_output/boundary/vg250_01-01.utm32s.gpkg.ebenen/
 etl_output/boundary/.extracted
+etl_output2/boundary/
 
 # Ignore app upload/result files
 etl_output/app_uploads/

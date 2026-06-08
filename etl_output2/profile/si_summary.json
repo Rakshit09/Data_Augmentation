@@ -1,0 +1,95 @@
+{
+  "residential_buildings": 36936842,
+  "priced_residential_buildings": 36936842,
+  "unpriced_residential_buildings": 0,
+  "total_estimated_si": 9275269093360.625,
+  "currency": "EUR",
+  "state_summary_available": true,
+  "state_summary_note": null,
+  "states": [
+    {
+      "state_name": "Nordrhein-Westfalen",
+      "priced_residential_buildings": 7861463,
+      "total_estimated_si": 1743600850805.6885
+    },
+    {
+      "state_name": "Bayern",
+      "priced_residential_buildings": 5659136,
+      "total_estimated_si": 1680515877068.2214
+    },
+    {
+      "state_name": "Baden-W\u00fcrttemberg",
+      "priced_residential_buildings": 4319985,
+      "total_estimated_si": 1127573569138.7988
+    },
+    {
+      "state_name": "Niedersachsen",
+      "priced_residential_buildings": 3890158,
+      "total_estimated_si": 1039635479653.9669
+    },
+    {
+      "state_name": "Hessen",
+      "priced_residential_buildings": 2516053,
+      "total_estimated_si": 685059267367.3508
+    },
+    {
+      "state_name": "Rheinland-Pfalz",
+      "priced_residential_buildings": 1928541,
+      "total_estimated_si": 524380437455.63464
+    },
+    {
+      "state_name": "Sachsen",
+      "priced_residential_buildings": 1970836,
+      "total_estimated_si": 426215105988.704
+    },
+    {
+      "state_name": "Brandenburg",
+      "priced_residential_buildings": 1832852,
+      "total_estimated_si": 332551331798.5775
+    },
+    {
+      "state_name": "Schleswig-Holstein",
+      "priced_residential_buildings": 1350973,
+      "total_estimated_si": 324041372487.5671
+    },
+    {
+      "state_name": "Sachsen-Anhalt",
+      "priced_residential_buildings": 1478528,
+      "total_estimated_si": 320493258888.05884
+    },
+    {
+      "state_name": "Th\u00fcringen",
+      "priced_residential_buildings": 1311926,
+      "total_estimated_si": 266495289905.8724
+    },
+    {
+      "state_name": "Berlin",
+      "priced_residential_buildings": 521536,
+      "total_estimated_si": 246278019062.04022
+    },
+    {
+      "state_name": "Mecklenburg-Vorpommern",
+      "priced_residential_buildings": 1089799,
+      "total_estimated_si": 198917883257.45886
+    },
+    {
+      "state_name": "Saarland",
+      "priced_residential_buildings": 538015,
+      "total_estimated_si": 130905937901.9226
+    },
+    {
+      "state_name": "Hamburg",
+      "priced_residential_buildings": 303991,
+      "total_estimated_si": 128561892097.21954
+    },
+    {
+      "state_name": "Bremen",
+      "priced_residential_buildings": 179606,
+      "total_estimated_si": 59371657098.3493
+    }
+  ],
+  "state_assigned_priced_buildings": 36753398,
+  "state_unassigned_priced_buildings": 183444,
+  "state_assigned_estimated_si": 9234597229975.43,
+  "state_unassigned_estimated_si": 40671863385.19531
+}

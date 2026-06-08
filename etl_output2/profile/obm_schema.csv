@@ -1,0 +1,11 @@
+column_name,column_type,null,key,default,extra
+id,BIGINT,YES,,,
+floorspace,DOUBLE,YES,,,
+occupancy,VARCHAR,YES,,,
+relation_id,DOUBLE,YES,,,
+quadkey,VARCHAR,YES,,,
+last_update,TIMESTAMP WITH TIME ZONE,YES,,,
+height,VARCHAR,YES,,,
+geometry,GEOMETRY('OGC:CRS84'),YES,,,
+bbox,"STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE)",YES,,,
+source,VARCHAR,YES,,,

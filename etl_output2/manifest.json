@@ -1,0 +1,43 @@
+{
+  "created_at_utc": "2026-06-03T00:08:44.867540+00:00",
+  "runtime_seconds": 15261.57,
+  "config": {
+    "output_dir": "./etl_output2",
+    "obm_s3": "s3://us-west-2.opendata.source.coop/tge-labs/openbuildingmap/*.parquet",
+    "bkg_boundary_zip_url": "https://daten.gdz.bkg.bund.de/produkte/vg/vg250_ebenen_0101/aktuell/vg250_01-01.utm32s.gpkg.ebenen.zip",
+    "lon_min": 5.86625035074051,
+    "lon_max": 15.041815656442385,
+    "lat_min": 47.270123604699315,
+    "lat_max": 55.09916897710435,
+    "duckdb_file": "etl_output2/work_de_SI_2.duckdb",
+    "threads": 8,
+    "memory_limit": "24GB",
+    "temp_directory": "./etl_output2/duckdb_temp",
+    "output_parquet": "etl_output2/buildings_de_cleaned_SI_2.parquet",
+    "row_group_size": 100000,
+    "metres_per_storey": 3.0,
+    "usable_floor_factor": 0.78,
+    "urban_replacement_cost_m2": 1650.0,
+    "rural_replacement_cost_m2": 1350.0,
+    "default_urban_rural_class": "rural",
+    "urban_footprint_density_threshold": 0.15,
+    "force": true,
+    "sample_only": false,
+    "sample_limit": 100000,
+    "obm_quadkey_zoom": 6,
+    "boundary_file": null,
+    "state_boundary_file": null
+  },
+  "output_parquet": "/Users/rakshitjoshi/Data Augmentation/etl_output2/buildings_de_cleaned_SI_2.parquet",
+  "profile_dir": "/Users/rakshitjoshi/Data Augmentation/etl_output2/profile",
+  "notes": [
+    "Geometry is stored as WKB binary in geom_wkb.",
+    "Coordinates are EPSG:4326.",
+    "footprint_area_m2 is calculated in EPSG:3035.",
+    "height_m is normalized from direct metres or estimated from storeys.",
+    "Residential estimated_si uses footprint_area_m2 \u00d7 num_stories \u00d7 0.75 \u00d7 urban/rural replacement cost \u20ac/m\u00b2.",
+    "urban_rural_class is classified once per populated z14 quadkey tile using building footprint density; unmatched tiles use default_urban_rural_class.",
+    "SI totals are written to profile/si_summary.json and profile/si_by_state.csv.",
+    "attribute_completeness_score is not truth quality; it only measures attribute availability."
+  ]
+}
