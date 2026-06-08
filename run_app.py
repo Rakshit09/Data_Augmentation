@@ -197,15 +197,16 @@ def build_flask_app():
     """
     from building_lookup_app import create_app
 
-    app = create_app(db_path="", nearest_radius_m=50.0)
+    upload_dir = local_path("etl_output/app_uploads")
+    result_dir = local_path("etl_output/app_results")
 
-    app.config["DB_PATH"] = ""
+    app = create_app(
+        db_path="",
+        nearest_radius_m=50.0,
+        upload_dir=upload_dir,
+        result_dir=result_dir,
+    )
     app.config["PARQUET_PATH"] = ""
-    app.config["UPLOAD_DIR"] = local_path("etl_output/app_uploads")
-    app.config["RESULT_DIR"] = local_path("etl_output/app_results")
-
-    os.makedirs(app.config["UPLOAD_DIR"], exist_ok=True)
-    os.makedirs(app.config["RESULT_DIR"], exist_ok=True)
 
     return app
 

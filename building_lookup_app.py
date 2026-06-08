@@ -13,7 +13,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from threading import Event, Lock, Thread
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import duckdb
 import pandas as pd
@@ -29,6 +29,10 @@ DEFAULT_DB = "etl_output/building_lookup.duckdb"
 NEAREST_CANDIDATE_LIMIT = 128
 DEFAULT_QUADKEY_PREFIX_ZOOM = 6
 OPTIMIZED_QUADKEY_PREFIX_ZOOM = 14
+MAX_RETAINED_EXPOSURE_JOBS = 3
+MAX_RETAINED_EXPOSURE_UPLOADS = 3
+MAX_RETAINED_EXPOSURE_RESULTS = 3
+EXPOSURE_ARTIFACT_MAX_AGE_SECONDS = 24 * 60 * 60
 BUILDING_COLUMNS = [
     "building_id",
     "source",
@@ -436,18 +440,24 @@ def prepare_index(parquet_path: str, db_path: str, force: bool = False, threads:
     print(f"Ready: {db_path} ({row_count:,} buildings)")
 
 
-def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Flask:
+def create_app(
+    db_path: str = DEFAULT_DB,
+    nearest_radius_m: float = 50.0,
+    upload_dir: Optional[str] = None,
+    result_dir: Optional[str] = None,
+) -> Flask:
     app = Flask(__name__)
     app.config["DB_PATH"] = db_path
     app.config["PARQUET_PATH"] = DEFAULT_PARQUET
     app.config["NEAREST_RADIUS_M"] = float(nearest_radius_m)
     app.config["GEOCODER_USER_AGENT"] = "OBMBuildingLookup/0.1 local-development"
-    app.config["UPLOAD_DIR"] = "etl_output/app_uploads"
-    app.config["RESULT_DIR"] = "etl_output/app_results"
+    app.config["UPLOAD_DIR"] = upload_dir or "etl_output/app_uploads"
+    app.config["RESULT_DIR"] = result_dir or "etl_output/app_results"
     geocode_cache: Dict[str, Any] = {}
     last_geocode_at = [0.0]
     jobs: Dict[str, Dict[str, Any]] = {}
     jobs_lock = Lock()
+    latest_upload_id: List[Optional[str]] = [None]
     for _startup_dir in (app.config["UPLOAD_DIR"], app.config["RESULT_DIR"]):
         _dir = Path(_startup_dir)
         _dir.mkdir(parents=True, exist_ok=True)
@@ -459,6 +469,97 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
     def set_job(job_id: str, **updates: Any) -> None:
         with jobs_lock:
             jobs.setdefault(job_id, {}).update(updates)
+
+    def prune_files(
+        directory: Path,
+        pattern: str,
+        keep_names: Set[str],
+        max_retained: int,
+    ) -> None:
+        now = time.time()
+        files = sorted(
+            (path for path in directory.glob(pattern) if path.is_file()),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+
+        retained = 0
+        for path in files:
+            if path.name in keep_names:
+                retained += 1
+                continue
+
+            try:
+                age_seconds = now - path.stat().st_mtime
+            except FileNotFoundError:
+                continue
+
+            if retained >= max_retained or age_seconds > EXPOSURE_ARTIFACT_MAX_AGE_SECONDS:
+                path.unlink(missing_ok=True)
+            else:
+                retained += 1
+
+    def cleanup_exposure_runtime() -> None:
+        now = time.time()
+        keep_upload_ids = {upload_id for upload_id in latest_upload_id if upload_id}
+        keep_result_names: Set[str] = set()
+        completed_jobs: List[Tuple[str, float]] = []
+
+        with jobs_lock:
+            for job_id, job in jobs.items():
+                status = job.get("status")
+                if status in {"queued", "running"}:
+                    upload_id = job.get("upload_id")
+                    output_filename = job.get("output_filename")
+                    if isinstance(upload_id, str):
+                        keep_upload_ids.add(upload_id)
+                    if isinstance(output_filename, str):
+                        keep_result_names.add(output_filename)
+                    continue
+
+                completed_at = float(job.get("completed_at") or job.get("created_at") or now)
+                completed_jobs.append((job_id, completed_at))
+
+            stale_job_ids = {
+                job_id
+                for job_id, completed_at in completed_jobs
+                if now - completed_at > EXPOSURE_ARTIFACT_MAX_AGE_SECONDS
+            }
+            completed_jobs.sort(key=lambda item: item[1], reverse=True)
+            stale_job_ids.update(
+                job_id
+                for job_id, _completed_at in completed_jobs[MAX_RETAINED_EXPOSURE_JOBS:]
+            )
+
+            for job_id in stale_job_ids:
+                jobs.pop(job_id, None)
+
+            for job in jobs.values():
+                upload_id = job.get("upload_id")
+                output_filename = job.get("output_filename")
+                if isinstance(upload_id, str) and job.get("status") in {"queued", "running"}:
+                    keep_upload_ids.add(upload_id)
+                if isinstance(output_filename, str):
+                    keep_result_names.add(output_filename)
+
+        upload_keep_names = {
+            path.name
+            for upload_id in keep_upload_ids
+            for path in Path(app.config["UPLOAD_DIR"]).glob(f"{upload_id}_*.csv")
+            if path.is_file()
+        }
+        prune_files(
+            Path(app.config["UPLOAD_DIR"]),
+            "*.csv",
+            upload_keep_names,
+            MAX_RETAINED_EXPOSURE_UPLOADS,
+        )
+        prune_files(
+            Path(app.config["RESULT_DIR"]),
+            "enriched_*.csv",
+            keep_result_names,
+            MAX_RETAINED_EXPOSURE_RESULTS,
+        )
 
     @app.route("/")
     def index():
@@ -691,6 +792,9 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
             upload_path.unlink(missing_ok=True)
             return jsonify({"error": f"Could not read CSV: {exc}"}), 400
 
+        latest_upload_id[0] = upload_id
+        cleanup_exposure_runtime()
+
         return jsonify({
             "upload_id": upload_id,
             "filename": filename,
@@ -759,6 +863,9 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
             download_url=None,
             summary=None,
             error=None,
+            created_at=time.time(),
+            upload_id=upload_id,
+            output_filename=output_path.name,
         )
 
         def run_job() -> None:
@@ -784,6 +891,7 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
                     percent=100,
                     download_url=f"/api/exposure/download/{output_path.name}",
                     summary=summary,
+                    completed_at=time.time(),
                 )
             except Exception as exc:
                 output_path.unlink(missing_ok=True)
@@ -793,7 +901,10 @@ def create_app(db_path: str = DEFAULT_DB, nearest_radius_m: float = 50.0) -> Fla
                     phase="Error",
                     percent=100,
                     error=f"Enrichment failed: {exc}",
+                    completed_at=time.time(),
                 )
+            finally:
+                cleanup_exposure_runtime()
 
         Thread(target=run_job, daemon=True).start()
 
