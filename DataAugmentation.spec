@@ -30,7 +30,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='DataAugmentation4',
+    name='DataAugmentation1.6',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

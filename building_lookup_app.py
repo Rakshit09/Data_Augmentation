@@ -1075,12 +1075,14 @@ def enrich_exposure_csv(
     progress_callback=None,
 ) -> Dict[str, Any]:
     started_at = time.perf_counter()
+    threads_configured = max(os.cpu_count() or 1, 1)
+    query_phase = "Running spatial enrichment and writing CSV"
 
     if progress_callback:
         progress_callback("Opening lookup database", 5)
 
     con = open_db(db_path, read_only=True)
-    con.execute(f"SET threads = {max(os.cpu_count() or 1, 1)};")
+    con.execute(f"SET threads = {threads_configured};")
 
     try:
         if progress_callback:
@@ -1098,7 +1100,7 @@ def enrich_exposure_csv(
         quadkey_prefix_column, quadkey_prefix_zoom, allow_null_quadkey_prefix = enrichment_quadkey_config(con)
 
         if progress_callback:
-            progress_callback("Running indexed spatial enrichment", 20)
+            progress_callback(query_phase, 20)
 
         csv_sql = sql_string(str(csv_path.resolve()))
         output_sql = sql_string(str(output_path.resolve()))
@@ -1132,7 +1134,7 @@ def enrich_exposure_csv(
                         if query_percent <= 1:
                             query_percent *= 100
                         percent = max(percent, min(round(20 + query_percent * 0.7), 90))
-                    progress_callback("Running indexed spatial enrichment", percent)
+                    progress_callback(query_phase, percent)
 
             progress_thread = Thread(target=advance_progress, daemon=True)
             progress_thread.start()
@@ -1153,6 +1155,10 @@ def enrich_exposure_csv(
 
         summary = summarize_enriched_output(con, output_path, selected_fields)
         summary["enrichment_elapsed_seconds"] = round(time.perf_counter() - started_at, 3)
+        summary["engine_threads"] = int(threads_configured)
+        summary["lookup_quadkey_prefix_column"] = quadkey_prefix_column
+        summary["lookup_quadkey_prefix_zoom"] = int(quadkey_prefix_zoom)
+        summary["enrichment_mode"] = mode
         return summary
     finally:
         con.close()

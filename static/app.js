@@ -618,12 +618,16 @@ function renderPreview(columns, rows) {
 }
 
 function renderSummary(summary) {
+  const elapsed = summary.enrichment_elapsed_seconds == null
+    ? ""
+    : ` · Elapsed: ${Number(summary.enrichment_elapsed_seconds).toFixed(1)} s`;
   setUploadSummary(`
     Total: ${formatInteger(summary.total_rows)}
     · Valid coords: ${formatInteger(summary.valid_coordinate_rows)}
     · Inside: ${formatInteger(summary.inside_polygon_matches)}
     · Nearest: ${formatInteger(summary.nearest_matches)}
     · No match: ${formatInteger(summary.no_matches)}
+    ${elapsed}
   `);
 }
 
@@ -637,6 +641,14 @@ function renderStats(summary) {
     ["Inside polygon", summary.inside_polygon_matches],
     ["Nearest matches", summary.nearest_matches],
     ["No match", summary.no_matches],
+    ["Elapsed", summary.enrichment_elapsed_seconds == null
+      ? "n/a"
+      : `${Number(summary.enrichment_elapsed_seconds).toFixed(1)} s`, null],
+    ["DuckDB threads", summary.engine_threads ?? "n/a", null],
+    ["Lookup prefix", summary.lookup_quadkey_prefix_column
+      ? `${summary.lookup_quadkey_prefix_column} (z${summary.lookup_quadkey_prefix_zoom})`
+      : "n/a", null],
+    ["Mode", summary.enrichment_mode || "n/a", null],
     ["Avg nearest distance", summary.average_nearest_distance_m == null
       ? "n/a"
       : `${Number(summary.average_nearest_distance_m).toFixed(1)} m`, null]
