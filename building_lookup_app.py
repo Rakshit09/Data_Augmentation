@@ -1,8 +1,13 @@
+
+import os
+import psutil
 import argparse
 import codecs
+from genericpath import exists
 import json
 import math
 import os
+import tempfile
 import subprocess
 import sys
 import time
@@ -198,6 +203,107 @@ def duckdb_csv_encoding_candidates(csv_path: Path) -> List[str]:
     return ordered_candidates
 
 
+def run_enrichment_worker(
+    db_path: str,
+    csv_path: Path,
+    output_path: Path,
+    lat_col: str,
+    lon_col: str,
+    mode: str,
+    max_distance_m: float,
+    appended_fields: List[str],
+) -> Dict[str, Any]:
+    worker_path = Path(__file__).resolve().with_name("enrichment_worker.py")
+    db_path_resolved = str(Path(db_path).resolve())
+    csv_path_resolved = csv_path.resolve()
+    output_path_resolved = output_path.resolve()
+    summary_path = output_path_resolved.with_suffix(".summary.json")
+    summary_path.unlink(missing_ok=True)
+    stdout_path = None
+    stderr_path = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w+",
+            encoding="utf-8",
+            suffix=".worker.stdout.log",
+            delete=False,
+        ) as stdout_handle, tempfile.NamedTemporaryFile(
+            mode="w+",
+            encoding="utf-8",
+            suffix=".worker.stderr.log",
+            delete=False,
+        ) as stderr_handle:
+            stdout_path = Path(stdout_handle.name)
+            stderr_path = Path(stderr_handle.name)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(worker_path),
+                    "--db-path",
+                    db_path_resolved,
+                    "--csv-path",
+                    str(csv_path_resolved),
+                    "--output-path",
+                    str(output_path_resolved),
+                    "--lat-col",
+                    lat_col,
+                    "--lon-col",
+                    lon_col,
+                    "--mode",
+                    mode,
+                    "--max-distance-m",
+                    str(float(max_distance_m)),
+                    "--appended-fields-json",
+                    json.dumps(appended_fields),
+                    "--summary-path",
+                    str(summary_path),
+                ],
+                cwd=str(worker_path.parent),
+                stdin=subprocess.DEVNULL,
+                stdout=stdout_handle,
+                stderr=stderr_handle,
+                text=True,
+                check=False,
+            )
+
+        stdout = stdout_path.read_text(encoding="utf-8", errors="replace").strip() if stdout_path else ""
+        stderr = stderr_path.read_text(encoding="utf-8", errors="replace").strip() if stderr_path else ""
+
+        if result.returncode != 0:
+            details = [f"Enrichment worker failed with exit code {result.returncode}."]
+            if stderr:
+                details.append(f"stderr:\n{stderr}")
+            if stdout:
+                details.append(f"stdout:\n{stdout}")
+            raise RuntimeError("\n\n".join(details))
+
+        if not summary_path.is_file():
+            details = ["Enrichment worker completed without writing a summary file."]
+            if stderr:
+                details.append(f"stderr:\n{stderr}")
+            if stdout:
+                details.append(f"stdout:\n{stdout}")
+            raise RuntimeError("\n\n".join(details))
+
+        try:
+            with summary_path.open("r", encoding="utf-8") as handle:
+                summary = json.load(handle)
+        finally:
+            summary_path.unlink(missing_ok=True)
+
+        if not isinstance(summary, dict):
+            raise RuntimeError("Enrichment worker returned an invalid summary payload.")
+
+        return summary
+    finally:
+        if stdout_path is not None:
+            stdout_path.unlink(missing_ok=True)
+        if stderr_path is not None:
+            stderr_path.unlink(missing_ok=True)
+
+
 def open_db(db_path: str, read_only: bool = False) -> duckdb.DuckDBPyConnection:
     con = duckdb.connect(str(Path(db_path)), read_only=read_only)
     con.execute("LOAD spatial;")
@@ -367,10 +473,13 @@ def prepare_index(parquet_path: str, db_path: str, force: bool = False, threads:
             FROM information_schema.tables
             WHERE table_name = 'buildings';
         """).fetchone()[0]
+        
         if exists:
             print(f"Index database already exists: {db_path}")
             print("Use --force to rebuild it.")
+            con.close()
             return
+
 
     parquet_sql = sql_string(str(parquet))
 
@@ -457,6 +566,7 @@ def create_app(
     last_geocode_at = [0.0]
     jobs: Dict[str, Dict[str, Any]] = {}
     jobs_lock = Lock()
+    enrichment_lock = Lock()
     latest_upload_id: List[Optional[str]] = [None]
     for _startup_dir in (app.config["UPLOAD_DIR"], app.config["RESULT_DIR"]):
         _dir = Path(_startup_dir)
@@ -469,6 +579,24 @@ def create_app(
     def set_job(job_id: str, **updates: Any) -> None:
         with jobs_lock:
             jobs.setdefault(job_id, {}).update(updates)
+    
+    
+
+    def log_flask_memory(label: str) -> None:
+        import threading
+
+        process = psutil.Process(os.getpid())
+        memory_mb = round(process.memory_info().rss / 1024 / 1024, 1)
+
+        print(
+            f"[MEMORY] {label}: "
+            f"Flask memory = {memory_mb} MB, "
+            f"Python active threads = {threading.active_count()}, "
+            f"OS threads = {process.num_threads()}",
+            flush=True,
+        )
+
+
 
     def prune_files(
         directory: Path,
@@ -849,11 +977,29 @@ def create_app(
                     "error": f"Unknown appended database field: {invalid_fields[0]}"
                 }), 400
 
+        
         upload_path = find_upload(Path(app.config["UPLOAD_DIR"]), upload_id)
         if upload_path is None:
             return jsonify({"error": "Uploaded CSV was not found. Upload it again."}), 404
 
+        with jobs_lock:
+            active_job = next(
+                (
+                    existing_job_id
+                    for existing_job_id, job in jobs.items()
+                    if job.get("status") in {"queued", "running"}
+                ),
+                None,
+            )
+
+        if active_job is not None:
+            return jsonify({
+                "error": "Another enrichment is already running. Please wait for it to finish.",
+                "active_job_id": active_job,
+            }), 409
+
         job_id = uuid.uuid4().hex
+
         output_path = Path(app.config["RESULT_DIR"]) / f"enriched_{job_id}.csv"
         set_job(
             job_id,
@@ -869,21 +1015,32 @@ def create_app(
         )
 
         def run_job() -> None:
-            def progress(phase: str, percent: int) -> None:
-                set_job(job_id, status="running", phase=phase, percent=percent)
-
             try:
-                summary = enrich_exposure_csv(
-                    db_path=db_path,
-                    csv_path=upload_path,
-                    output_path=output_path,
-                    lat_col=lat_col,
-                    lon_col=lon_col,
-                    mode=mode,
-                    max_distance_m=max_distance_m,
-                    appended_fields=appended_fields,
-                    progress_callback=progress,
-                )
+                log_flask_memory(f"Before enrichment job {job_id}")
+                if not enrichment_lock.acquire(blocking=False):
+                    raise RuntimeError("Another enrichment is already running.")
+
+                try:
+                    set_job(
+                        job_id,
+                        status="running",
+                        phase="Running spatial enrichment and writing CSV",
+                        percent=20,
+                    )
+                    summary = run_enrichment_worker(
+                        db_path=db_path,
+                        csv_path=upload_path,
+                        output_path=output_path,
+                        lat_col=lat_col,
+                        lon_col=lon_col,
+                        mode=mode,
+                        max_distance_m=max_distance_m,
+                        appended_fields=appended_fields,
+                    )
+                    log_flask_memory(f"After enrichment job {job_id}")
+                finally:
+                    enrichment_lock.release()
+
                 set_job(
                     job_id,
                     status="complete",
@@ -1186,29 +1343,48 @@ def enrich_exposure_csv(
     progress_callback=None,
 ) -> Dict[str, Any]:
     started_at = time.perf_counter()
-    threads_configured = max(os.cpu_count() or 1, 1)
+    threads_configured = max(1, min((os.cpu_count() or 1) - 1, 8))
     query_phase = "Running spatial enrichment and writing CSV"
+
+    
+    last_tick = [time.perf_counter()]
+
+    def log_step(label: str) -> None:
+        now = time.perf_counter()
+        step_seconds = now - last_tick[0]
+        total_seconds = now - started_at
+        last_tick[0] = now
+        print(
+            f"[TIMING] {label}: step={step_seconds:.3f}s total={total_seconds:.3f}s",
+            flush=True,
+        )
+
 
     if progress_callback:
         progress_callback("Opening lookup database", 5)
 
     con = open_db(db_path, read_only=True)
     con.execute(f"SET threads = {threads_configured};")
+    log_step("Opened database and configured threads")
 
     try:
         if progress_callback:
             progress_callback("Inspecting CSV columns", 10)
 
         scan_options_sql = resolve_csv_scan_options(con, csv_path)
+        log_step("Resolved CSV scan options")
         columns = csv_columns(con, csv_path, scan_options_sql=scan_options_sql)
+        log_step("Read CSV columns")
         if lat_col not in columns or lon_col not in columns:
             raise ValueError("Selected latitude/longitude columns were not found in the CSV.")
         available_fields = lookup_display_columns(con)
+        log_step("Loaded lookup display columns")
         selected_fields = available_fields if appended_fields is None else appended_fields
         invalid_fields = [field for field in selected_fields if field not in available_fields]
         if invalid_fields:
             raise ValueError(f"Unknown appended database field: {invalid_fields[0]}")
         quadkey_prefix_column, quadkey_prefix_zoom, allow_null_quadkey_prefix = enrichment_quadkey_config(con)
+        log_step("Loaded quadkey config")
 
         if progress_callback:
             progress_callback(query_phase, 20)
@@ -1228,43 +1404,30 @@ def enrich_exposure_csv(
             quadkey_prefix_zoom=quadkey_prefix_zoom,
             allow_null_quadkey_prefix=allow_null_quadkey_prefix,
         )
-
-        progress_stop = Event()
-        progress_thread: Optional[Thread] = None
+        log_step("Built enrichment SQL")
 
         if progress_callback:
-            def advance_progress() -> None:
-                percent = 20
-                while not progress_stop.wait(1):
-                    percent = min(percent + 1, 90)
-                    try:
-                        query_percent = con.query_progress()
-                    except duckdb.Error:
-                        query_percent = -1
-                    if query_percent > 0:
-                        if query_percent <= 1:
-                            query_percent *= 100
-                        percent = max(percent, min(round(20 + query_percent * 0.7), 90))
-                    progress_callback(query_phase, percent)
+            progress_callback(query_phase, 20)
 
-            progress_thread = Thread(target=advance_progress, daemon=True)
-            progress_thread.start()
+        log_step("Starting main COPY enrichment query")
+        con.execute(f"""
+            COPY (
+                {select_sql}
+            ) TO {output_sql} (HEADER, DELIMITER ',');
+        """)
+        log_step("Finished main COPY enrichment query")
+        if progress_callback:
+            progress_callback(query_phase, 90)
 
-        try:
-            con.execute(f"""
-                COPY (
-                    {select_sql}
-                ) TO {output_sql} (HEADER, DELIMITER ',');
-            """)
-        finally:
-            progress_stop.set()
-            if progress_thread is not None:
-                progress_thread.join(timeout=1)
 
         if progress_callback:
             progress_callback("Finalizing summary", 95)
 
+        
+        log_step("Starting summary query")
         summary = summarize_enriched_output(con, output_path, selected_fields)
+        log_step("Finished summary query")
+
         summary["enrichment_elapsed_seconds"] = round(time.perf_counter() - started_at, 3)
         summary["engine_threads"] = int(threads_configured)
         summary["lookup_quadkey_prefix_column"] = quadkey_prefix_column
