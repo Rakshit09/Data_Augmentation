@@ -261,7 +261,7 @@ def local_runtime_dir(name: str) -> Path:
 def is_remote_storage_path(path_value: Path | str) -> bool:
     path = Path(path_value).expanduser()
     raw_path = str(path)
-    if raw_path.startswith("\\\\"):
+    if raw_path.startswith("\\\\") or raw_path.upper().startswith("J:"):
         return True
 
     if os.name != "nt":
@@ -283,7 +283,8 @@ def is_remote_storage_path(path_value: Path | str) -> bool:
 def enrichment_thread_count(db_path: str) -> int:
     max_threads = max(1, os.cpu_count() or 1)
     if is_remote_storage_path(db_path):
-        return min(max_threads, 2)
+        print("Remote storage detected for the database path. Limiting enrichment worker to a single thread to reduce potential issues with concurrent file access.")
+        return min(1, 2)
     return max_threads
 
 
@@ -304,10 +305,42 @@ def run_enrichment_worker(
     output_path_resolved = output_path.resolve()
     summary_path = output_path_resolved.with_suffix(".summary.json")
     summary_path.unlink(missing_ok=True)
+
     if progress_path is not None:
         progress_path.unlink(missing_ok=True)
+
     stdout_path = None
     stderr_path = None
+
+    command = [sys.executable]
+
+    if getattr(sys, "frozen", False):
+        command.append("--enrichment-worker")
+    else:
+        command.append(str(worker_path))
+
+    command.extend([
+        "--db-path",
+        db_path_resolved,
+        "--csv-path",
+        str(csv_path_resolved),
+        "--output-path",
+        str(output_path_resolved),
+        "--lat-col",
+        lat_col,
+        "--lon-col",
+        lon_col,
+        "--mode",
+        mode,
+        "--max-distance-m",
+        str(float(max_distance_m)),
+        "--appended-fields-json",
+        json.dumps(appended_fields),
+        "--summary-path",
+        str(summary_path),
+        "--progress-path",
+        str(progress_path.resolve()) if progress_path is not None else "",
+    ])
 
     try:
         with tempfile.NamedTemporaryFile(
@@ -325,30 +358,7 @@ def run_enrichment_worker(
             stderr_path = Path(stderr_handle.name)
 
             result = subprocess.run(
-                [
-                    sys.executable,
-                    str(worker_path),
-                    "--db-path",
-                    db_path_resolved,
-                    "--csv-path",
-                    str(csv_path_resolved),
-                    "--output-path",
-                    str(output_path_resolved),
-                    "--lat-col",
-                    lat_col,
-                    "--lon-col",
-                    lon_col,
-                    "--mode",
-                    mode,
-                    "--max-distance-m",
-                    str(float(max_distance_m)),
-                    "--appended-fields-json",
-                    json.dumps(appended_fields),
-                    "--summary-path",
-                    str(summary_path),
-                    "--progress-path",
-                    str(progress_path.resolve()) if progress_path is not None else "",
-                ],
+                command,
                 cwd=str(worker_path.parent),
                 stdin=subprocess.DEVNULL,
                 stdout=stdout_handle,
@@ -362,18 +372,24 @@ def run_enrichment_worker(
 
         if result.returncode != 0:
             details = [f"Enrichment worker failed with exit code {result.returncode}."]
+
             if stderr:
                 details.append(f"stderr:\n{stderr}")
+
             if stdout:
                 details.append(f"stdout:\n{stdout}")
+
             raise RuntimeError("\n\n".join(details))
 
         if not summary_path.is_file():
             details = ["Enrichment worker completed without writing a summary file."]
+
             if stderr:
                 details.append(f"stderr:\n{stderr}")
+
             if stdout:
                 details.append(f"stdout:\n{stdout}")
+
             raise RuntimeError("\n\n".join(details))
 
         try:
@@ -386,13 +402,17 @@ def run_enrichment_worker(
             raise RuntimeError("Enrichment worker returned an invalid summary payload.")
 
         return summary
+
     finally:
         if progress_path is not None:
             progress_path.unlink(missing_ok=True)
+
         if stdout_path is not None:
             stdout_path.unlink(missing_ok=True)
+
         if stderr_path is not None:
             stderr_path.unlink(missing_ok=True)
+
 
 
 def open_db(db_path: str, read_only: bool = False) -> duckdb.DuckDBPyConnection:

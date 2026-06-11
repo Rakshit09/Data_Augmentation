@@ -21,6 +21,7 @@ URL = f"http://{HOST}:{PORT}"
 def app_base_dir():
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
+
     return os.path.abspath(".")
 
 
@@ -31,7 +32,7 @@ def write_log(text):
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write("\n" + "=" * 100 + "\n")
-            f.write(text)
+            f.write(str(text))
             f.write("\n")
     except Exception:
         pass
@@ -71,6 +72,7 @@ def resource_path(relative_path):
         base_path = sys._MEIPASS
     except Exception:
         base_path = os.path.abspath(".")
+
     return os.path.join(base_path, relative_path)
 
 
@@ -88,10 +90,13 @@ def is_port_open(host, port):
 
 def wait_for_server(host, port, timeout=40):
     start = time.time()
+
     while time.time() - start < timeout:
         if is_port_open(host, port):
             return True
+
         time.sleep(0.25)
+
     return False
 
 
@@ -191,6 +196,68 @@ def cleanup():
 server_error = None
 
 
+def _install_bundled_duckdb_extensions():
+    """
+    Copies bundled DuckDB extensions into the user's DuckDB extension directory.
+    This allows building_lookup_app.py to keep using: LOAD spatial;
+    """
+    if not getattr(sys, "frozen", False):
+        return
+
+    bundled_dir = os.path.join(sys._MEIPASS, "duckdb_extensions")
+
+    if not os.path.isdir(bundled_dir):
+        write_log("No bundled DuckDB extension folder found.")
+        return
+
+    try:
+        import duckdb
+
+        version = duckdb.__version__
+        platform = "windows_amd64"
+
+        dest_dir = os.path.join(
+            os.path.expanduser("~"),
+            ".duckdb",
+            "extensions",
+            f"v{version}",
+            platform,
+        )
+        os.makedirs(dest_dir, exist_ok=True)
+
+        for ext_file in os.listdir(bundled_dir):
+            if ext_file.endswith(".duckdb_extension"):
+                src = os.path.join(bundled_dir, ext_file)
+                dst = os.path.join(dest_dir, ext_file)
+
+                if not os.path.exists(dst):
+                    shutil.copy2(src, dst)
+                    write_log(f"Copied DuckDB extension: {src} -> {dst}")
+
+    except Exception as e:
+        write_log(f"Warning: Could not install bundled DuckDB extensions: {e}")
+
+
+def run_enrichment_worker_mode():
+    """
+    This is used only when the EXE starts itself as the hidden enrichment worker.
+
+    Important:
+    - no splash
+    - no browser
+    - no Flask server
+    - no control window
+    """
+    _install_bundled_duckdb_extensions()
+
+    from enrichment_worker import main as enrichment_worker_main
+
+    if "--enrichment-worker" in sys.argv:
+        sys.argv.remove("--enrichment-worker")
+
+    enrichment_worker_main()
+
+
 def build_flask_app():
     """
     Imports are inside this function so import errors are captured and logged.
@@ -206,6 +273,7 @@ def build_flask_app():
         upload_dir=upload_dir,
         result_dir=result_dir,
     )
+
     app.config["PARQUET_PATH"] = ""
 
     return app
@@ -222,7 +290,14 @@ def run_server():
         flask_app = build_flask_app()
 
         write_log(f"Serving Flask app at {URL}")
-        serve(flask_app, host=HOST, port=PORT, threads=8, _quiet=False)
+
+        serve(
+            flask_app,
+            host=HOST,
+            port=PORT,
+            threads=8,
+            _quiet=False,
+        )
 
     except Exception:
         server_error = traceback.format_exc()
@@ -230,40 +305,12 @@ def run_server():
         print(server_error)
 
 
-def _install_bundled_duckdb_extensions():
-    """
-    When running as a frozen exe, copy bundled DuckDB extensions into the user's
-    DuckDB extension directory so they can be loaded with 'LOAD spatial;' as normal.
-    Does nothing when running from source (extensions are expected to be installed already).
-    """
-    if not getattr(sys, 'frozen', False):
-        return
-
-    bundled_dir = os.path.join(sys._MEIPASS, "duckdb_extensions")
-    if not os.path.isdir(bundled_dir):
-        return
-
-    try:
-        import duckdb
-        version = duckdb.__version__
-        platform = "windows_amd64"
-        dest_dir = os.path.join(
-            os.path.expanduser("~"), ".duckdb", "extensions", f"v{version}", platform
-        )
-        os.makedirs(dest_dir, exist_ok=True)
-
-        for ext_file in os.listdir(bundled_dir):
-            if ext_file.endswith(".duckdb_extension"):
-                src = os.path.join(bundled_dir, ext_file)
-                dst = os.path.join(dest_dir, ext_file)
-                if not os.path.exists(dst):
-                    shutil.copy2(src, dst)
-    except Exception as e:
-        write_log(f"Warning: Could not install bundled DuckDB extensions: {e}")
-
-
 def main():
     global server_error
+
+    if "--enrichment-worker" in sys.argv:
+        run_enrichment_worker_mode()
+        return
 
     write_log("Application starting...")
 
@@ -286,6 +333,7 @@ def main():
     if not wait_for_server(HOST, PORT, timeout=40):
         if server_error:
             raise RuntimeError(server_error)
+
         raise RuntimeError(
             f"Server did not start at {URL}.\n"
             f"Port {PORT} may already be in use, or Flask failed before startup.\n"
