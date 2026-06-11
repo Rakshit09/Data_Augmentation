@@ -31,7 +31,7 @@ from obm_country_to_parquet import ETLConfig, OpenBuildingMapCountryETL
 
 DEFAULT_PARQUET = "etl_output/buildings_de_cleaned.parquet"
 DEFAULT_DB = "etl_output/building_lookup.duckdb"
-NEAREST_CANDIDATE_LIMIT = 128
+NEAREST_CANDIDATE_LIMIT = 64
 DEFAULT_QUADKEY_PREFIX_ZOOM = 6
 OPTIMIZED_QUADKEY_PREFIX_ZOOM = 14
 MAX_RETAINED_EXPOSURE_JOBS = 1
@@ -66,6 +66,17 @@ BUILDING_COLUMNS = [
     "occupancy_quality",
     "floorspace_est_m2",
     "attribute_completeness_score",
+]
+
+DEFAULT_EXPOSURE_FIELD_CANDIDATES = [
+    "building_id",
+    "height_m",
+    "occupancy_code",
+    "occupancy_group",
+    "floorspace_est_m2",
+    "stories_exact",
+    "height_source_type",
+    "source",
 ]
 
 
@@ -203,6 +214,79 @@ def duckdb_csv_encoding_candidates(csv_path: Path) -> List[str]:
     return ordered_candidates
 
 
+def write_progress_snapshot(progress_path: Path, phase: str, percent: int) -> None:
+    payload = {
+        "phase": phase,
+        "percent": max(0, min(99, int(percent))),
+        "updated_at": time.time(),
+    }
+    temp_path = progress_path.with_name(f"{progress_path.name}.tmp")
+    progress_path.parent.mkdir(parents=True, exist_ok=True)
+    with temp_path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=True, default=json_safe)
+    temp_path.replace(progress_path)
+
+
+def read_progress_snapshot(progress_path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        with progress_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    phase = payload.get("phase")
+    try:
+        percent = int(payload.get("percent"))
+    except (TypeError, ValueError):
+        return None
+
+    if not isinstance(phase, str) or not phase:
+        return None
+
+    return {
+        "phase": phase,
+        "percent": max(0, min(99, percent)),
+    }
+
+
+def local_runtime_dir(name: str) -> Path:
+    runtime_dir = Path(tempfile.gettempdir()) / "data_augmentation_runtime" / name
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    return runtime_dir
+
+
+def is_remote_storage_path(path_value: Path | str) -> bool:
+    path = Path(path_value).expanduser()
+    raw_path = str(path)
+    if raw_path.startswith("\\\\"):
+        return True
+
+    if os.name != "nt":
+        return False
+
+    drive = path.drive
+    if not drive:
+        return False
+
+    root = drive if drive.endswith("\\") else f"{drive}\\"
+    try:
+        import ctypes
+
+        return ctypes.windll.kernel32.GetDriveTypeW(root) == 4
+    except Exception:
+        return False
+
+
+def enrichment_thread_count(db_path: str) -> int:
+    max_threads = max(1, os.cpu_count() or 1)
+    if is_remote_storage_path(db_path):
+        return min(max_threads, 2)
+    return max_threads
+
+
 def run_enrichment_worker(
     db_path: str,
     csv_path: Path,
@@ -212,6 +296,7 @@ def run_enrichment_worker(
     mode: str,
     max_distance_m: float,
     appended_fields: List[str],
+    progress_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     worker_path = Path(__file__).resolve().with_name("enrichment_worker.py")
     db_path_resolved = str(Path(db_path).resolve())
@@ -219,6 +304,8 @@ def run_enrichment_worker(
     output_path_resolved = output_path.resolve()
     summary_path = output_path_resolved.with_suffix(".summary.json")
     summary_path.unlink(missing_ok=True)
+    if progress_path is not None:
+        progress_path.unlink(missing_ok=True)
     stdout_path = None
     stderr_path = None
 
@@ -259,6 +346,8 @@ def run_enrichment_worker(
                     json.dumps(appended_fields),
                     "--summary-path",
                     str(summary_path),
+                    "--progress-path",
+                    str(progress_path.resolve()) if progress_path is not None else "",
                 ],
                 cwd=str(worker_path.parent),
                 stdin=subprocess.DEVNULL,
@@ -298,6 +387,8 @@ def run_enrichment_worker(
 
         return summary
     finally:
+        if progress_path is not None:
+            progress_path.unlink(missing_ok=True)
         if stdout_path is not None:
             stdout_path.unlink(missing_ok=True)
         if stderr_path is not None:
@@ -305,8 +396,10 @@ def run_enrichment_worker(
 
 
 def open_db(db_path: str, read_only: bool = False) -> duckdb.DuckDBPyConnection:
-    con = duckdb.connect(str(Path(db_path)), read_only=read_only)
+    resolved_db_path = Path(db_path).expanduser().resolve()
+    con = duckdb.connect(str(resolved_db_path), read_only=read_only)
     con.execute("LOAD spatial;")
+    con.execute(f"SET temp_directory = {sql_string(str(local_runtime_dir('duckdb_temp').resolve()))};")
     return con
 
 
@@ -337,6 +430,23 @@ def validate_local_file(path_value: str, suffix: str, label: str) -> str:
     if path.suffix.lower() != suffix:
         raise ValueError(f"{label} file must end with {suffix}: {path_value}")
     return display_path(path)
+
+
+def save_uploaded_file(uploaded_file, destination: Path) -> int:
+    size_bytes = 0
+
+    for _attempt in range(2):
+        try:
+            uploaded_file.stream.seek(0)
+        except (AttributeError, OSError, ValueError):
+            pass
+
+        uploaded_file.save(destination)
+        size_bytes = destination.stat().st_size if destination.exists() else 0
+        if size_bytes > 0:
+            return size_bytes
+
+    return size_bytes
 
 
 def browse_local_file(kind: str) -> Optional[str]:
@@ -560,8 +670,8 @@ def create_app(
     app.config["PARQUET_PATH"] = DEFAULT_PARQUET
     app.config["NEAREST_RADIUS_M"] = float(nearest_radius_m)
     app.config["GEOCODER_USER_AGENT"] = "OBMBuildingLookup/0.1 local-development"
-    app.config["UPLOAD_DIR"] = upload_dir or "etl_output/app_uploads"
-    app.config["RESULT_DIR"] = result_dir or "etl_output/app_results"
+    app.config["UPLOAD_DIR"] = upload_dir or str(local_runtime_dir("app_uploads"))
+    app.config["RESULT_DIR"] = result_dir or str(local_runtime_dir("app_results"))
     geocode_cache: Dict[str, Any] = {}
     last_geocode_at = [0.0]
     jobs: Dict[str, Dict[str, Any]] = {}
@@ -858,7 +968,11 @@ def create_app(
         finally:
             con.close()
 
-        return jsonify({"fields": fields, "preferred_fields": preferred_fields})
+        return jsonify({
+            "fields": fields,
+            "preferred_fields": preferred_fields,
+            "default_fields": default_enrichment_fields(fields, preferred_fields),
+        })
 
 
     @app.route("/api/search-address")
@@ -906,13 +1020,22 @@ def create_app(
         if file is None or not file.filename:
             return jsonify({"error": "Upload a CSV file."}), 400
 
-        filename = secure_filename(file.filename)
+        upload_id = uuid.uuid4().hex
+        original_filename = file.filename
+        filename = secure_filename(original_filename) or f"{upload_id}.csv"
         if not filename.lower().endswith(".csv"):
             return jsonify({"error": "Only CSV files are supported."}), 400
 
-        upload_id = uuid.uuid4().hex
         upload_path = Path(app.config["UPLOAD_DIR"]) / f"{upload_id}_{filename}"
-        file.save(upload_path)
+        saved_size = save_uploaded_file(file, upload_path)
+        if saved_size == 0:
+            upload_path.unlink(missing_ok=True)
+            return jsonify({
+                "error": (
+                    "The uploaded CSV was saved as 0 bytes. "
+                    f"Filename: {original_filename}"
+                )
+            }), 400
 
         try:
             columns, rows = preview_csv(upload_path)
@@ -962,11 +1085,13 @@ def create_app(
 
         try:
             available_fields = lookup_display_columns(con)
+            preferred_fields = preferred_display_fields(con)
+            default_fields = default_enrichment_fields(available_fields, preferred_fields)
         finally:
             con.close()
 
         if requested_fields is None:
-            appended_fields = available_fields
+            appended_fields = default_fields
         elif not isinstance(requested_fields, list):
             return jsonify({"error": "Appended fields must be a list."}), 400
         else:
@@ -1001,6 +1126,7 @@ def create_app(
         job_id = uuid.uuid4().hex
 
         output_path = Path(app.config["RESULT_DIR"]) / f"enriched_{job_id}.csv"
+        progress_path = output_path.with_suffix(".progress.json")
         set_job(
             job_id,
             status="queued",
@@ -1012,6 +1138,7 @@ def create_app(
             created_at=time.time(),
             upload_id=upload_id,
             output_filename=output_path.name,
+            _progress_path=str(progress_path),
         )
 
         def run_job() -> None:
@@ -1024,8 +1151,8 @@ def create_app(
                     set_job(
                         job_id,
                         status="running",
-                        phase="Running spatial enrichment and writing CSV",
-                        percent=20,
+                        phase="Starting enrichment worker",
+                        percent=3,
                     )
                     summary = run_enrichment_worker(
                         db_path=db_path,
@@ -1036,6 +1163,7 @@ def create_app(
                         mode=mode,
                         max_distance_m=max_distance_m,
                         appended_fields=appended_fields,
+                        progress_path=progress_path,
                     )
                     log_flask_memory(f"After enrichment job {job_id}")
                 finally:
@@ -1049,9 +1177,11 @@ def create_app(
                     download_url=f"/api/exposure/download/{output_path.name}",
                     summary=summary,
                     completed_at=time.time(),
+                    _progress_path=None,
                 )
             except Exception as exc:
                 output_path.unlink(missing_ok=True)
+                progress_path.unlink(missing_ok=True)
                 set_job(
                     job_id,
                     status="error",
@@ -1059,6 +1189,7 @@ def create_app(
                     percent=100,
                     error=f"Enrichment failed: {exc}",
                     completed_at=time.time(),
+                    _progress_path=None,
                 )
             finally:
                 cleanup_exposure_runtime()
@@ -1070,10 +1201,20 @@ def create_app(
     @app.route("/api/exposure/progress/<job_id>")
     def exposure_progress(job_id: str):
         with jobs_lock:
-            job = jobs.get(job_id)
+            stored_job = jobs.get(job_id)
 
-        if job is None:
+        if stored_job is None:
             return jsonify({"error": "Job not found."}), 404
+
+        job = dict(stored_job)
+        progress_file = job.get("_progress_path")
+        if job.get("status") in {"queued", "running"} and isinstance(progress_file, str) and progress_file:
+            progress_update = read_progress_snapshot(Path(progress_file))
+            if progress_update is not None:
+                set_job(job_id, **progress_update)
+                job.update(progress_update)
+
+        job.pop("_progress_path", None)
 
         return jsonify(job)
 
@@ -1206,15 +1347,34 @@ def find_upload(upload_dir: Path, upload_id: str) -> Optional[Path]:
 
 
 def preview_csv(csv_path: Path) -> tuple[List[str], List[Dict[str, Any]]]:
-    encoding = detect_csv_encoding(csv_path)
-    frame = pd.read_csv(csv_path, nrows=10, encoding=encoding, encoding_errors="replace")
-    columns = list(frame.columns)
-    rows = [
-        {column: json_safe(value) for column, value in row.items()}
-        for row in frame.to_dict(orient="records")
-    ]
+    if csv_path.stat().st_size == 0:
+        raise ValueError("Uploaded CSV is empty.")
 
-    return columns, rows
+    csv_sql = sql_string(str(csv_path.resolve()))
+    con = duckdb.connect()
+    try:
+        scan_options_sql = resolve_csv_scan_options(con, csv_path)
+        columns = csv_columns(con, csv_path, scan_options_sql=scan_options_sql)
+        if not columns:
+            raise ValueError("Uploaded CSV does not contain any readable columns.")
+
+        cursor = con.execute(f"""
+            SELECT *
+            FROM read_csv_auto({csv_sql}, {scan_options_sql})
+            LIMIT 10;
+        """)
+        rows = [
+            {
+                column: json_safe(value)
+                for column, value in zip(columns, record)
+            }
+            for record in cursor.fetchall()
+        ]
+        return columns, rows
+    except duckdb.Error as exc:
+        raise ValueError(f"Could not parse the uploaded CSV: {exc}") from exc
+    finally:
+        con.close()
 
 
 def resolve_csv_scan_options(con: duckdb.DuckDBPyConnection, csv_path: Path) -> str:
@@ -1343,8 +1503,7 @@ def enrich_exposure_csv(
     progress_callback=None,
 ) -> Dict[str, Any]:
     started_at = time.perf_counter()
-    threads_configured = max(1, min((os.cpu_count() or 1) - 1, 8))
-    query_phase = "Running spatial enrichment and writing CSV"
+    threads_configured = enrichment_thread_count(db_path)
 
     
     last_tick = [time.perf_counter()]
@@ -1359,38 +1518,42 @@ def enrich_exposure_csv(
             flush=True,
         )
 
+    def report_progress(phase: str, percent: int) -> None:
+        if progress_callback:
+            progress_callback(phase, percent)
 
-    if progress_callback:
-        progress_callback("Opening lookup database", 5)
+    report_progress("Opening lookup database", 5)
 
     con = open_db(db_path, read_only=True)
+    report_progress("Configuring DuckDB threads", 15)
     con.execute(f"SET threads = {threads_configured};")
     log_step("Opened database and configured threads")
 
     try:
-        if progress_callback:
-            progress_callback("Inspecting CSV columns", 10)
+        report_progress("Resolving CSV scan settings", 25)
 
         scan_options_sql = resolve_csv_scan_options(con, csv_path)
         log_step("Resolved CSV scan options")
+        report_progress("Reading CSV columns", 35)
         columns = csv_columns(con, csv_path, scan_options_sql=scan_options_sql)
         log_step("Read CSV columns")
         if lat_col not in columns or lon_col not in columns:
             raise ValueError("Selected latitude/longitude columns were not found in the CSV.")
+        report_progress("Loading lookup fields", 45)
         available_fields = lookup_display_columns(con)
         log_step("Loaded lookup display columns")
+        report_progress("Validating requested fields", 55)
         selected_fields = available_fields if appended_fields is None else appended_fields
         invalid_fields = [field for field in selected_fields if field not in available_fields]
         if invalid_fields:
             raise ValueError(f"Unknown appended database field: {invalid_fields[0]}")
+        report_progress("Loading lookup index configuration", 65)
         quadkey_prefix_column, quadkey_prefix_zoom, allow_null_quadkey_prefix = enrichment_quadkey_config(con)
         log_step("Loaded quadkey config")
 
-        if progress_callback:
-            progress_callback(query_phase, 20)
-
         csv_sql = sql_string(str(csv_path.resolve()))
         output_sql = sql_string(str(output_path.resolve()))
+        report_progress("Building enrichment SQL", 75)
         select_sql = enrichment_select_sql(
             csv_sql=csv_sql,
             scan_options_sql=scan_options_sql,
@@ -1405,28 +1568,21 @@ def enrich_exposure_csv(
             allow_null_quadkey_prefix=allow_null_quadkey_prefix,
         )
         log_step("Built enrichment SQL")
+        report_progress("Running spatial enrichment and writing CSV", 85)
 
-        if progress_callback:
-            progress_callback(query_phase, 20)
-
-        log_step("Starting main COPY enrichment query")
         con.execute(f"""
             COPY (
                 {select_sql}
             ) TO {output_sql} (HEADER, DELIMITER ',');
         """)
-        log_step("Finished main COPY enrichment query")
-        if progress_callback:
-            progress_callback(query_phase, 90)
-
-
-        if progress_callback:
-            progress_callback("Finalizing summary", 95)
+        log_step("Finished enrichment COPY")
+        report_progress("Summarizing enriched output", 93)
 
         
         log_step("Starting summary query")
         summary = summarize_enriched_output(con, output_path, selected_fields)
         log_step("Finished summary query")
+        report_progress("Finalizing enrichment summary", 97)
 
         summary["enrichment_elapsed_seconds"] = round(time.perf_counter() - started_at, 3)
         summary["engine_threads"] = int(threads_configured)
@@ -2311,6 +2467,28 @@ def lookup_display_columns(con: duckdb.DuckDBPyConnection) -> List[str]:
         for column_name, data_type in columns
         if not is_internal_lookup_column(str(column_name), str(data_type))
     ]
+
+
+def default_enrichment_fields(
+    available_fields: List[str],
+    preferred_fields: Optional[List[Dict[str, str]]] = None,
+) -> List[str]:
+    preferred_names = [
+        str(item.get("field"))
+        for item in (preferred_fields or [])
+        if item.get("field") in available_fields
+    ]
+    if preferred_names:
+        return preferred_names
+
+    fallback = [
+        field for field in DEFAULT_EXPOSURE_FIELD_CANDIDATES
+        if field in available_fields
+    ]
+    if fallback:
+        return fallback
+
+    return available_fields[: min(len(available_fields), 8)]
 
 
 def preferred_display_fields(con: duckdb.DuckDBPyConnection) -> List[Dict[str, str]]:

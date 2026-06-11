@@ -21,12 +21,17 @@
       if (!response.ok) throw new Error(payload.error || "Could not load database fields");
 
       fields = payload.fields || [];
+      const defaultFields = new Set(payload.default_fields || fields);
       selectedFields.clear();
-      fields.forEach((field) => selectedFields.add(field));
+      fields.forEach((field) => {
+        if (defaultFields.has(field)) {
+          selectedFields.add(field);
+        }
+      });
       controls.innerHTML = fields.length
         ? fields.map((field) => `
             <label class="lookup-field-option">
-              <input type="checkbox" value="${escapeHtml(field)}" checked>
+              <input type="checkbox" value="${escapeHtml(field)}" ${selectedFields.has(field) ? "checked" : ""}>
               <span>${escapeHtml(field)}</span>
             </label>
           `).join("")
