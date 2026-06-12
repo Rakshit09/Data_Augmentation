@@ -7,6 +7,7 @@ from genericpath import exists
 import json
 import math
 import os
+import shutil
 import tempfile
 import subprocess
 import sys
@@ -34,6 +35,12 @@ DEFAULT_DB = "etl_output/building_lookup.duckdb"
 NEAREST_CANDIDATE_LIMIT = 64
 DEFAULT_QUADKEY_PREFIX_ZOOM = 6
 OPTIMIZED_QUADKEY_PREFIX_ZOOM = 14
+DB_STAGE_COPY_MAX_BYTES = int(os.environ.get("OBM_DB_COPY_MAX_BYTES", str(8 * 1024 ** 3)))
+DB_STAGE_COPY_CHUNK_BYTES = 32 * 1024 * 1024
+DB_STAGE_MAX_QUADKEY_TILES = 16384
+DB_STAGE_RANGES_PER_INSERT = 128
+DB_STAGE_CACHE_MAX_FILES = 2
+DB_STAGE_TEMP_MAX_AGE_SECONDS = 60 * 60
 MAX_RETAINED_EXPOSURE_JOBS = 1
 MAX_RETAINED_EXPOSURE_UPLOADS = 1
 MAX_RETAINED_EXPOSURE_RESULTS = 1
@@ -311,6 +318,9 @@ def _compute_covering_quadkeys(
 
 
 def is_remote_storage_path(path_value: Path | str) -> bool:
+    if os.environ.get("OBM_FORCE_REMOTE_DB", "").strip().lower() in {"1", "true", "yes"}:
+        return True
+
     path = Path(path_value).expanduser()
     raw_path = str(path)
     if raw_path.startswith("\\\\") or raw_path.upper().startswith("J:"):
@@ -1585,6 +1595,231 @@ def enrichment_quadkey_config(con: duckdb.DuckDBPyConnection) -> tuple[str, int,
     return prefix_column, zoom, has_null_prefixes
 
 
+def _quadkey_from_int(value: int, length: int) -> str:
+    digits: List[str] = []
+    for _ in range(length):
+        digits.append(str(value & 3))
+        value >>= 2
+    return "".join(reversed(digits))
+
+
+def merge_quadkey_prefix_ranges(quadkeys: Set[str]) -> List[Tuple[str, Optional[str]]]:
+    """Collapse same-length quadkeys into sorted [start, end) prefix ranges.
+
+    Quadkey digits are 0-3 and compare lexicographically, so every longer
+    prefix that starts with quadkey q satisfies q <= prefix < successor(q),
+    where successor(q) is q incremented as a base-4 number. An end of None
+    means the range is unbounded above (q was the maximum quadkey).
+    """
+    length = len(next(iter(quadkeys)))
+    values = sorted(int(quadkey, 4) for quadkey in quadkeys)
+
+    runs: List[Tuple[int, int]] = []
+    run_start = run_end = values[0]
+    for value in values[1:]:
+        if value == run_end + 1:
+            run_end = value
+            continue
+        runs.append((run_start, run_end))
+        run_start = run_end = value
+    runs.append((run_start, run_end))
+
+    max_value = (1 << (2 * length)) - 1
+    return [
+        (
+            _quadkey_from_int(start, length),
+            None if end >= max_value else _quadkey_from_int(end + 1, length),
+        )
+        for start, end in runs
+    ]
+
+
+def copy_remote_db_to_cache(
+    source: Path,
+    source_stat: os.stat_result,
+    cache_dir: Path,
+    report_progress,
+) -> Path:
+    cache_name = f"{source.stem}_{source_stat.st_size}_{int(source_stat.st_mtime)}.duckdb"
+    target = cache_dir / cache_name
+
+    if target.is_file() and target.stat().st_size == source_stat.st_size:
+        report_progress("Reusing locally cached lookup database", 70)
+        return target
+
+    for stale_tmp in cache_dir.glob("*.tmp"):
+        stale_tmp.unlink(missing_ok=True)
+
+    cached = sorted(
+        (path for path in cache_dir.glob("*.duckdb") if path.is_file()),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for old in cached[max(DB_STAGE_CACHE_MAX_FILES - 1, 0):]:
+        old.unlink(missing_ok=True)
+
+    total_mb = max(source_stat.st_size // (1024 * 1024), 1)
+    tmp_target = target.with_name(target.name + ".tmp")
+    copied = 0
+    report_progress("Copying lookup database to local cache", 8)
+    with source.open("rb") as src_handle, tmp_target.open("wb") as dst_handle:
+        while True:
+            chunk = src_handle.read(DB_STAGE_COPY_CHUNK_BYTES)
+            if not chunk:
+                break
+            dst_handle.write(chunk)
+            copied += len(chunk)
+            fraction = min(copied / max(source_stat.st_size, 1), 1.0)
+            report_progress(
+                f"Copying lookup database to local cache ({copied // (1024 * 1024)} / {total_mb} MB)",
+                8 + int(62 * fraction),
+            )
+
+    os.replace(tmp_target, target)
+    return target
+
+
+def extract_remote_db_subset(
+    source: Path,
+    csv_path: Path,
+    scan_options_sql: str,
+    lat_col: str,
+    lon_col: str,
+    report_progress,
+) -> Path:
+    report_progress("Reading CSV coordinates for staging", 8)
+    csv_sql = sql_string(str(csv_path.resolve()))
+    mem_con = duckdb.connect()
+    try:
+        coordinate_rows = mem_con.execute(f"""
+            SELECT
+                TRY_CAST({sql_identifier(lon_col)} AS DOUBLE),
+                TRY_CAST({sql_identifier(lat_col)} AS DOUBLE)
+            FROM read_csv_auto({csv_sql}, {scan_options_sql});
+        """).fetchall()
+    finally:
+        mem_con.close()
+
+    report_progress("Reading lookup index configuration", 10)
+    remote_con = open_db(str(source), read_only=True)
+    try:
+        prefix_column, prefix_zoom, has_null_prefixes = enrichment_quadkey_config(remote_con)
+    finally:
+        remote_con.close()
+
+    quadkeys = _compute_covering_quadkeys(
+        [row[0] for row in coordinate_rows],
+        [row[1] for row in coordinate_rows],
+        prefix_zoom,
+    )
+    if not quadkeys:
+        raise ValueError("The CSV does not contain any valid coordinates to stage against.")
+
+    zoom = prefix_zoom
+    while zoom > 1 and len(quadkeys) > DB_STAGE_MAX_QUADKEY_TILES:
+        zoom -= 1
+        quadkeys = {quadkey[:zoom] for quadkey in quadkeys}
+
+    prefix_ranges = merge_quadkey_prefix_ranges(quadkeys)
+
+    stage_dir = local_runtime_dir("duckdb_db_stage")
+    now = time.time()
+    for stale in stage_dir.glob("stage_*"):
+        try:
+            if now - stale.stat().st_mtime > DB_STAGE_TEMP_MAX_AGE_SECONDS:
+                stale.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+    staged = stage_dir / f"stage_{uuid.uuid4().hex}.duckdb"
+    con = duckdb.connect(str(staged))
+    try:
+        con.execute("LOAD spatial;")
+        con.execute(f"SET temp_directory = {sql_string(str(local_runtime_dir('duckdb_temp').resolve()))};")
+        con.execute(f"ATTACH {sql_string(str(source))} AS src_db (READ_ONLY);")
+        con.execute("CREATE TABLE buildings AS SELECT * FROM src_db.buildings LIMIT 0;")
+
+        prefix_sql = sql_identifier(prefix_column)
+        range_batches = [
+            prefix_ranges[batch_start:batch_start + DB_STAGE_RANGES_PER_INSERT]
+            for batch_start in range(0, len(prefix_ranges), DB_STAGE_RANGES_PER_INSERT)
+        ]
+        total_steps = len(range_batches) + (1 if has_null_prefixes else 0)
+        for index, batch in enumerate(range_batches):
+            predicates = []
+            for range_start, range_end in batch:
+                predicate = f"b.{prefix_sql} >= {sql_string(range_start)}"
+                if range_end is not None:
+                    predicate += f" AND b.{prefix_sql} < {sql_string(range_end)}"
+                predicates.append(f"({predicate})")
+            con.execute(
+                f"INSERT INTO buildings SELECT * FROM src_db.buildings b WHERE {' OR '.join(predicates)};"
+            )
+            report_progress(
+                f"Extracting matching buildings to local disk ({index + 1}/{total_steps})",
+                12 + int(58 * (index + 1) / max(total_steps, 1)),
+            )
+
+        if has_null_prefixes:
+            con.execute(f"INSERT INTO buildings SELECT * FROM src_db.buildings b WHERE b.{prefix_sql} IS NULL;")
+            report_progress(
+                f"Extracting matching buildings to local disk ({total_steps}/{total_steps})",
+                70,
+            )
+
+        try:
+            con.execute("CREATE TABLE building_display_fields AS SELECT * FROM src_db.building_display_fields;")
+        except duckdb.Error:
+            pass
+
+        con.execute("DETACH src_db;")
+    except Exception:
+        con.close()
+        staged.unlink(missing_ok=True)
+        Path(str(staged) + ".wal").unlink(missing_ok=True)
+        raise
+
+    con.close()
+    return staged
+
+
+def stage_remote_lookup_database(
+    db_path: str,
+    csv_path: Path,
+    scan_options_sql: str,
+    lat_col: str,
+    lon_col: str,
+    report_progress,
+) -> Tuple[str, str, Optional[Path]]:
+    """Stage a high-latency network DuckDB onto fast local disk.
+
+    Random spatial reads over SMB pay the network round trip per page, so the
+    only fast option is to move the bytes once with sequential I/O and query
+    locally. Small databases are copied whole and cached by name/size/mtime;
+    larger ones get only the quadkey ranges covering the CSV extent extracted
+    (the buildings table is sorted by quadkey prefix, so constant range
+    predicates prune row groups via zonemaps).
+    """
+    source = Path(db_path).expanduser().resolve()
+    source_stat = source.stat()
+    cache_dir = local_runtime_dir("duckdb_db_cache")
+    free_bytes = shutil.disk_usage(cache_dir).free
+
+    if source_stat.st_size <= DB_STAGE_COPY_MAX_BYTES and source_stat.st_size * 1.2 < free_bytes:
+        staged = copy_remote_db_to_cache(source, source_stat, cache_dir, report_progress)
+        return str(staged), "file_copy", None
+
+    staged = extract_remote_db_subset(
+        source,
+        csv_path,
+        scan_options_sql,
+        lat_col,
+        lon_col,
+        report_progress,
+    )
+    return str(staged), "subset_extract", staged
+
+
 def enrich_exposure_csv(
     db_path: str,
     csv_path: Path,
@@ -1597,9 +1832,7 @@ def enrich_exposure_csv(
     progress_callback=None,
 ) -> Dict[str, Any]:
     started_at = time.perf_counter()
-    threads_configured = enrichment_thread_count(db_path)
 
-    
     last_tick = [time.perf_counter()]
 
     def log_step(label: str) -> None:
@@ -1616,43 +1849,66 @@ def enrich_exposure_csv(
         if progress_callback:
             progress_callback(phase, percent)
 
-    report_progress("Opening lookup database", 5)
+    report_progress("Resolving CSV scan settings", 4)
+    csv_con = duckdb.connect()
+    try:
+        scan_options_sql = resolve_csv_scan_options(csv_con, csv_path)
+        log_step("Resolved CSV scan options")
+        report_progress("Reading CSV columns", 6)
+        columns = csv_columns(csv_con, csv_path, scan_options_sql=scan_options_sql)
+        log_step("Read CSV columns")
+    finally:
+        csv_con.close()
 
-    con = open_db(db_path, read_only=True)
-    report_progress("Configuring DuckDB threads", 15)
+    if lat_col not in columns or lon_col not in columns:
+        raise ValueError("Selected latitude/longitude columns were not found in the CSV.")
+
+    use_remote = is_remote_storage_path(db_path)
+    effective_db_path = db_path
+    staging_mode = "none"
+    staged_temp_db: Optional[Path] = None
+
+    if use_remote:
+        try:
+            effective_db_path, staging_mode, staged_temp_db = stage_remote_lookup_database(
+                db_path=db_path,
+                csv_path=csv_path,
+                scan_options_sql=scan_options_sql,
+                lat_col=lat_col,
+                lon_col=lon_col,
+                report_progress=report_progress,
+            )
+            log_step(f"Staged remote lookup database locally ({staging_mode})")
+        except Exception as exc:
+            staging_mode = "row_by_row_fallback"
+            print(
+                f"[STAGING] Local staging failed ({exc}); falling back to row-by-row remote enrichment.",
+                flush=True,
+            )
+
+    threads_configured = enrichment_thread_count(effective_db_path)
+    report_progress("Opening lookup database", 72)
+    con = open_db(effective_db_path, read_only=True)
     con.execute(f"SET threads = {threads_configured};")
     log_step("Opened database and configured threads")
 
     try:
-        report_progress("Resolving CSV scan settings", 25)
-
-        scan_options_sql = resolve_csv_scan_options(con, csv_path)
-        log_step("Resolved CSV scan options")
-        report_progress("Reading CSV columns", 35)
-        columns = csv_columns(con, csv_path, scan_options_sql=scan_options_sql)
-        log_step("Read CSV columns")
-        if lat_col not in columns or lon_col not in columns:
-            raise ValueError("Selected latitude/longitude columns were not found in the CSV.")
-        report_progress("Loading lookup fields", 45)
+        report_progress("Loading lookup fields", 74)
         available_fields = lookup_display_columns(con)
         log_step("Loaded lookup display columns")
-        report_progress("Validating requested fields", 55)
         selected_fields = available_fields if appended_fields is None else appended_fields
         invalid_fields = [field for field in selected_fields if field not in available_fields]
         if invalid_fields:
             raise ValueError(f"Unknown appended database field: {invalid_fields[0]}")
-        report_progress("Loading lookup index configuration", 65)
+        report_progress("Loading lookup index configuration", 76)
         quadkey_prefix_column, quadkey_prefix_zoom, allow_null_quadkey_prefix = enrichment_quadkey_config(con)
         log_step("Loaded quadkey config")
 
         csv_sql = sql_string(str(csv_path.resolve()))
         output_sql = sql_string(str(output_path.resolve()))
-        report_progress("Building enrichment SQL", 75)
+        report_progress("Building enrichment SQL", 78)
 
-        use_remote = is_remote_storage_path(db_path)
-
-
-        if use_remote:
+        if staging_mode == "row_by_row_fallback":
             exposure_df = con.execute(
                 f"SELECT * FROM read_csv_auto({csv_sql}, {scan_options_sql});"
             ).fetchdf()
@@ -1738,13 +1994,17 @@ def enrich_exposure_csv(
 
         summary["enrichment_elapsed_seconds"] = round(time.perf_counter() - started_at, 3)
         summary["engine_threads"] = int(threads_configured)
-        summary["chunked_processing"] = use_remote
+        summary["chunked_processing"] = staging_mode == "row_by_row_fallback"
+        summary["remote_staging"] = staging_mode
         summary["lookup_quadkey_prefix_column"] = quadkey_prefix_column
         summary["lookup_quadkey_prefix_zoom"] = int(quadkey_prefix_zoom)
         summary["enrichment_mode"] = mode
         return summary
     finally:
         con.close()
+        if staged_temp_db is not None:
+            staged_temp_db.unlink(missing_ok=True)
+            Path(str(staged_temp_db) + ".wal").unlink(missing_ok=True)
 
 
 def summarize_enriched_output(
