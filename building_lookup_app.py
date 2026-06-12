@@ -259,6 +259,57 @@ def local_runtime_dir(name: str) -> Path:
     return runtime_dir
 
 
+def _tile_xy(lon: float, lat: float, zoom: int) -> Tuple[int, int]:
+    """Convert lon/lat to slippy-map tile x/y at the given zoom level."""
+    n = 1 << zoom
+    lat_rad = math.radians(min(max(lat, -85.05112878), 85.05112878))
+    x = int(min(max((lon + 180.0) / 360.0 * n, 0), n - 1))
+    y = int(min(max(
+        (0.5 - math.log(math.tan(lat_rad) + 1.0 / math.cos(lat_rad)) / (2.0 * math.pi)) * n,
+        0,
+    ), n - 1))
+    return x, y
+
+
+def _tile_to_quadkey(x: int, y: int, zoom: int) -> str:
+    """Convert tile x/y/zoom to a quadkey string."""
+    chars: List[str] = []
+    for level in range(zoom, 0, -1):
+        digit = 0
+        mask = 1 << (level - 1)
+        if x & mask:
+            digit += 1
+        if y & mask:
+            digit += 2
+        chars.append(str(digit))
+    return "".join(chars)
+
+
+def _compute_covering_quadkeys(
+    lons: Any,
+    lats: Any,
+    zoom: int,
+) -> Set[str]:
+    """Compute the set of quadkey prefixes covering all valid points plus their 8 neighbours."""
+    quadkeys: Set[str] = set()
+    max_tile = (1 << zoom) - 1
+    for lon_raw, lat_raw in zip(lons, lats):
+        try:
+            lon_f = float(lon_raw)
+            lat_f = float(lat_raw)
+        except (TypeError, ValueError):
+            continue
+        if not (-180.0 <= lon_f <= 180.0 and -90.0 <= lat_f <= 90.0):
+            continue
+        tx, ty = _tile_xy(lon_f, lat_f, zoom)
+        for dx in range(-1, 2):
+            for dy in range(-1, 2):
+                nx, ny = tx + dx, ty + dy
+                if 0 <= nx <= max_tile and 0 <= ny <= max_tile:
+                    quadkeys.add(_tile_to_quadkey(nx, ny, zoom))
+    return quadkeys
+
+
 def is_remote_storage_path(path_value: Path | str) -> bool:
     path = Path(path_value).expanduser()
     raw_path = str(path)
@@ -285,12 +336,31 @@ def is_remote_storage_path(path_value: Path | str) -> bool:
 def enrichment_thread_count(db_path: str) -> int:
     cpu_count = max(1, os.cpu_count() or 1)
 
-    #if is_remote_storage_path(db_path):
+    if is_remote_storage_path(db_path):
         # Single thread for network storage to avoid SMB I/O congestion
-    #    return 2
+        return 1
 
     return max(1, cpu_count - 1)
 
+
+def _point_quadkey_filter(
+    lon: float,
+    lat: float,
+    prefix_column: str,
+    zoom: int,
+    allow_null_prefix: bool,
+) -> str:
+    qks = _compute_covering_quadkeys([lon], [lat], zoom)
+    if not qks:
+        return "FALSE"
+
+    qk_sql = ", ".join(sql_string(qk) for qk in sorted(qks))
+    col_sql = sql_identifier(prefix_column)
+
+    if allow_null_prefix:
+        return f"(b.{col_sql} IN ({qk_sql}) OR b.{col_sql} IS NULL)"
+
+    return f"b.{col_sql} IN ({qk_sql})"
 
 
 def run_enrichment_worker(
@@ -1579,49 +1649,62 @@ def enrich_exposure_csv(
         output_sql = sql_string(str(output_path.resolve()))
         report_progress("Building enrichment SQL", 75)
 
-        use_chunked = is_remote_storage_path(db_path)
+        use_remote = is_remote_storage_path(db_path)
 
-        if use_chunked:
+
+        if use_remote:
             exposure_df = con.execute(
                 f"SELECT * FROM read_csv_auto({csv_sql}, {scan_options_sql});"
             ).fetchdf()
+
             total_rows = len(exposure_df)
-            log_step(f"Loaded CSV for row-by-row enrichment: {total_rows} rows")
-            report_progress("Running spatial enrichment (row-by-row)", 78)
+            log_step(f"Loaded CSV for row-by-row remote enrichment: {total_rows} rows")
+            report_progress("Running spatial enrichment row-by-row", 78)
 
             enriched_rows: List[Dict[str, Any]] = []
+
             for row_idx in range(total_rows):
                 if row_idx % 5 == 0 or row_idx == total_rows - 1:
-                    chunk_progress = 78 + int(12 * (row_idx + 1) / total_rows)
-                    report_progress(
-                        f"Enriching row {row_idx + 1} of {total_rows}",
-                        chunk_progress,
-                    )
+                    progress = 78 + int(12 * (row_idx + 1) / max(total_rows, 1))
+                    report_progress(f"Enriching row {row_idx + 1} of {total_rows}", progress)
 
                 row_data = exposure_df.iloc[row_idx]
                 lon_val = row_data.get(lon_col)
                 lat_val = row_data.get(lat_col)
 
-                lookup_result = lookup_exposure_row(con, lon_val, lat_val, mode, max_distance_m)
+                lookup_result = lookup_exposure_row(
+                    con=con,
+                    lon=lon_val,
+                    lat=lat_val,
+                    mode=mode,
+                    radius_m=max_distance_m,
+                    quadkey_prefix_column=quadkey_prefix_column,
+                    quadkey_prefix_zoom=quadkey_prefix_zoom,
+                    allow_null_quadkey_prefix=allow_null_quadkey_prefix,
+                )
 
                 enriched_row: Dict[str, Any] = {}
+
                 for col in columns:
                     enriched_row[col] = row_data.get(col)
+
                 enriched_row["coordinate_valid"] = lookup_result["coordinate_valid"]
                 enriched_row["building_match_type"] = lookup_result["building_match_type"]
                 enriched_row["building_distance_m"] = lookup_result["building_distance_m"]
                 enriched_row["building_confidence"] = lookup_result["building_confidence"]
+
                 for field in selected_fields:
                     enriched_row[f"building_{field}"] = lookup_result.get(f"building_{field}")
 
                 enriched_rows.append(enriched_row)
 
                 if row_idx % 20 == 19:
-                    log_step(f"Processed rows {row_idx - 18}–{row_idx + 1}")
+                    log_step(f"Processed rows {row_idx - 18}-{row_idx + 1}")
 
             result_df = pd.DataFrame(enriched_rows)
             result_df.to_csv(output_path, index=False)
-            log_step("Finished row-by-row enrichment and wrote CSV")
+            log_step("Finished row-by-row remote enrichment and wrote CSV")
+
         else:
             select_sql = enrichment_select_sql(
                 csv_sql=csv_sql,
@@ -1655,7 +1738,7 @@ def enrich_exposure_csv(
 
         summary["enrichment_elapsed_seconds"] = round(time.perf_counter() - started_at, 3)
         summary["engine_threads"] = int(threads_configured)
-        summary["chunked_processing"] = use_chunked
+        summary["chunked_processing"] = use_remote
         summary["lookup_quadkey_prefix_column"] = quadkey_prefix_column
         summary["lookup_quadkey_prefix_zoom"] = int(quadkey_prefix_zoom)
         summary["enrichment_mode"] = mode
@@ -1807,12 +1890,16 @@ def empty_lookup_result() -> Dict[str, Any]:
     return result
 
 
+
 def lookup_exposure_row(
     con: duckdb.DuckDBPyConnection,
     lon: Any,
     lat: Any,
     mode: str,
     radius_m: float,
+    quadkey_prefix_column: str,
+    quadkey_prefix_zoom: int,
+    allow_null_quadkey_prefix: bool,
 ) -> Dict[str, Any]:
     try:
         lon_value = float(lon)
@@ -1823,11 +1910,19 @@ def lookup_exposure_row(
     if not (-180 <= lon_value <= 180 and -90 <= lat_value <= 90):
         return empty_lookup_result()
 
+    qk_filter = _point_quadkey_filter(
+        lon_value,
+        lat_value,
+        quadkey_prefix_column,
+        quadkey_prefix_zoom,
+        allow_null_quadkey_prefix,
+    )
+
     if mode == "centroid":
-        row = lookup_nearest_centroid(con, lon_value, lat_value, radius_m)
+        row = lookup_nearest_centroid(con, lon_value, lat_value, radius_m, qk_filter)
         return row_to_enrichment_result(row, "nearest_centroid" if row else "none", row[0] if row else None)
 
-    inside = lookup_inside_polygon(con, lon_value, lat_value)
+    inside = lookup_inside_polygon(con, lon_value, lat_value, qk_filter)
     if inside:
         return row_to_enrichment_result(inside, "inside_polygon", 0.0)
 
@@ -1836,20 +1931,17 @@ def lookup_exposure_row(
         result["coordinate_valid"] = True
         return result
 
-    candidate_radius_m = max(radius_m * 4.0, radius_m + 150.0)
-    if lookup_nearest_centroid(con, lon_value, lat_value, candidate_radius_m) is None:
-        result = empty_lookup_result()
-        result["coordinate_valid"] = True
-        return result
-
-    nearest = lookup_nearest_polygon(con, lon_value, lat_value, radius_m)
+    nearest = lookup_nearest_polygon(con, lon_value, lat_value, radius_m, qk_filter)
     return row_to_enrichment_result(nearest, "nearest_polygon" if nearest else "none", nearest[0] if nearest else None)
+
+
 
 
 def lookup_inside_polygon(
     con: duckdb.DuckDBPyConnection,
     lon: float,
     lat: float,
+    qk_filter: str,
 ) -> Optional[tuple]:
     return con.execute(f"""
         WITH point AS (
@@ -1859,7 +1951,8 @@ def lookup_inside_polygon(
             {b_select("b")}
         FROM buildings b, point
         WHERE
-            ? BETWEEN b.bbox_xmin AND b.bbox_xmax
+            {qk_filter}
+            AND ? BETWEEN b.bbox_xmin AND b.bbox_xmax
             AND ? BETWEEN b.bbox_ymin AND b.bbox_ymax
             AND ST_Intersects(b.geom, point.pt)
         ORDER BY b.footprint_area_m2 ASC NULLS LAST
@@ -1867,11 +1960,14 @@ def lookup_inside_polygon(
     """, [lon, lat, lon, lat]).fetchone()
 
 
+
+
 def lookup_nearest_centroid(
     con: duckdb.DuckDBPyConnection,
     lon: float,
     lat: float,
     radius_m: float,
+    qk_filter: str,
 ) -> Optional[tuple]:
     lat_delta = radius_m / 111_320.0
     lon_delta = radius_m / (111_320.0 * max(math.cos(math.radians(lat)), 0.2))
@@ -1885,7 +1981,8 @@ def lookup_nearest_centroid(
             {b_select("b")}
         FROM buildings b, point
         WHERE
-            b.centroid_lon BETWEEN ? AND ?
+            {qk_filter}
+            AND b.centroid_lon BETWEEN ? AND ?
             AND b.centroid_lat BETWEEN ? AND ?
             AND ST_Distance_Sphere(ST_Point(b.centroid_lon, b.centroid_lat), point.pt) <= ?
         ORDER BY distance_m
@@ -1901,11 +1998,13 @@ def lookup_nearest_centroid(
     ]).fetchone()
 
 
+
 def lookup_nearest_polygon(
     con: duckdb.DuckDBPyConnection,
     lon: float,
     lat: float,
     radius_m: float,
+    qk_filter: str,
 ) -> Optional[tuple]:
     candidate_radius_m = max(radius_m * 4.0, radius_m + 150.0)
     candidate_lat_delta = candidate_radius_m / 111_320.0
@@ -1923,11 +2022,12 @@ def lookup_nearest_polygon(
                 b.*
             FROM buildings b, point
             WHERE
-                b.centroid_lon BETWEEN ? AND ?
+                {qk_filter}
+                AND b.centroid_lon BETWEEN ? AND ?
                 AND b.centroid_lat BETWEEN ? AND ?
                 AND ST_Distance_Sphere(ST_Point(b.centroid_lon, b.centroid_lat), point.pt) <= ?
             ORDER BY centroid_distance_m
-            LIMIT 500
+            LIMIT 200
         )
         SELECT
             ST_Distance(b.geom_3035, point.pt_m) AS distance_m,
