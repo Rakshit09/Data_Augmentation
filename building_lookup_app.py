@@ -338,7 +338,7 @@ def enrichment_thread_count(db_path: str) -> int:
 
     if is_remote_storage_path(db_path):
         # Single thread for network storage to avoid SMB I/O congestion
-        return 1
+        return 6
 
     return max(1, cpu_count - 1)
 

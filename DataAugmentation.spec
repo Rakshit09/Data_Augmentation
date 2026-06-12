@@ -41,7 +41,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='DataAugmentation_v1.8',
+    name='DataAugmentation_v1.9',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -61,5 +61,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='DataAugmentation_v1.8',
+    name='DataAugmentation_v1.9',
 )
