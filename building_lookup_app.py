@@ -220,11 +220,12 @@ def write_progress_snapshot(progress_path: Path, phase: str, percent: int) -> No
         "percent": max(0, min(99, int(percent))),
         "updated_at": time.time(),
     }
-    temp_path = progress_path.with_name(f"{progress_path.name}.tmp")
     progress_path.parent.mkdir(parents=True, exist_ok=True)
-    with temp_path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=True, default=json_safe)
-    temp_path.replace(progress_path)
+    try:
+        with progress_path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=True, default=json_safe)
+    except (PermissionError, OSError):
+        pass
 
 
 def read_progress_snapshot(progress_path: Path) -> Optional[Dict[str, Any]]:
@@ -280,12 +281,16 @@ def is_remote_storage_path(path_value: Path | str) -> bool:
         return False
 
 
+
 def enrichment_thread_count(db_path: str) -> int:
-    max_threads = max(1, os.cpu_count() or 1)
-    if is_remote_storage_path(db_path):
-        print("Remote storage detected for the database path. Limiting enrichment worker to a single thread to reduce potential issues with concurrent file access.")
-        return min(1, 2)
-    return max_threads
+    cpu_count = max(1, os.cpu_count() or 1)
+
+    #if is_remote_storage_path(db_path):
+        # Single thread for network storage to avoid SMB I/O congestion
+    #    return 2
+
+    return max(1, cpu_count - 1)
+
 
 
 def run_enrichment_worker(
@@ -678,7 +683,6 @@ def prepare_index(parquet_path: str, db_path: str, force: bool = False, threads:
     con.close()
     print(f"Ready: {db_path} ({row_count:,} buildings)")
 
-
 def create_app(
     db_path: str = DEFAULT_DB,
     nearest_radius_m: float = 50.0,
@@ -690,8 +694,8 @@ def create_app(
     app.config["PARQUET_PATH"] = DEFAULT_PARQUET
     app.config["NEAREST_RADIUS_M"] = float(nearest_radius_m)
     app.config["GEOCODER_USER_AGENT"] = "OBMBuildingLookup/0.1 local-development"
-    app.config["UPLOAD_DIR"] = upload_dir or str(local_runtime_dir("app_uploads"))
-    app.config["RESULT_DIR"] = result_dir or str(local_runtime_dir("app_results"))
+    app.config["UPLOAD_DIR"] = upload_dir or str(Path(__file__).resolve().parent / "etl_output" / "app_uploads")
+    app.config["RESULT_DIR"] = result_dir or str(Path(__file__).resolve().parent / "etl_output" / "app_results")
     geocode_cache: Dict[str, Any] = {}
     last_geocode_at = [0.0]
     jobs: Dict[str, Dict[str, Any]] = {}
@@ -1574,28 +1578,73 @@ def enrich_exposure_csv(
         csv_sql = sql_string(str(csv_path.resolve()))
         output_sql = sql_string(str(output_path.resolve()))
         report_progress("Building enrichment SQL", 75)
-        select_sql = enrichment_select_sql(
-            csv_sql=csv_sql,
-            scan_options_sql=scan_options_sql,
-            lat_sql=sql_identifier(lat_col),
-            lon_sql=sql_identifier(lon_col),
-            mode=mode,
-            radius_sql=str(float(max_distance_m)),
-            original_cols_sql=exposure_select(columns),
-            appended_fields=selected_fields,
-            quadkey_prefix_column=quadkey_prefix_column,
-            quadkey_prefix_zoom=quadkey_prefix_zoom,
-            allow_null_quadkey_prefix=allow_null_quadkey_prefix,
-        )
-        log_step("Built enrichment SQL")
-        report_progress("Running spatial enrichment and writing CSV", 85)
 
-        con.execute(f"""
-            COPY (
-                {select_sql}
-            ) TO {output_sql} (HEADER, DELIMITER ',');
-        """)
-        log_step("Finished enrichment COPY")
+        use_chunked = is_remote_storage_path(db_path)
+
+        if use_chunked:
+            exposure_df = con.execute(
+                f"SELECT * FROM read_csv_auto({csv_sql}, {scan_options_sql});"
+            ).fetchdf()
+            total_rows = len(exposure_df)
+            log_step(f"Loaded CSV for row-by-row enrichment: {total_rows} rows")
+            report_progress("Running spatial enrichment (row-by-row)", 78)
+
+            enriched_rows: List[Dict[str, Any]] = []
+            for row_idx in range(total_rows):
+                if row_idx % 5 == 0 or row_idx == total_rows - 1:
+                    chunk_progress = 78 + int(12 * (row_idx + 1) / total_rows)
+                    report_progress(
+                        f"Enriching row {row_idx + 1} of {total_rows}",
+                        chunk_progress,
+                    )
+
+                row_data = exposure_df.iloc[row_idx]
+                lon_val = row_data.get(lon_col)
+                lat_val = row_data.get(lat_col)
+
+                lookup_result = lookup_exposure_row(con, lon_val, lat_val, mode, max_distance_m)
+
+                enriched_row: Dict[str, Any] = {}
+                for col in columns:
+                    enriched_row[col] = row_data.get(col)
+                enriched_row["coordinate_valid"] = lookup_result["coordinate_valid"]
+                enriched_row["building_match_type"] = lookup_result["building_match_type"]
+                enriched_row["building_distance_m"] = lookup_result["building_distance_m"]
+                enriched_row["building_confidence"] = lookup_result["building_confidence"]
+                for field in selected_fields:
+                    enriched_row[f"building_{field}"] = lookup_result.get(f"building_{field}")
+
+                enriched_rows.append(enriched_row)
+
+                if row_idx % 20 == 19:
+                    log_step(f"Processed rows {row_idx - 18}–{row_idx + 1}")
+
+            result_df = pd.DataFrame(enriched_rows)
+            result_df.to_csv(output_path, index=False)
+            log_step("Finished row-by-row enrichment and wrote CSV")
+        else:
+            select_sql = enrichment_select_sql(
+                csv_sql=csv_sql,
+                scan_options_sql=scan_options_sql,
+                lat_sql=sql_identifier(lat_col),
+                lon_sql=sql_identifier(lon_col),
+                mode=mode,
+                radius_sql=str(float(max_distance_m)),
+                original_cols_sql=exposure_select(columns),
+                appended_fields=selected_fields,
+                quadkey_prefix_column=quadkey_prefix_column,
+                quadkey_prefix_zoom=quadkey_prefix_zoom,
+                allow_null_quadkey_prefix=allow_null_quadkey_prefix,
+            )
+            log_step("Built enrichment SQL")
+            report_progress("Running spatial enrichment and writing CSV", 85)
+
+            con.execute(f"""
+                COPY (
+                    {select_sql}
+                ) TO {output_sql} (HEADER, DELIMITER ',');
+            """)
+            log_step("Finished enrichment COPY")
         report_progress("Summarizing enriched output", 93)
 
         
@@ -1606,6 +1655,7 @@ def enrich_exposure_csv(
 
         summary["enrichment_elapsed_seconds"] = round(time.perf_counter() - started_at, 3)
         summary["engine_threads"] = int(threads_configured)
+        summary["chunked_processing"] = use_chunked
         summary["lookup_quadkey_prefix_column"] = quadkey_prefix_column
         summary["lookup_quadkey_prefix_zoom"] = int(quadkey_prefix_zoom)
         summary["enrichment_mode"] = mode
@@ -2089,6 +2139,8 @@ def enrichment_select_sql(
     quadkey_prefix_column: str = "quadkey_prefix_6",
     quadkey_prefix_zoom: int = DEFAULT_QUADKEY_PREFIX_ZOOM,
     allow_null_quadkey_prefix: bool = True,
+    row_limit: Optional[int] = None,
+    row_offset: int = 0,
 ) -> str:
     tile_count = 1 << quadkey_prefix_zoom
     tile_count_sql = str(tile_count)
@@ -2159,12 +2211,17 @@ def enrichment_select_sql(
         )
         """
 
+    limit_offset_clause = ""
+    if row_limit is not None:
+        limit_offset_clause = f"LIMIT {int(row_limit)} OFFSET {int(row_offset)}"
+
     exposure_ctes = f"""
         WITH exposure_raw AS MATERIALIZED (
             SELECT
                 ROW_NUMBER() OVER () AS __exposure_row_id,
                 *
             FROM read_csv_auto({csv_sql}, {scan_options_sql})
+            {limit_offset_clause}
         ),
         exposure_parsed AS MATERIALIZED (
             SELECT
