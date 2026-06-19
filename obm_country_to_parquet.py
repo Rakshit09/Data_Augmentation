@@ -83,8 +83,8 @@ class ETLConfig:
 
     # DuckDB settings
     duckdb_file: str = "./etl_output/work_obm.duckdb"
-    threads: int = 8
-    memory_limit: str = "24GB"
+    threads: int = 4
+    memory_limit: str = "12GB"
     temp_directory: str = "./etl_output/duckdb_temp"
 
     # Output
@@ -100,6 +100,7 @@ class ETLConfig:
     sample_only: bool = False
     sample_limit: int = 100_000
     obm_quadkey_zoom: int = 6
+    chunk_size: int = 2  # Number of quadkey files to process per batch
 
     # Optional local boundary file (shapefile .zip or .shp, or GeoPackage .gpkg/.zip).
     # When set, the bkg_boundary_zip_url download is skipped.
@@ -623,219 +624,279 @@ class OpenBuildingMapCountryETL:
     def _extract_clean_parquet(self, geom_expr: str):
         logger.info("Extracting and enriching country buildings to Parquet")
 
-        output_path = Path(self.cfg.output_parquet).as_posix().replace("'", "''")
-        obm_paths_sql = self._duckdb_string_list(self._obm_input_paths())
+        output_path = Path(self.cfg.output_parquet)
+        obm_paths = self._obm_input_paths()
 
-        sample_limit_sql = ""
-        if self.cfg.sample_only:
-            sample_limit_sql = f"LIMIT {int(self.cfg.sample_limit)}"
+        # Process in chunks to avoid OOM on large countries
+        chunk_size = self.cfg.chunk_size
+        chunks = [obm_paths[i:i + chunk_size] for i in range(0, len(obm_paths), chunk_size)]
+        chunk_dir = Path(self.cfg.temp_directory) / "chunks"
+        chunk_dir.mkdir(parents=True, exist_ok=True)
 
-        query = f"""
-        COPY (
-            WITH candidates AS (
-                SELECT
-                    id,
-                    source,
-                    relation_id,
-                    quadkey,
-                    last_update,
-                    occupancy,
-                    height,
-                    TRY_CAST(floorspace AS DOUBLE) AS floorspace_obm_m2,
-                    {geom_expr} AS geom,
-                    bbox
-                FROM read_parquet(
-                    {obm_paths_sql},
-                    union_by_name = true,
-                    filename = true
-                )
-                WHERE
-                    bbox.xmax >= {self.cfg.lon_min}
-                    AND bbox.xmin <= {self.cfg.lon_max}
-                    AND bbox.ymax >= {self.cfg.lat_min}
-                    AND bbox.ymin <= {self.cfg.lat_max}
-                {sample_limit_sql}
-            ),
+        chunk_files: List[str] = []
 
-            country_buildings AS (
-                SELECT c.*
-                FROM candidates c, country_boundary g
-                WHERE
-                    c.geom IS NOT NULL
-                    AND ST_IsValid(c.geom)
-                    AND ST_Intersects(c.geom, g.geom)
-            ),
+        for chunk_idx, chunk_paths in enumerate(chunks):
+            chunk_file = chunk_dir / f"chunk_{chunk_idx:04d}.parquet"
+            chunk_files.append(chunk_file.as_posix())
+            chunk_paths_sql = self._duckdb_string_list(chunk_paths)
 
-            height_parsed AS (
-                SELECT
-                    *,
-
-                    TRY_CAST(
-                        NULLIF(REGEXP_EXTRACT(height, 'HHT:([0-9.]+)', 1), '')
-                        AS DOUBLE
-                    ) AS height_direct_m,
-
-                    TRY_CAST(
-                        NULLIF(REGEXP_EXTRACT(height, '(^|\\\\+)H:([0-9]+)', 2), '')
-                        AS INTEGER
-                    ) AS stories_exact_parsed,
-
-                    TRY_CAST(
-                        NULLIF(REGEXP_EXTRACT(height, 'HBET:([0-9]+)-([0-9]+)', 1), '')
-                        AS INTEGER
-                    ) AS stories_min_parsed,
-
-                    TRY_CAST(
-                        NULLIF(REGEXP_EXTRACT(height, 'HBET:([0-9]+)-([0-9]+)', 2), '')
-                        AS INTEGER
-                    ) AS stories_max_parsed
-
-                FROM country_buildings
-            ),
-
-            measured AS (
-                SELECT
-                    *,
-                    ST_Area(
-                        ST_Transform(
-                            geom,
-                            'OGC:CRS84',
-                            'EPSG:3035',
-                            always_xy := true
-                        )
-                    ) AS footprint_area_m2
-                FROM height_parsed
-            ),
-
-            enriched AS (
-                SELECT
-                    -- Stable identifiers
-                    CAST(id AS VARCHAR) AS building_id,
-                    source,
-                    relation_id,
-                    quadkey,
-                    SUBSTR(CAST(quadkey AS VARCHAR), 1, 6) AS quadkey_prefix_6,
-                    last_update,
-
-                    -- Geometry staging for MSSQL
-                    ST_AsWKB(geom) AS geom_wkb,
-
-                    ST_X(ST_Centroid(geom)) AS centroid_lon,
-                    ST_Y(ST_Centroid(geom)) AS centroid_lat,
-
-                    bbox.xmin AS bbox_xmin,
-                    bbox.ymin AS bbox_ymin,
-                    bbox.xmax AS bbox_xmax,
-                    bbox.ymax AS bbox_ymax,
-
-                    footprint_area_m2,
-
-                    -- Raw attributes
-                    height AS height_raw,
-                    occupancy AS occupancy_raw,
-                    floorspace_obm_m2,
-
-                    -- Height interpretation
-                    CASE
-                        WHEN height_direct_m IS NOT NULL
-                            THEN 'exact_height_m'
-                        WHEN stories_exact_parsed IS NOT NULL
-                            THEN 'estimated_from_exact_storeys'
-                        WHEN stories_min_parsed IS NOT NULL AND stories_max_parsed IS NOT NULL
-                            THEN 'estimated_from_storey_range'
-                        WHEN height IS NULL OR height = ''
-                            THEN 'unknown'
-                        ELSE 'other'
-                    END AS height_source_type,
-
-                    CASE
-                        WHEN height_direct_m IS NOT NULL
-                            THEN height_direct_m
-                        WHEN stories_exact_parsed IS NOT NULL
-                            THEN stories_exact_parsed * {self.cfg.metres_per_storey}
-                        WHEN stories_min_parsed IS NOT NULL AND stories_max_parsed IS NOT NULL
-                            THEN ((stories_min_parsed + stories_max_parsed) / 2.0)
-                                 * {self.cfg.metres_per_storey}
-                        ELSE NULL
-                    END AS height_m,
-
-                    stories_exact_parsed AS stories_exact,
-                    stories_min_parsed AS stories_min,
-                    stories_max_parsed AS stories_max,
-
-                    CASE
-                        WHEN height_direct_m IS NOT NULL
-                            THEN 'high'
-                        WHEN stories_exact_parsed IS NOT NULL
-                            THEN 'medium'
-                        WHEN stories_min_parsed IS NOT NULL AND stories_max_parsed IS NOT NULL
-                            THEN 'low'
-                        ELSE 'none'
-                    END AS height_quality,
-
-                    -- Occupancy interpretation
-                    COALESCE(
-                        NULLIF(SUBSTR(UPPER(occupancy), 1, 3), ''),
-                        'UNK'
-                    ) AS occupancy_code,
-
-                    CASE
-                        WHEN UPPER(occupancy) LIKE 'RES%' THEN 'Residential'
-                        WHEN UPPER(occupancy) LIKE 'COM%' THEN 'Commercial'
-                        WHEN UPPER(occupancy) LIKE 'MIX%' THEN 'Mixed'
-                        WHEN UPPER(occupancy) LIKE 'IND%' THEN 'Industrial'
-                        WHEN UPPER(occupancy) LIKE 'AGR%' THEN 'Agricultural'
-                        WHEN UPPER(occupancy) LIKE 'ASS%' THEN 'Assembly'
-                        WHEN UPPER(occupancy) LIKE 'GOV%' THEN 'Government'
-                        WHEN UPPER(occupancy) LIKE 'EDU%' THEN 'Education'
-                        ELSE 'Unknown'
-                    END AS occupancy_group,
-
-                    CASE
-                        WHEN occupancy IS NULL OR occupancy = ''
-                            THEN 'none'
-                        WHEN LENGTH(occupancy) >= 3
-                            THEN 'available'
-                        ELSE 'low'
-                    END AS occupancy_quality,
-
-                    -- Estimated floorspace:
-                    -- Prefer OBM floorspace if available.
-                    -- Otherwise estimate from footprint x storeys if storeys are known.
-                    CASE
-                        WHEN floorspace_obm_m2 IS NOT NULL
-                            THEN floorspace_obm_m2
-                        WHEN stories_exact_parsed IS NOT NULL
-                            THEN footprint_area_m2 * stories_exact_parsed
-                                 * {self.cfg.usable_floor_factor}
-                        WHEN stories_min_parsed IS NOT NULL AND stories_max_parsed IS NOT NULL
-                            THEN footprint_area_m2 * ((stories_min_parsed + stories_max_parsed) / 2.0)
-                                 * {self.cfg.usable_floor_factor}
-                        ELSE NULL
-                    END AS floorspace_est_m2
-
-                FROM measured
+            logger.info(
+                "Processing chunk %d/%d (%d file(s)): %s",
+                chunk_idx + 1, len(chunks), len(chunk_paths),
+                ", ".join(chunk_paths),
             )
 
-            SELECT
-                *,
-                (
-                    CASE WHEN footprint_area_m2 IS NOT NULL THEN 0.25 ELSE 0.0 END +
-                    CASE WHEN height_m IS NOT NULL THEN 0.30 ELSE 0.0 END +
-                    CASE WHEN occupancy_group <> 'Unknown' THEN 0.30 ELSE 0.0 END +
-                    CASE WHEN floorspace_est_m2 IS NOT NULL THEN 0.15 ELSE 0.0 END
-                ) AS attribute_completeness_score
-            FROM enriched
-        )
-        TO '{output_path}'
-        (
-            FORMAT PARQUET,
-            COMPRESSION ZSTD,
-            ROW_GROUP_SIZE {self.cfg.row_group_size}
-        );
-        """
+            sample_limit_sql = ""
+            if self.cfg.sample_only:
+                sample_limit_sql = f"LIMIT {int(self.cfg.sample_limit)}"
 
-        self.con.execute(query)
+            chunk_output_sql = chunk_file.as_posix().replace("'", "''")
+
+            query = f"""
+            COPY (
+                WITH candidates AS (
+                    SELECT
+                        id,
+                        source,
+                        relation_id,
+                        quadkey,
+                        last_update,
+                        occupancy,
+                        height,
+                        TRY_CAST(floorspace AS DOUBLE) AS floorspace_obm_m2,
+                        {geom_expr} AS geom,
+                        bbox
+                    FROM read_parquet(
+                        {chunk_paths_sql},
+                        union_by_name = true,
+                        filename = true
+                    )
+                    WHERE
+                        bbox.xmax >= {self.cfg.lon_min}
+                        AND bbox.xmin <= {self.cfg.lon_max}
+                        AND bbox.ymax >= {self.cfg.lat_min}
+                        AND bbox.ymin <= {self.cfg.lat_max}
+                    {sample_limit_sql}
+                ),
+
+                country_buildings AS (
+                    SELECT c.*
+                    FROM candidates c, country_boundary g
+                    WHERE
+                        c.geom IS NOT NULL
+                        AND ST_IsValid(c.geom)
+                        AND ST_Intersects(c.geom, g.geom)
+                ),
+
+                height_parsed AS (
+                    SELECT
+                        *,
+
+                        TRY_CAST(
+                            NULLIF(REGEXP_EXTRACT(height, 'HHT:([0-9.]+)', 1), '')
+                            AS DOUBLE
+                        ) AS height_direct_m,
+
+                        TRY_CAST(
+                            NULLIF(REGEXP_EXTRACT(height, '(^|\\\\+)H:([0-9]+)', 2), '')
+                            AS INTEGER
+                        ) AS stories_exact_parsed,
+
+                        TRY_CAST(
+                            NULLIF(REGEXP_EXTRACT(height, 'HBET:([0-9]+)-([0-9]+)', 1), '')
+                            AS INTEGER
+                        ) AS stories_min_parsed,
+
+                        TRY_CAST(
+                            NULLIF(REGEXP_EXTRACT(height, 'HBET:([0-9]+)-([0-9]+)', 2), '')
+                            AS INTEGER
+                        ) AS stories_max_parsed
+
+                    FROM country_buildings
+                ),
+
+                measured AS (
+                    SELECT
+                        *,
+                        ST_Area(
+                            ST_Transform(
+                                geom,
+                                'OGC:CRS84',
+                                'EPSG:3035',
+                                always_xy := true
+                            )
+                        ) AS footprint_area_m2
+                    FROM height_parsed
+                ),
+
+                enriched AS (
+                    SELECT
+                        -- Stable identifiers
+                        CAST(id AS VARCHAR) AS building_id,
+                        source,
+                        relation_id,
+                        quadkey,
+                        SUBSTR(CAST(quadkey AS VARCHAR), 1, 6) AS quadkey_prefix_6,
+                        last_update,
+
+                        -- Geometry staging for MSSQL
+                        ST_AsWKB(geom) AS geom_wkb,
+
+                        ST_X(ST_Centroid(geom)) AS centroid_lon,
+                        ST_Y(ST_Centroid(geom)) AS centroid_lat,
+
+                        bbox.xmin AS bbox_xmin,
+                        bbox.ymin AS bbox_ymin,
+                        bbox.xmax AS bbox_xmax,
+                        bbox.ymax AS bbox_ymax,
+
+                        footprint_area_m2,
+
+                        -- Raw attributes
+                        height AS height_raw,
+                        occupancy AS occupancy_raw,
+                        floorspace_obm_m2,
+
+                        -- Height interpretation
+                        CASE
+                            WHEN height_direct_m IS NOT NULL
+                                THEN 'exact_height_m'
+                            WHEN stories_exact_parsed IS NOT NULL
+                                THEN 'estimated_from_exact_storeys'
+                            WHEN stories_min_parsed IS NOT NULL AND stories_max_parsed IS NOT NULL
+                                THEN 'estimated_from_storey_range'
+                            WHEN height IS NULL OR height = ''
+                                THEN 'unknown'
+                            ELSE 'other'
+                        END AS height_source_type,
+
+                        CASE
+                            WHEN height_direct_m IS NOT NULL
+                                THEN height_direct_m
+                            WHEN stories_exact_parsed IS NOT NULL
+                                THEN stories_exact_parsed * {self.cfg.metres_per_storey}
+                            WHEN stories_min_parsed IS NOT NULL AND stories_max_parsed IS NOT NULL
+                                THEN ((stories_min_parsed + stories_max_parsed) / 2.0)
+                                     * {self.cfg.metres_per_storey}
+                            ELSE NULL
+                        END AS height_m,
+
+                        stories_exact_parsed AS stories_exact,
+                        stories_min_parsed AS stories_min,
+                        stories_max_parsed AS stories_max,
+
+                        CASE
+                            WHEN height_direct_m IS NOT NULL
+                                THEN 'high'
+                            WHEN stories_exact_parsed IS NOT NULL
+                                THEN 'medium'
+                            WHEN stories_min_parsed IS NOT NULL AND stories_max_parsed IS NOT NULL
+                                THEN 'low'
+                            ELSE 'none'
+                        END AS height_quality,
+
+                        -- Occupancy interpretation
+                        COALESCE(
+                            NULLIF(SUBSTR(UPPER(occupancy), 1, 3), ''),
+                            'UNK'
+                        ) AS occupancy_code,
+
+                        CASE
+                            WHEN UPPER(occupancy) LIKE 'RES%' THEN 'Residential'
+                            WHEN UPPER(occupancy) LIKE 'COM%' THEN 'Commercial'
+                            WHEN UPPER(occupancy) LIKE 'MIX%' THEN 'Mixed'
+                            WHEN UPPER(occupancy) LIKE 'IND%' THEN 'Industrial'
+                            WHEN UPPER(occupancy) LIKE 'AGR%' THEN 'Agricultural'
+                            WHEN UPPER(occupancy) LIKE 'ASS%' THEN 'Assembly'
+                            WHEN UPPER(occupancy) LIKE 'GOV%' THEN 'Government'
+                            WHEN UPPER(occupancy) LIKE 'EDU%' THEN 'Education'
+                            ELSE 'Unknown'
+                        END AS occupancy_group,
+
+                        CASE
+                            WHEN occupancy IS NULL OR occupancy = ''
+                                THEN 'none'
+                            WHEN LENGTH(occupancy) >= 3
+                                THEN 'available'
+                            ELSE 'low'
+                        END AS occupancy_quality,
+
+                        -- Estimated floorspace:
+                        -- Prefer OBM floorspace if available.
+                        -- Otherwise estimate from footprint x storeys if storeys are known.
+                        CASE
+                            WHEN floorspace_obm_m2 IS NOT NULL
+                                THEN floorspace_obm_m2
+                            WHEN stories_exact_parsed IS NOT NULL
+                                THEN footprint_area_m2 * stories_exact_parsed
+                                     * {self.cfg.usable_floor_factor}
+                            WHEN stories_min_parsed IS NOT NULL AND stories_max_parsed IS NOT NULL
+                                THEN footprint_area_m2 * ((stories_min_parsed + stories_max_parsed) / 2.0)
+                                     * {self.cfg.usable_floor_factor}
+                            ELSE NULL
+                        END AS floorspace_est_m2
+
+                    FROM measured
+                )
+
+                SELECT
+                    *,
+                    (
+                        CASE WHEN footprint_area_m2 IS NOT NULL THEN 0.25 ELSE 0.0 END +
+                        CASE WHEN height_m IS NOT NULL THEN 0.30 ELSE 0.0 END +
+                        CASE WHEN occupancy_group <> 'Unknown' THEN 0.30 ELSE 0.0 END +
+                        CASE WHEN floorspace_est_m2 IS NOT NULL THEN 0.15 ELSE 0.0 END
+                    ) AS attribute_completeness_score
+                FROM enriched
+            )
+            TO '{chunk_output_sql}'
+            (
+                FORMAT PARQUET,
+                COMPRESSION ZSTD,
+                ROW_GROUP_SIZE {self.cfg.row_group_size}
+            );
+            """
+
+            try:
+                self.con.execute(query)
+                logger.info("Chunk %d written: %s", chunk_idx + 1, chunk_file)
+            except Exception as exc:
+                if "no data" in str(exc).lower() or "empty" in str(exc).lower():
+                    logger.info("Chunk %d produced no rows, skipping.", chunk_idx + 1)
+                    chunk_files.pop()
+                else:
+                    raise
+
+        # Combine all chunk files into the final output via streaming read
+        if not chunk_files:
+            raise RuntimeError("No buildings matched the country boundary.")
+
+        final_output_sql = output_path.as_posix().replace("'", "''")
+        chunk_list_sql = self._duckdb_string_list(chunk_files)
+
+        logger.info("Combining %d chunk file(s) into final output: %s", len(chunk_files), output_path)
+        self.con.execute(f"""
+            COPY (
+                SELECT * FROM read_parquet({chunk_list_sql})
+            )
+            TO '{final_output_sql}'
+            (
+                FORMAT PARQUET,
+                COMPRESSION ZSTD,
+                ROW_GROUP_SIZE {self.cfg.row_group_size}
+            );
+        """)
+
+        # Clean up chunk files
+        for cf in chunk_files:
+            try:
+                Path(cf).unlink(missing_ok=True)
+            except Exception:
+                pass
+        try:
+            chunk_dir.rmdir()
+        except Exception:
+            pass
 
         logger.info("Parquet written: %s", output_path)
 
@@ -955,9 +1016,15 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument("--output-dir", default="./etl_output")
-    parser.add_argument("--threads", type=int, default=8)
-    parser.add_argument("--memory-limit", default="24GB")
+    parser.add_argument("--threads", type=int, default=4)
+    parser.add_argument("--memory-limit", default="12GB")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=2,
+        help="Number of quadkey files to process per batch. Lower values use less memory."
+    )
 
     parser.add_argument(
         "--sample-only",
@@ -1006,6 +1073,7 @@ def main():
         sample_only=args.sample_only,
         sample_limit=args.sample_limit,
         boundary_file=args.boundary_file,
+        chunk_size=args.chunk_size,
     )
 
     etl = OpenBuildingMapCountryETL(cfg)
