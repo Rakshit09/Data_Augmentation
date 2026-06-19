@@ -47,6 +47,8 @@ MAX_RETAINED_EXPOSURE_UPLOADS = 1
 MAX_RETAINED_EXPOSURE_RESULTS = 1
 EXPOSURE_ARTIFACT_MAX_AGE_SECONDS = 6 * 60 * 60
 SUPPORTED_EXPOSURE_UPLOAD_EXTENSIONS = {".csv", ".xlsx"}
+MAX_BUILDING_FILTER_VALUES = 500
+MAX_VIEW_FILTER_FEATURES = 5000
 BUILDING_COLUMNS = [
     "building_id",
     "source",
@@ -1293,9 +1295,86 @@ def create_app(
 
         return jsonify({
             "fields": fields,
+            "filter_fields": fields,
             "preferred_fields": preferred_fields,
             "default_fields": default_enrichment_fields(fields, preferred_fields),
         })
+
+    @app.route("/api/building-filter-values")
+    def building_filter_values():
+        column = str(request.args.get("column", "")).strip()
+
+        if not column:
+            return jsonify({"error": "A filter column is required."}), 400
+
+        db_path = app.config.get("DB_PATH") or ""
+        if not db_path or not Path(db_path).is_file():
+            return jsonify({
+                "values": [],
+                "error": "Lookup database has not been selected or prepared."
+            }), 200
+
+        con = open_db(db_path, read_only=True)
+        try:
+            values = lookup_filter_values(con, column)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        finally:
+            con.close()
+
+        return jsonify({
+            "column": column,
+            "values": values,
+        })
+
+    @app.route("/api/building-footprints")
+    def building_footprints():
+        try:
+            min_lon = float(request.args["min_lon"])
+            min_lat = float(request.args["min_lat"])
+            max_lon = float(request.args["max_lon"])
+            max_lat = float(request.args["max_lat"])
+        except (KeyError, ValueError):
+            return jsonify({
+                "error": "Valid min_lon, min_lat, max_lon, and max_lat query parameters are required."
+            }), 400
+
+        column = str(request.args.get("column", "")).strip()
+        value = str(request.args.get("value", "")).strip()
+
+        if not column or not value:
+            return jsonify({"error": "Both filter column and value are required."}), 400
+
+        min_lon, max_lon = sorted((min_lon, max_lon))
+        min_lat, max_lat = sorted((min_lat, max_lat))
+
+        if not (-180 <= min_lon <= 180 and -180 <= max_lon <= 180 and -90 <= min_lat <= 90 and -90 <= max_lat <= 90):
+            return jsonify({"error": "Viewport coordinates are out of range."}), 400
+
+        db_path = app.config.get("DB_PATH") or ""
+        if not db_path or not Path(db_path).is_file():
+            return jsonify({
+                "error": "Lookup database has not been selected or prepared.",
+                "hint": "Create/select a lookup database from the app first."
+            }), 503
+
+        con = open_db(db_path, read_only=True)
+        try:
+            feature_collection = lookup_buildings_in_view(
+                con,
+                min_lon=min_lon,
+                min_lat=min_lat,
+                max_lon=max_lon,
+                max_lat=max_lat,
+                column=column,
+                value=value,
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        finally:
+            con.close()
+
+        return jsonify(feature_collection)
 
 
     @app.route("/api/search-address")
@@ -3132,6 +3211,78 @@ def lookup_display_columns(con: duckdb.DuckDBPyConnection) -> List[str]:
         for column_name, data_type in columns
         if not is_internal_lookup_column(str(column_name), str(data_type))
     ]
+
+
+def lookup_filter_values(
+    con: duckdb.DuckDBPyConnection,
+    column: str,
+) -> List[str]:
+    available_columns = set(lookup_display_columns(con))
+    if column not in available_columns:
+        raise ValueError(f"Unknown lookup filter column: {column}")
+
+    column_sql = sql_identifier(column)
+    rows = con.execute(f"""
+        SELECT DISTINCT CAST({column_sql} AS VARCHAR) AS filter_value
+        FROM buildings
+        WHERE {column_sql} IS NOT NULL
+            AND CAST({column_sql} AS VARCHAR) <> ''
+        ORDER BY filter_value
+        LIMIT ?
+    """, [MAX_BUILDING_FILTER_VALUES]).fetchall()
+
+    return [str(row[0]) for row in rows if row and row[0] is not None]
+
+
+def lookup_buildings_in_view(
+    con: duckdb.DuckDBPyConnection,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    column: str,
+    value: str,
+) -> Dict[str, Any]:
+    available_columns = set(lookup_display_columns(con))
+    if column not in available_columns:
+        raise ValueError(f"Unknown lookup filter column: {column}")
+
+    column_sql = sql_identifier(column)
+    rows = con.execute(f"""
+        SELECT
+            b.building_id,
+            CAST({column_sql} AS VARCHAR) AS filter_value,
+            ST_AsGeoJSON(b.geom) AS geometry
+        FROM buildings AS b
+        WHERE
+            b.bbox_xmax >= ?
+            AND b.bbox_xmin <= ?
+            AND b.bbox_ymax >= ?
+            AND b.bbox_ymin <= ?
+            AND CAST({column_sql} AS VARCHAR) = ?
+        ORDER BY b.building_id
+        LIMIT ?
+    """, [min_lon, max_lon, min_lat, max_lat, value, MAX_VIEW_FILTER_FEATURES]).fetchall()
+
+    features = [
+        {
+            "type": "Feature",
+            "geometry": json.loads(str(geometry)),
+            "properties": {
+                "building_id": building_id,
+                "filter_column": column,
+                "filter_value": filter_value,
+            },
+        }
+        for building_id, filter_value, geometry in rows
+        if geometry
+    ]
+
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+        "count": len(features),
+    }
 
 
 def default_enrichment_fields(

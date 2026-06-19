@@ -98,6 +98,35 @@
         </form>
         <div id="searchResults" class="search-results hidden"></div>
 
+        <details id="filterViewPanel" class="lookup-field-picker filter-view">
+          <summary>
+            <span class="field-label-row">
+              <span>Filter View</span>
+              <span class="field-tip" tabindex="0" data-tooltip="Color all building footprints currently visible on the map that match the selected DuckDB column value.">i</span>
+            </span>
+          </summary>
+          <div class="filter-view-form">
+            <label for="filterViewColumn">
+              <span>Select column</span>
+              <select id="filterViewColumn">
+                <option value="">Select column</option>
+              </select>
+            </label>
+            <label for="filterViewValue">
+              <span>Select value</span>
+              <select id="filterViewValue" disabled>
+                <option value="">Select value</option>
+              </select>
+            </label>
+            <label for="filterViewColor">
+              <span>Choose color</span>
+              <input id="filterViewColor" type="color" value="#ff6b6b">
+            </label>
+            <button id="applyViewFilter" type="button">Apply</button>
+          </div>
+          <p id="filterViewMessage" class="filter-view-message">Choose a column and value to color polygons in the current view.</p>
+        </details>
+
         <details class="lookup-field-picker">
           <summary>
             <span class="field-label-row">

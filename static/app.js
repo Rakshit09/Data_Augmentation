@@ -27,6 +27,11 @@ const attributesEl = document.getElementById("attributes");
 const searchForm = document.getElementById("searchForm");
 const searchInput = document.getElementById("searchInput");
 const searchResults = document.getElementById("searchResults");
+const filterViewColumn = document.getElementById("filterViewColumn");
+const filterViewValue = document.getElementById("filterViewValue");
+const filterViewColor = document.getElementById("filterViewColor");
+const applyViewFilter = document.getElementById("applyViewFilter");
+const filterViewMessage = document.getElementById("filterViewMessage");
 const uploadForm = document.getElementById("uploadForm");
 const csvFile = document.getElementById("csvFile");
 const csvDropzoneTitle = document.getElementById("csvDropzoneTitle");
@@ -50,8 +55,14 @@ let currentUploadFilename = null;
 let currentStatsDownloadUrl = null;
 let availableDbFiles = [];
 let selectedBuilding = null;
+let activeViewFilter = null;
+let viewFilterRequestId = 0;
 
 const statsDownloadLink = ensureStatsDownloadLink();
+const emptyFeatureCollection = {
+  type: "FeatureCollection",
+  features: []
+};
 
 function dismissCriticalNote() {
   criticalNote?.classList.add("hidden");
@@ -175,10 +186,7 @@ function updateStatsDownload(summary) {
   statsDownloadLink.classList.remove("hidden");
 }
 
-const selectedSource = {
-  type: "FeatureCollection",
-  features: []
-};
+const selectedSource = emptyFeatureCollection;
 
 const map = new maplibregl.Map({
   container: "map",
@@ -272,6 +280,8 @@ async function loadDataSources() {
     renderFilePicker(dbPicker, availableDbFiles, activeDbPath);
     await window.buildingInfoFields?.load();
     await window.exposureEnrichmentFields?.load();
+    await loadViewFilterFields();
+    clearViewFilter("Choose a column and value to color polygons in the current view.");
     setDataSourceMessage("Choose a local DuckDB lookup database.", "success");
   } catch (error) {
     setDataSourceMessage(error.message, "error");
@@ -363,6 +373,8 @@ async function applySelectedDataSource() {
     clearSelection();
     await window.buildingInfoFields?.load();
     await window.exposureEnrichmentFields?.load();
+    await loadViewFilterFields();
+    clearViewFilter("Choose a column and value to color polygons in the current view.");
     setDataSourceMessage("Active lookup database updated.", "success");
     statusEl.textContent = "Ready";
   } catch (error) {
@@ -381,6 +393,32 @@ function setDataSourceMessage(message, type = "") {
 loadDataSources();
 
 map.on("load", () => {
+  map.addSource("view-filter-buildings", {
+    type: "geojson",
+    data: emptyFeatureCollection
+  });
+
+  map.addLayer({
+    id: "view-filter-buildings-fill",
+    type: "fill",
+    source: "view-filter-buildings",
+    paint: {
+      "fill-color": filterViewColor?.value || "#ff6b6b",
+      "fill-opacity": 0.36
+    }
+  });
+
+  map.addLayer({
+    id: "view-filter-buildings-outline",
+    type: "line",
+    source: "view-filter-buildings",
+    paint: {
+      "line-color": filterViewColor?.value || "#ff6b6b",
+      "line-width": 1.2,
+      "line-opacity": 0.8
+    }
+  });
+
   map.addSource("selected-building", {
     type: "geojson",
     data: selectedSource
@@ -405,6 +443,12 @@ map.on("load", () => {
       "line-width": 3
     }
   });
+});
+
+map.on("moveend", () => {
+  if (activeViewFilter) {
+    refreshViewFilter({ silent: true });
+  }
 });
 
 map.on("click", async (event) => {
@@ -533,6 +577,175 @@ function renderSearchMessage(message) {
 function hideSearchResults() {
   searchResults.classList.add("hidden");
   searchResults.innerHTML = "";
+}
+
+filterViewColumn?.addEventListener("change", async () => {
+  dismissCriticalNote();
+  await loadViewFilterValues(filterViewColumn.value);
+});
+
+applyViewFilter?.addEventListener("click", async () => {
+  dismissCriticalNote();
+
+  const column = filterViewColumn?.value.trim() || "";
+  const value = filterViewValue?.value || "";
+  const color = filterViewColor?.value || "#ff6b6b";
+
+  if (!column || !value) {
+    clearViewFilter("Choose a column and value before applying.", "error");
+    return;
+  }
+
+  activeViewFilter = { column, value, color };
+  await refreshViewFilter();
+});
+
+async function loadViewFilterFields() {
+  if (!filterViewColumn || !filterViewValue) return;
+
+  filterViewColumn.innerHTML = '<option value="">Loading columns...</option>';
+  filterViewValue.innerHTML = '<option value="">Select value</option>';
+  filterViewValue.disabled = true;
+
+  try {
+    const response = await fetch("api/building-fields");
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error || "Could not load filter fields");
+    }
+
+    const fields = Array.isArray(payload.filter_fields)
+      ? payload.filter_fields
+      : (payload.fields || []);
+    renderViewFilterFieldOptions(fields);
+  } catch (error) {
+    renderViewFilterFieldOptions([]);
+    setFilterViewMessage(error.message, "error");
+  }
+}
+
+function renderViewFilterFieldOptions(fields) {
+  if (!filterViewColumn) return;
+
+  filterViewColumn.innerHTML = [
+    '<option value="">Select column</option>',
+    ...fields.map((field) => `<option value="${escapeHtml(field)}">${escapeHtml(formatFieldLabel(field))}</option>`)
+  ].join("");
+
+  renderViewFilterValueOptions([]);
+}
+
+async function loadViewFilterValues(column) {
+  if (!filterViewValue) return;
+
+  if (!column) {
+    renderViewFilterValueOptions([]);
+    setFilterViewMessage("Choose a column and value to color polygons in the current view.");
+    return;
+  }
+
+  filterViewValue.disabled = true;
+  filterViewValue.innerHTML = '<option value="">Loading values...</option>';
+
+  try {
+    const response = await fetch(`api/building-filter-values?column=${encodeURIComponent(column)}`);
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error || "Could not load filter values");
+    }
+
+    renderViewFilterValueOptions(payload.values || []);
+    setFilterViewMessage("Choose a value and color, then apply the filter.");
+  } catch (error) {
+    renderViewFilterValueOptions([]);
+    setFilterViewMessage(error.message, "error");
+  }
+}
+
+function renderViewFilterValueOptions(values) {
+  if (!filterViewValue) return;
+
+  filterViewValue.innerHTML = [
+    '<option value="">Select value</option>',
+    ...values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`)
+  ].join("");
+  filterViewValue.disabled = values.length === 0;
+}
+
+async function refreshViewFilter({ silent = false } = {}) {
+  if (!activeViewFilter) return;
+  if (!map.isStyleLoaded()) return;
+
+  const requestId = ++viewFilterRequestId;
+  const bounds = map.getBounds();
+  const params = new URLSearchParams({
+    min_lon: String(bounds.getWest()),
+    min_lat: String(bounds.getSouth()),
+    max_lon: String(bounds.getEast()),
+    max_lat: String(bounds.getNorth()),
+    column: activeViewFilter.column,
+    value: activeViewFilter.value
+  });
+
+  if (!silent) {
+    statusEl.textContent = "Filtering";
+    setFilterViewMessage("Loading matching footprints in the current view...");
+  }
+
+  try {
+    const response = await fetch(`api/building-footprints?${params.toString()}`);
+    const payload = await response.json();
+
+    if (requestId !== viewFilterRequestId) return;
+    if (!response.ok) {
+      throw new Error(payload.error || "Could not load building footprints");
+    }
+
+    setViewFilterLayerColor(activeViewFilter.color);
+    map.getSource("view-filter-buildings")?.setData(payload);
+
+    const matched = Number(payload.count || (payload.features || []).length || 0);
+    setFilterViewMessage(`${formatInteger(matched)} polygons matched in the current view.`, matched ? "success" : "");
+    if (!silent) {
+      statusEl.textContent = "Ready";
+    }
+  } catch (error) {
+    if (requestId !== viewFilterRequestId) return;
+
+    clearViewFilterLayer();
+    setFilterViewMessage(error.message, "error");
+    if (!silent) {
+      statusEl.textContent = "Error";
+    }
+  }
+}
+
+function clearViewFilter(message = "", type = "") {
+  activeViewFilter = null;
+  viewFilterRequestId += 1;
+  clearViewFilterLayer();
+  if (filterViewColumn) filterViewColumn.value = "";
+  renderViewFilterValueOptions([]);
+  setFilterViewMessage(message, type);
+}
+
+function clearViewFilterLayer() {
+  map.getSource("view-filter-buildings")?.setData(emptyFeatureCollection);
+}
+
+function setViewFilterLayerColor(color) {
+  map.setPaintProperty("view-filter-buildings-fill", "fill-color", color);
+  map.setPaintProperty("view-filter-buildings-outline", "line-color", color);
+}
+
+function setFilterViewMessage(message, type = "") {
+  if (!filterViewMessage) return;
+
+  filterViewMessage.textContent = message;
+  filterViewMessage.classList.toggle("error", type === "error");
+  filterViewMessage.classList.toggle("success", type === "success");
 }
 
 uploadForm.addEventListener("submit", (event) => {
@@ -887,6 +1100,15 @@ function formatNumber(value, suffix) {
 function formatPercent(value) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return null;
   return `${Math.round(Number(value) * 100)}%`;
+}
+
+function formatFieldLabel(field) {
+  return String(field)
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase())
+    .replace(/\bM2\b/g, "m2")
+    .replace(/\bObm\b/g, "OBM")
+    .replace(/\bId\b/g, "ID");
 }
 
 function escapeHtml(value) {
