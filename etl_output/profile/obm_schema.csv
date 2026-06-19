@@ -1,8 +1,8 @@
 column_name,column_type,null,key,default,extra
 id,BIGINT,YES,,,
-floorspace,VARCHAR,YES,,,
+floorspace,DOUBLE,YES,,,
 occupancy,VARCHAR,YES,,,
-relation_id,VARCHAR,YES,,,
+relation_id,DOUBLE,YES,,,
 quadkey,VARCHAR,YES,,,
 last_update,TIMESTAMP WITH TIME ZONE,YES,,,
 height,VARCHAR,YES,,,

@@ -4,6 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Germany Data Enrichment</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.22.0/dist/maplibre-gl.css">
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
@@ -61,16 +64,10 @@
           <button id="refreshSources" type="button">Refresh</button>
         </div>
         <label>
-          Parquet
-          <span class="path-picker-row">
-            <input id="activeParquetPath" type="text" list="parquetFileOptions" placeholder="etl_output/buildings_de_cleaned.parquet">
-            <button id="browseParquet" type="button">Browse</button>
+          <span class="field-label-row">
+            <span>DuckDB lookup</span>
+            <span class="field-tip" tabindex="0" data-tooltip="Path to the DuckDB lookup database used by Building Lookup and Enrich Exposure. Select a .duckdb file that already contains the buildings table.">i</span>
           </span>
-          <datalist id="parquetFileOptions"></datalist>
-          <div id="parquetPicker" class="file-picker hidden"></div>
-        </label>
-        <label>
-          DuckDB lookup
           <span class="path-picker-row">
             <input id="activeDbPath" type="text" list="dbFileOptions" placeholder="etl_output/building_lookup.duckdb">
             <button id="browseDb" type="button">Browse</button>
@@ -78,25 +75,36 @@
           <datalist id="dbFileOptions"></datalist>
           <div id="dbPicker" class="file-picker hidden"></div>
         </label>
-        <button id="applyDataSource" type="button">Use selected files</button>
+        <button id="applyDataSource" type="button">Use selected database</button>
         <p id="dataSourceMessage" class="data-source-message"></p>
       </section>
 
       <section id="lookupTools" class="side-mode">
         <form id="searchForm" class="search">
-          <input
-            id="searchInput"
-            type="search"
-            autocomplete="off"
-            placeholder="Search address"
-            aria-label="Search address"
-          >
+          <label class="search-field" for="searchInput">
+            <span class="field-label-row">
+              <span>Search address</span>
+              <span class="field-tip" tabindex="0" data-tooltip="Search by address, place name, or landmark. Choose a result to zoom the map, then click a building footprint to inspect it.">i</span>
+            </span>
+            <input
+              id="searchInput"
+              type="search"
+              autocomplete="off"
+              placeholder="Search address"
+              aria-label="Search address"
+            >
+          </label>
           <button type="submit">Search</button>
         </form>
         <div id="searchResults" class="search-results hidden"></div>
 
         <details class="lookup-field-picker">
-          <summary>Choose displayed fields</summary>
+          <summary>
+            <span class="field-label-row">
+              <span>Choose displayed fields</span>
+              <span class="field-tip" tabindex="0" data-tooltip="Choose which building attributes appear in the details panel after you click a building on the map.">i</span>
+            </span>
+          </summary>
           <div id="buildingInfoFieldOptions" class="lookup-field-options"></div>
         </details>
 
@@ -132,35 +140,67 @@
 
           <form id="uploadForm" class="upload-form">
             <label class="dropzone" for="csvFile">
-              <span class="dropzone-title">Choose Exposure File</span>
-              <span class="dropzone-subtitle">CSV with latitude, longitude, and other columns</span>
+              <span class="dropzone-title-row">
+                <span id="csvDropzoneTitle" class="dropzone-title">Choose Exposure File</span>
+                <span class="field-tip" tabindex="0" data-tooltip="Upload the CSV or Excel (.xlsx) file you want to enrich. Include latitude and longitude columns plus any original exposure columns you want to keep in the output.">i</span>
+              </span>
+              <span id="csvDropzoneSubtitle" class="dropzone-subtitle">CSV or Excel (.xlsx) with latitude, longitude, and other columns</span>
             </label>
-            <input id="csvFile" class="file-input" type="file" accept=".csv,text/csv" tabindex="-1" aria-hidden="true">
+            <input id="csvFile" class="file-input" type="file" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" tabindex="-1" aria-hidden="true" onchange="const name=this.files&&this.files[0]?this.files[0].name:''; const titleEl=document.getElementById('csvDropzoneTitle'); const subtitleEl=document.getElementById('csvDropzoneSubtitle'); if(titleEl){titleEl.textContent=name||'Choose Exposure File';} if(subtitleEl){subtitleEl.textContent=name?'Click to choose a different file':'CSV or Excel (.xlsx) with latitude, longitude, and other columns';}">
           </form>
 
           <div id="mappingControls" class="mapping hidden">
             <label>
-              Latitude
+              <span class="field-label-row">
+                <span>Latitude</span>
+                <span class="field-tip" tabindex="0" data-tooltip="Select the column in your uploaded CSV that contains latitude values in decimal degrees.">i</span>
+              </span>
               <select id="latColumn"></select>
             </label>
             <label>
-              Longitude
+              <span class="field-label-row">
+                <span>Longitude</span>
+                <span class="field-tip" tabindex="0" data-tooltip="Select the column in your uploaded CSV that contains longitude values in decimal degrees.">i</span>
+              </span>
               <select id="lonColumn"></select>
             </label>
             <label>
-              Match mode
+              <span class="field-label-row">
+                <span>Match mode</span>
+                
+                <span
+                  class="field-tip"
+                  tabindex="0"
+                  data-tooltip="Choose how each row is matched to a building.&#10;&#10;Inside polygon + Nearest polygon: tries to match the point inside a building first, then falls back to the nearest building polygon.&#10;&#10;Inside polygon only: only accepts rows whose point falls inside a building polygon.&#10;&#10;Nearest centroid only: matches the nearest building centroid within the allowed distance."
+                >
+                  i
+                </span>
+
+              </span>
               <select id="matchMode">
-                <option value="inside_nearest">Inside polygon + nearest</option>
+                <option value="inside_nearest">Inside polygon + Nearest polygon</option>
                 <option value="inside">Inside polygon only</option>
-                <option value="centroid">Centroid nearest only</option>
+                <option value="centroid">Nearest centroid only</option>
               </select>
             </label>
             <label>
-              Max nearest distance (m)
+              <span class="field-label-row">
+                <span>Max nearest distance (m)</span>
+                <span class="field-tip" tabindex="0" data-tooltip="Maximum search radius, in meters, used for nearest-building matching. Lower values are stricter. Higher values may match more rows but can attach more distant buildings.">i</span>
+              </span>
               <input id="maxDistance" type="number" min="1" max="500" step="1" value="50">
             </label>
             <details class="lookup-field-picker">
-              <summary>Choose appended database fields</summary>
+              <summary>
+                <span class="field-label-row">
+                  <span>Choose appended database fields</span>
+                  <span class="field-tip" tabindex="0" data-tooltip="Select which lookup-database fields should be added to the enriched CSV. Keeping only the fields you need produces a smaller, easier-to-review output.">i</span>
+                </span>
+              </summary>
+              <div class="lookup-field-actions">
+                <button type="button" id="markAllFields">Mark all</button>
+                <button type="button" id="clearAllFields">Clear all</button>
+              </div>
               <div id="exposureFieldOptions" class="lookup-field-options"></div>
             </details>
             <button id="runEnrichment" type="button">Run enrichment</button>
@@ -184,7 +224,10 @@
                 <fieldset class="etl-fieldset">
                   <legend>Boundary</legend>
                   <label class="dropzone" for="boundaryFile">
-                    <span class="dropzone-title">Upload Boundary (optional)</span>
+                    <span class="dropzone-title-row">
+                      <span class="dropzone-title">Upload Boundary (optional)</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Optional boundary file used to limit the OpenBuildingMap download area. Leave it empty to use the default Germany boundary.">i</span>
+                    </span>
                     <span class="dropzone-subtitle">.gpkg or .zip containing a shapefile and its sidecar files</span>
                   </label>
                   <input id="boundaryFile" class="file-input" type="file" accept=".zip,.gpkg" tabindex="-1" aria-hidden="true">
@@ -194,19 +237,28 @@
 
                 <fieldset class="etl-fieldset">
                   <legend>Output Paths</legend>
-                  <label>Output folder
+                  <label>
+                    <span class="field-label-row">
+                      <span>Output folder</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Folder where the ETL workflow will write its Parquet output, DuckDB files, and temporary working files.">i</span>
+                    </span>
                     <span class="path-picker-row">
                       <input id="etlOutputDir" type="text" value="./etl_output" placeholder="./etl_output">
                       <button id="browseOutputDir" type="button">Browse</button>
                     </span>
                   </label>
-                  <label>Parquet filename
+                  <label>
+                    <span class="field-label-row">
+                      <span>Parquet filename</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Name or path for the cleaned Parquet file created by the ETL workflow.">i</span>
+                    </span>
                     <input id="etlOutputParquet" type="text" placeholder="buildings_cleaned.parquet">
                   </label>
-                  <label>DuckDB work file
-                    <input id="etlDuckdbFile" type="text" placeholder="work_obm.duckdb">
-                  </label>
-                  <label>DuckDB lookup table
+                  <label>
+                    <span class="field-label-row">
+                      <span>DuckDB lookup table</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Final DuckDB lookup database used by the app for building lookup and exposure enrichment.">i</span>
+                    </span>
                     <input id="etlLookupDbFile" type="text" placeholder="building_lookup.duckdb">
                   </label>
                 </fieldset>
@@ -232,9 +284,13 @@
                 <fieldset class="etl-fieldset">
                   <legend>Use Your Own Parquet</legend>
                   <p class="etl-hint">Point to an existing local Parquet file, inspect its columns, then map the available building attributes into a DuckDB lookup database.</p>
-                  <label>Parquet path
+                  <label>
+                    <span class="field-label-row">
+                      <span>Parquet path</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Path to an existing local Parquet file that contains building data you want to convert into a lookup database.">i</span>
+                    </span>
                     <span class="path-picker-row">
-                      <input id="customParquetPath" type="text" list="parquetFileOptions" placeholder="/path/to/buildings.parquet">
+                      <input id="customParquetPath" type="text" placeholder="/path/to/buildings.parquet">
                       <button id="browseCustomParquet" class="etl-tab-button" type="button">Browse</button>
                     </span>
                   </label>
@@ -244,24 +300,85 @@
                 <fieldset id="customParquetMappings" class="etl-fieldset hidden">
                   <legend>Column Mapping</legend>
                   <p class="etl-hint">Latitude, longitude, geometry, and occupancy are required. Height and the remaining mappings are optional.</p>
-                  <label>Latitude<select id="customLatitude"></select></label>
-                  <label>Longitude<select id="customLongitude"></select></label>
-                  <label>Geometry<select id="customGeometry"></select></label>
-                  <label>Occupancy<select id="customOccupancy"></select></label>
-                  <label>Height (optional)<select id="customHeight"></select></label>
-                  <label>Year built (optional)<select id="customYearBuilt"></select></label>
-                  <label>Construction (optional)<select id="customConstruction"></select></label>
-                  <label>Roof type (optional)<select id="customRoofType"></select></label>
-                  <label>Basement (optional)<select id="customBasement"></select></label>
+                  <label>
+                    <span class="field-label-row">
+                      <span>Latitude</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Column from the Parquet file containing building latitude or centroid latitude in EPSG:4326 decimal degrees.">i</span>
+                    </span>
+                    <select id="customLatitude"></select>
+                  </label>
+                  <label>
+                    <span class="field-label-row">
+                      <span>Longitude</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Column from the Parquet file containing building longitude or centroid longitude in EPSG:4326 decimal degrees.">i</span>
+                    </span>
+                    <select id="customLongitude"></select>
+                  </label>
+                  <label>
+                    <span class="field-label-row">
+                      <span>Geometry</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Column containing the building geometry. WKB, WKT, or geometry-native columns can be used.">i</span>
+                    </span>
+                    <select id="customGeometry"></select>
+                  </label>
+                  <label>
+                    <span class="field-label-row">
+                      <span>Occupancy</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Column describing building use or occupancy class. This becomes the main occupancy field in the lookup database.">i</span>
+                    </span>
+                    <select id="customOccupancy"></select>
+                  </label>
+                  <label>
+                    <span class="field-label-row">
+                      <span>Height (optional)</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Optional column containing building height. If provided, it will be stored as the building height field.">i</span>
+                    </span>
+                    <select id="customHeight"></select>
+                  </label>
+                  <label>
+                    <span class="field-label-row">
+                      <span>Year built (optional)</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Optional column containing the construction year or year built for each building.">i</span>
+                    </span>
+                    <select id="customYearBuilt"></select>
+                  </label>
+                  <label>
+                    <span class="field-label-row">
+                      <span>Construction (optional)</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Optional column describing construction type, material, or structural system.">i</span>
+                    </span>
+                    <select id="customConstruction"></select>
+                  </label>
+                  <label>
+                    <span class="field-label-row">
+                      <span>Roof type (optional)</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Optional column describing roof form, roof category, or roof material.">i</span>
+                    </span>
+                    <select id="customRoofType"></select>
+                  </label>
+                  <label>
+                    <span class="field-label-row">
+                      <span>Basement (optional)</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Optional column indicating whether the building has a basement, or storing a basement-related description.">i</span>
+                    </span>
+                    <select id="customBasement"></select>
+                  </label>
                   <div class="custom-field-section">
                     <div class="custom-field-header">
-                      <span>Additional mapped fields</span>
+                      <span class="field-label-row">
+                        <span>Additional mapped fields</span>
+                        <span class="field-tip" tabindex="0" data-tooltip="Use additional mapped fields when you want to copy extra Parquet columns into the lookup database with your own output field names.">i</span>
+                      </span>
                       <button id="addCustomField" class="etl-tab-button" type="button">Add field</button>
                     </div>
                     <p class="etl-hint">Add up to 10 extra fields. Use letters, numbers, and underscores for the field name.</p>
                     <div id="customExtraFields" class="custom-field-list"></div>
                   </div>
-                  <label>DuckDB lookup output
+                  <label>
+                    <span class="field-label-row">
+                      <span>DuckDB lookup output</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Path for the new DuckDB lookup database created from the Parquet file. The file must end with .duckdb.">i</span>
+                    </span>
                     <input id="customDbPath" type="text" placeholder="/path/to/buildings_lookup.duckdb">
                   </label>
                   <button id="runCustomParquet" type="button">Create database from Parquet</button>
@@ -272,6 +389,24 @@
             </div>
           </section>
         </section>
+      </section>
+
+      <section id="criticalNote" class="panel-note" role="note" aria-label="Critical note">
+        <div class="panel-note-header">
+          <p class="panel-note-title">Critical note</p>
+          <button id="criticalNoteClose" class="panel-note-close" type="button" aria-label="Close critical note">×</button>
+        </div>
+          <p>
+            Do not run the application from your local desktop if the Parquet or DuckDB files are stored on the J: drive. This will not work reliably.
+          </p>
+
+          <p>
+            Either use the Analytics Desktop environment or move the Parquet and DuckDB files to a local drive before running the application.
+          </p>
+
+          <p>
+            If using Analytics Desktop, first copy the DuckDB and Parquet files from the J: drive into the <b>etl_output</b> folder inside the application directory.
+          </p>
       </section>
     </aside>
   </main>

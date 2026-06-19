@@ -3,6 +3,7 @@ import os
 import psutil
 import argparse
 import codecs
+import csv
 from genericpath import exists
 import json
 import math
@@ -45,6 +46,7 @@ MAX_RETAINED_EXPOSURE_JOBS = 1
 MAX_RETAINED_EXPOSURE_UPLOADS = 1
 MAX_RETAINED_EXPOSURE_RESULTS = 1
 EXPOSURE_ARTIFACT_MAX_AGE_SECONDS = 6 * 60 * 60
+SUPPORTED_EXPOSURE_UPLOAD_EXTENSIONS = {".csv", ".xlsx"}
 BUILDING_COLUMNS = [
     "building_id",
     "source",
@@ -78,12 +80,16 @@ BUILDING_COLUMNS = [
 DEFAULT_EXPOSURE_FIELD_CANDIDATES = [
     "building_id",
     "height_m",
+    "occupancy_raw",
     "occupancy_code",
     "occupancy_group",
-    "floorspace_est_m2",
-    "stories_exact",
+    "footprint_area_m2",
+    "height_raw",
     "height_source_type",
     "source",
+    "stories_exact",
+    "stories_min",
+    "stories_max",
 ]
 
 
@@ -189,8 +195,12 @@ def detect_csv_encoding(csv_path: Path) -> str:
     sample = csv_path.read_bytes()[:1_048_576]
     if sample.startswith(codecs.BOM_UTF8):
         return "utf-8-sig"
+    if sample.startswith(codecs.BOM_UTF16_LE) or sample.startswith(codecs.BOM_UTF16_BE):
+        return "utf-16"
+    if sample.startswith(codecs.BOM_UTF32_LE) or sample.startswith(codecs.BOM_UTF32_BE):
+        return "utf-32"
 
-    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin1"):
+    for encoding in ("utf-8", "cp1252", "latin1"):
         try:
             sample.decode(encoding)
             return encoding
@@ -198,6 +208,211 @@ def detect_csv_encoding(csv_path: Path) -> str:
             continue
 
     return "latin1"
+
+
+def csv_encoding_candidates(csv_path: Path) -> List[str]:
+    detected = detect_csv_encoding(csv_path)
+    candidates = [detected]
+
+    if detected == "utf-8":
+        candidates.append("utf-8-sig")
+    elif detected == "utf-8-sig":
+        candidates.append("utf-8")
+
+    candidates.extend(["cp1252", "latin1"])
+
+    ordered_candidates: List[str] = []
+    for candidate in candidates:
+        if candidate not in ordered_candidates:
+            ordered_candidates.append(candidate)
+    return ordered_candidates
+
+
+def normalize_csv_to_utf8_sig(csv_path: Path) -> str:
+    last_error: Optional[UnicodeDecodeError] = None
+
+    for encoding in csv_encoding_candidates(csv_path):
+        if encoding in {"utf-8", "utf-8-sig"}:
+            try:
+                with csv_path.open("r", encoding=encoding, newline=""):
+                    return encoding
+            except UnicodeDecodeError as exc:
+                last_error = exc
+                continue
+
+        temp_path = csv_path.with_name(f"{csv_path.name}.{uuid.uuid4().hex}.utf8tmp")
+        try:
+            try:
+                with csv_path.open("r", encoding=encoding, newline="") as src, temp_path.open(
+                    "w",
+                    encoding="utf-8-sig",
+                    newline="",
+                ) as dst:
+                    shutil.copyfileobj(src, dst, length=1_048_576)
+            except UnicodeDecodeError as exc:
+                last_error = exc
+                continue
+
+            os.replace(temp_path, csv_path)
+            return "utf-8-sig"
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+    if last_error is not None:
+        raise ValueError(f"Could not decode CSV using supported encodings: {last_error}") from last_error
+
+    raise ValueError("Could not decode CSV using supported encodings.")
+
+
+def ensure_utf8_bom(csv_path: Path) -> None:
+    with csv_path.open("rb") as src:
+        if src.read(3) == codecs.BOM_UTF8:
+            return
+
+    temp_path = csv_path.with_name(f"{csv_path.name}.{uuid.uuid4().hex}.bomtmp")
+    try:
+        with csv_path.open("rb") as src, temp_path.open("wb") as dst:
+            dst.write(codecs.BOM_UTF8)
+            shutil.copyfileobj(src, dst, length=1_048_576)
+        os.replace(temp_path, csv_path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+def load_csv_dataframe(csv_path: Path) -> pd.DataFrame:
+    errors: List[str] = []
+
+    for encoding in csv_encoding_candidates(csv_path):
+        try:
+            return pd.read_csv(
+                csv_path,
+                dtype=str,
+                encoding=encoding,
+                keep_default_na=False,
+                na_filter=False,
+            )
+        except UnicodeDecodeError as exc:
+            errors.append(f"{encoding}: {exc}")
+
+    raise ValueError(
+        "Could not decode CSV using supported encodings. " + " | ".join(errors)
+    )
+
+
+def excel_cell_to_string(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value)
+
+
+def preview_excel_file(excel_path: Path) -> tuple[List[str], List[Dict[str, Any]]]:
+    try:
+        from openpyxl import load_workbook
+    except ImportError as exc:
+        raise ValueError(
+            "Excel uploads require the openpyxl package to be installed."
+        ) from exc
+
+    workbook = load_workbook(excel_path, read_only=True, data_only=True)
+    try:
+        sheet = workbook.worksheets[0] if workbook.worksheets else None
+        if sheet is None:
+            raise ValueError("Uploaded Excel file does not contain any worksheets.")
+
+        row_iter = sheet.iter_rows(values_only=True)
+        header_row = next(row_iter, None)
+        if header_row is None:
+            raise ValueError("Uploaded Excel file is empty.")
+
+        columns = [excel_cell_to_string(value) for value in header_row]
+        if not any(column.strip() for column in columns):
+            raise ValueError("Uploaded Excel file does not contain any readable columns.")
+
+        preview_rows: List[Dict[str, Any]] = []
+        for row in row_iter:
+            row_values = list(row)
+            if len(row_values) < len(columns):
+                row_values.extend([None] * (len(columns) - len(row_values)))
+            record = {
+                column: json_safe(excel_cell_to_string(row_values[index]))
+                for index, column in enumerate(columns)
+            }
+            preview_rows.append(record)
+            if len(preview_rows) >= 10:
+                break
+
+        return columns, preview_rows
+    finally:
+        workbook.close()
+
+
+def convert_excel_to_csv(excel_path: Path, csv_path: Path) -> None:
+    try:
+        from openpyxl import load_workbook
+    except ImportError as exc:
+        raise ValueError(
+            "Excel uploads require the openpyxl package to be installed."
+        ) from exc
+
+    workbook = load_workbook(excel_path, read_only=True, data_only=True)
+    try:
+        sheet = workbook.worksheets[0] if workbook.worksheets else None
+        if sheet is None:
+            raise ValueError("Uploaded Excel file does not contain any worksheets.")
+
+        row_iter = sheet.iter_rows(values_only=True)
+        header_row = next(row_iter, None)
+        if header_row is None:
+            raise ValueError("Uploaded Excel file is empty.")
+
+        columns = [excel_cell_to_string(value) for value in header_row]
+        if not any(column.strip() for column in columns):
+            raise ValueError("Uploaded Excel file does not contain any readable columns.")
+
+        with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(columns)
+            for row in row_iter:
+                row_values = list(row)
+                if len(row_values) < len(columns):
+                    row_values.extend([None] * (len(columns) - len(row_values)))
+                writer.writerow([
+                    excel_cell_to_string(row_values[index])
+                    for index, _column in enumerate(columns)
+                ])
+    finally:
+        workbook.close()
+
+
+def prepare_exposure_upload(uploaded_file, upload_dir: Path, upload_id: str) -> tuple[Path, str]:
+    original_filename = Path(uploaded_file.filename or "").name
+    display_filename = secure_filename(original_filename) or f"{upload_id}.csv"
+    extension = Path(display_filename).suffix.lower()
+
+    if extension not in SUPPORTED_EXPOSURE_UPLOAD_EXTENSIONS:
+        raise ValueError("Only CSV and Excel (.xlsx) files are supported.")
+
+    if extension == ".csv":
+        upload_path = upload_dir / f"{upload_id}_{display_filename}"
+        saved_size = save_uploaded_file(uploaded_file, upload_path)
+        if saved_size == 0:
+            upload_path.unlink(missing_ok=True)
+            raise ValueError(
+                "The uploaded file was saved as 0 bytes. "
+                f"Filename: {original_filename or display_filename}"
+            )
+        return upload_path, display_filename
+
+    upload_path = upload_dir / f"{upload_id}_{display_filename}"
+    saved_size = save_uploaded_file(uploaded_file, upload_path)
+    if saved_size == 0:
+        upload_path.unlink(missing_ok=True)
+        raise ValueError(
+            "The uploaded file was saved as 0 bytes. "
+            f"Filename: {original_filename or display_filename}"
+        )
+
+    return upload_path, display_filename
 
 
 def duckdb_csv_encoding(csv_path: Path) -> str:
@@ -554,6 +769,12 @@ def save_uploaded_file(uploaded_file, destination: Path) -> int:
     return size_bytes
 
 
+def derived_enrichment_download_name(upload_filename: str, suffix: str = "_enriched.csv") -> str:
+    original_name = Path(upload_filename).name
+    stem = Path(original_name).stem or "exposure"
+    return secure_filename(f"{stem}{suffix}") or f"exposure{suffix}"
+
+
 def browse_local_file(kind: str) -> Optional[str]:
     choices = {
         "parquet": (".parquet", "Parquet", "Select Parquet file"),
@@ -668,6 +889,17 @@ def lookup_db_path_for_parquet(parquet_path: str) -> str:
     return display_path(parquet.with_name(f"{name}.duckdb"))
 
 
+def workflow_duckdb_thread_count() -> int:
+    configured = os.environ.get("OBM_WORKFLOW_THREADS", "").strip()
+    if configured:
+        try:
+            return max(1, int(configured))
+        except ValueError:
+            pass
+
+    return max(1, min(os.cpu_count() or 1, 2))
+
+
 def prepare_index(parquet_path: str, db_path: str, force: bool = False, threads: int = 8) -> None:
     parquet = Path(parquet_path)
     if not parquet.exists():
@@ -681,6 +913,7 @@ def prepare_index(parquet_path: str, db_path: str, force: bool = False, threads:
 
     con = open_db(db_path)
     con.execute(f"SET threads = {int(threads)};")
+    con.execute("SET preserve_insertion_order = false;")
 
     if not force:
         exists = con.execute("""
@@ -751,7 +984,7 @@ def prepare_index(parquet_path: str, db_path: str, force: bool = False, threads:
             ST_XMax(geom_3035) AS bbox_3035_xmax,
             ST_YMax(geom_3035) AS bbox_3035_ymax
         FROM projected_buildings
-        ORDER BY quadkey_prefix_14, bbox_xmin, bbox_ymin;
+        ;
     """)
 
     print("Creating spatial index.")
@@ -887,12 +1120,18 @@ def create_app(
         upload_keep_names = {
             path.name
             for upload_id in keep_upload_ids
-            for path in Path(app.config["UPLOAD_DIR"]).glob(f"{upload_id}_*.csv")
-            if path.is_file()
+            for path in Path(app.config["UPLOAD_DIR"]).glob(f"{upload_id}_*")
+            if path.is_file() and path.suffix.lower() in SUPPORTED_EXPOSURE_UPLOAD_EXTENSIONS
         }
         prune_files(
             Path(app.config["UPLOAD_DIR"]),
             "*.csv",
+            upload_keep_names,
+            MAX_RETAINED_EXPOSURE_UPLOADS,
+        )
+        prune_files(
+            Path(app.config["UPLOAD_DIR"]),
+            "*.xlsx",
             upload_keep_names,
             MAX_RETAINED_EXPOSURE_UPLOADS,
         )
@@ -930,21 +1169,17 @@ def create_app(
     def data_source():
         if request.method == "GET":
             return jsonify({
-                "parquet_path": app.config["PARQUET_PATH"],
                 "db_path": app.config["DB_PATH"],
-                "parquet_files": find_local_files(".parquet"),
                 "db_files": find_local_files(".duckdb"),
             })
 
         payload = request.get_json(silent=True) or {}
-        parquet_path = str(payload.get("parquet_path", "")).strip()
         db_path = str(payload.get("db_path", "")).strip()
 
-        if not parquet_path or not db_path:
-            return jsonify({"error": "Parquet and DuckDB paths are required."}), 400
+        if not db_path:
+            return jsonify({"error": "DuckDB path is required."}), 400
 
         try:
-            parquet_path = validate_local_file(parquet_path, ".parquet", "Parquet")
             db_path = validate_local_file(db_path, ".duckdb", "DuckDB")
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
@@ -956,28 +1191,12 @@ def create_app(
             return jsonify({"error": f"Could not open DuckDB lookup database: {exc}"}), 400
 
         if not has_buildings:
-            generated_db_path = lookup_db_path_for_parquet(parquet_path)
-            try:
-                prepare_index(parquet_path, generated_db_path, force=True, threads=8)
-                has_buildings = has_buildings_table(generated_db_path)
-            except Exception as exc:
-                return jsonify({
-                    "error": (
-                        "The selected DuckDB file is an ETL work database, not a lookup database, "
-                        f"and creating a lookup database from the Parquet failed: {exc}"
-                    )
-                }), 400
+            return jsonify({
+                "error": "The selected DuckDB file is not a lookup database. Choose a DuckDB file that already contains the buildings table."
+            }), 400
 
-            if not has_buildings:
-                return jsonify({"error": "Could not create a buildings lookup table from the selected Parquet."}), 400
-
-            db_path = generated_db_path
-            generated_lookup = True
-
-        app.config["PARQUET_PATH"] = parquet_path
         app.config["DB_PATH"] = db_path
         return jsonify({
-            "parquet_path": parquet_path,
             "db_path": db_path,
             "status": "active",
             "generated_lookup": generated_lookup,
@@ -1122,30 +1341,25 @@ def create_app(
         file = request.files.get("file")
 
         if file is None or not file.filename:
-            return jsonify({"error": "Upload a CSV file."}), 400
+            return jsonify({"error": "Upload a CSV or Excel (.xlsx) file."}), 400
 
         upload_id = uuid.uuid4().hex
-        original_filename = file.filename
-        filename = secure_filename(original_filename) or f"{upload_id}.csv"
-        if not filename.lower().endswith(".csv"):
-            return jsonify({"error": "Only CSV files are supported."}), 400
-
-        upload_path = Path(app.config["UPLOAD_DIR"]) / f"{upload_id}_{filename}"
-        saved_size = save_uploaded_file(file, upload_path)
-        if saved_size == 0:
-            upload_path.unlink(missing_ok=True)
-            return jsonify({
-                "error": (
-                    "The uploaded CSV was saved as 0 bytes. "
-                    f"Filename: {original_filename}"
-                )
-            }), 400
+        upload_path: Optional[Path] = None
 
         try:
-            columns, rows = preview_csv(upload_path)
+            upload_path, filename = prepare_exposure_upload(
+                file,
+                Path(app.config["UPLOAD_DIR"]),
+                upload_id,
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        try:
+            columns, rows = preview_uploaded_file(upload_path)
         except Exception as exc:
             upload_path.unlink(missing_ok=True)
-            return jsonify({"error": f"Could not read CSV: {exc}"}), 400
+            return jsonify({"error": f"Could not read file: {exc}"}), 400
 
         latest_upload_id[0] = upload_id
         cleanup_exposure_runtime()
@@ -1209,7 +1423,7 @@ def create_app(
         
         upload_path = find_upload(Path(app.config["UPLOAD_DIR"]), upload_id)
         if upload_path is None:
-            return jsonify({"error": "Uploaded CSV was not found. Upload it again."}), 404
+            return jsonify({"error": "Uploaded file was not found. Upload it again."}), 404
 
         with jobs_lock:
             active_job = next(
@@ -1228,6 +1442,8 @@ def create_app(
             }), 409
 
         job_id = uuid.uuid4().hex
+        original_upload_name = upload_path.name.partition("_")[2] or upload_path.name
+        download_name = derived_enrichment_download_name(original_upload_name)
 
         output_path = Path(app.config["RESULT_DIR"]) / f"enriched_{job_id}.csv"
         progress_path = output_path.with_suffix(".progress.json")
@@ -1242,25 +1458,39 @@ def create_app(
             created_at=time.time(),
             upload_id=upload_id,
             output_filename=output_path.name,
+            download_name=download_name,
             _progress_path=str(progress_path),
         )
 
         def run_job() -> None:
+            converted_upload_path: Optional[Path] = None
             try:
                 log_flask_memory(f"Before enrichment job {job_id}")
                 if not enrichment_lock.acquire(blocking=False):
                     raise RuntimeError("Another enrichment is already running.")
 
                 try:
+                    worker_csv_path = upload_path
+                    if upload_path.suffix.lower() == ".xlsx":
+                        set_job(
+                            job_id,
+                            status="running",
+                            phase="Converting Excel workbook",
+                            percent=3,
+                        )
+                        converted_upload_path = local_runtime_dir("exposure_uploads") / f"{job_id}_{upload_path.stem}.csv"
+                        convert_excel_to_csv(upload_path, converted_upload_path)
+                        worker_csv_path = converted_upload_path
+
                     set_job(
                         job_id,
                         status="running",
                         phase="Starting enrichment worker",
-                        percent=3,
+                        percent=6,
                     )
                     summary = run_enrichment_worker(
                         db_path=db_path,
-                        csv_path=upload_path,
+                        csv_path=worker_csv_path,
                         output_path=output_path,
                         lat_col=lat_col,
                         lon_col=lon_col,
@@ -1278,7 +1508,11 @@ def create_app(
                     status="complete",
                     phase="Complete",
                     percent=100,
-                    download_url=f"/api/exposure/download/{output_path.name}",
+                    download_url=(
+                        f"/api/exposure/download/{output_path.name}"
+                        f"?download_name={urllib.parse.quote(download_name)}"
+                    ),
+                    download_name=download_name,
                     summary=summary,
                     completed_at=time.time(),
                     _progress_path=None,
@@ -1296,6 +1530,8 @@ def create_app(
                     _progress_path=None,
                 )
             finally:
+                if converted_upload_path is not None:
+                    converted_upload_path.unlink(missing_ok=True)
                 cleanup_exposure_runtime()
 
         Thread(target=run_job, daemon=True).start()
@@ -1330,7 +1566,10 @@ def create_app(
         if not output_path.exists():
             return jsonify({"error": "Result file was not found."}), 404
 
-        return send_file(output_path, as_attachment=True, download_name=safe_name)
+        requested_download_name = secure_filename(str(request.args.get("download_name", "")).strip())
+        download_name = requested_download_name or safe_name
+
+        return send_file(output_path, as_attachment=True, download_name=download_name)
 
     # ------------------------------------------------------------------
     # ETL: Create OBM Database
@@ -1376,9 +1615,13 @@ def create_app(
                 raise ValueError(f"{label} must end with {suffix}.")
             return path.as_posix()
 
+        def _derived_work_duckdb_path(parquet_path: str) -> str:
+            parquet = Path(parquet_path)
+            return parquet.with_name(f"{parquet.stem}_obm.duckdb").as_posix()
+
         try:
             output_parquet = _output_path("output_parquet", "buildings_cleaned.parquet", ".parquet", "Parquet output")
-            duckdb_file = _output_path("duckdb_file", "work_obm.duckdb", ".duckdb", "DuckDB work file")
+            duckdb_file = _derived_work_duckdb_path(output_parquet)
             lookup_db_file = _output_path("lookup_db_file", "building_lookup.duckdb", ".duckdb", "DuckDB lookup table")
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
@@ -1392,6 +1635,7 @@ def create_app(
             output_dir=output_dir,
             output_parquet=output_parquet,
             duckdb_file=duckdb_file,
+            threads=workflow_duckdb_thread_count(),
             temp_directory=f"{output_dir}/duckdb_temp",
             boundary_file=boundary_file_path,
             force=True,
@@ -1424,7 +1668,12 @@ def create_app(
                     },
                 )
                 set_etl_job(job_id, phase="Creating DuckDB lookup table", percent=85)
-                prepare_index(cfg.output_parquet, lookup_db_file, force=True, threads=8)
+                prepare_index(
+                    cfg.output_parquet,
+                    lookup_db_file,
+                    force=True,
+                    threads=workflow_duckdb_thread_count(),
+                )
                 app.config["PARQUET_PATH"] = display_path(Path(cfg.output_parquet))
                 app.config["DB_PATH"] = display_path(Path(lookup_db_file))
                 set_etl_job(job_id, status="complete", phase="Complete", percent=100)
@@ -1446,39 +1695,40 @@ def create_app(
 
 
 def find_upload(upload_dir: Path, upload_id: str) -> Optional[Path]:
-    matches = list(upload_dir.glob(f"{upload_id}_*.csv"))
+    matches = [
+        path
+        for path in upload_dir.glob(f"{upload_id}_*")
+        if path.is_file() and path.suffix.lower() in SUPPORTED_EXPOSURE_UPLOAD_EXTENSIONS
+    ]
     return matches[0] if matches else None
 
 
-def preview_csv(csv_path: Path) -> tuple[List[str], List[Dict[str, Any]]]:
-    if csv_path.stat().st_size == 0:
-        raise ValueError("Uploaded CSV is empty.")
+def preview_uploaded_file(upload_path: Path) -> tuple[List[str], List[Dict[str, Any]]]:
+    if upload_path.stat().st_size == 0:
+        raise ValueError("Uploaded file is empty.")
 
-    csv_sql = sql_string(str(csv_path.resolve()))
-    con = duckdb.connect()
+    if upload_path.suffix.lower() == ".xlsx":
+        try:
+            return preview_excel_file(upload_path)
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(f"Could not parse the uploaded Excel file: {exc}") from exc
+
     try:
-        scan_options_sql = resolve_csv_scan_options(con, csv_path)
-        columns = csv_columns(con, csv_path, scan_options_sql=scan_options_sql)
+        frame = load_csv_dataframe(upload_path)
+        columns = [str(column) for column in frame.columns]
         if not columns:
-            raise ValueError("Uploaded CSV does not contain any readable columns.")
+            raise ValueError("Uploaded file does not contain any readable columns.")
 
-        cursor = con.execute(f"""
-            SELECT *
-            FROM read_csv_auto({csv_sql}, {scan_options_sql})
-            LIMIT 10;
-        """)
+        preview_rows = frame.head(10).to_dict(orient="records")
         rows = [
-            {
-                column: json_safe(value)
-                for column, value in zip(columns, record)
-            }
-            for record in cursor.fetchall()
+            {column: json_safe(record.get(column)) for column in columns}
+            for record in preview_rows
         ]
         return columns, rows
-    except duckdb.Error as exc:
-        raise ValueError(f"Could not parse the uploaded CSV: {exc}") from exc
-    finally:
-        con.close()
+    except (duckdb.Error, pd.errors.ParserError, ValueError) as exc:
+        raise ValueError(f"Could not parse the uploaded file: {exc}") from exc
 
 
 def resolve_csv_scan_options(con: duckdb.DuckDBPyConnection, csv_path: Path) -> str:
@@ -1681,24 +1931,16 @@ def copy_remote_db_to_cache(
 
 def extract_remote_db_subset(
     source: Path,
-    csv_path: Path,
-    scan_options_sql: str,
+    exposure_df: pd.DataFrame,
     lat_col: str,
     lon_col: str,
     report_progress,
 ) -> Path:
     report_progress("Reading CSV coordinates for staging", 8)
-    csv_sql = sql_string(str(csv_path.resolve()))
-    mem_con = duckdb.connect()
-    try:
-        coordinate_rows = mem_con.execute(f"""
-            SELECT
-                TRY_CAST({sql_identifier(lon_col)} AS DOUBLE),
-                TRY_CAST({sql_identifier(lat_col)} AS DOUBLE)
-            FROM read_csv_auto({csv_sql}, {scan_options_sql});
-        """).fetchall()
-    finally:
-        mem_con.close()
+    coordinate_rows = [
+        (row.get(lon_col), row.get(lat_col))
+        for row in exposure_df[[lon_col, lat_col]].to_dict(orient="records")
+    ]
 
     report_progress("Reading lookup index configuration", 10)
     remote_con = open_db(str(source), read_only=True)
@@ -1785,8 +2027,7 @@ def extract_remote_db_subset(
 
 def stage_remote_lookup_database(
     db_path: str,
-    csv_path: Path,
-    scan_options_sql: str,
+    exposure_df: pd.DataFrame,
     lat_col: str,
     lon_col: str,
     report_progress,
@@ -1811,8 +2052,7 @@ def stage_remote_lookup_database(
 
     staged = extract_remote_db_subset(
         source,
-        csv_path,
-        scan_options_sql,
+        exposure_df,
         lat_col,
         lon_col,
         report_progress,
@@ -1832,6 +2072,7 @@ def enrich_exposure_csv(
     progress_callback=None,
 ) -> Dict[str, Any]:
     started_at = time.perf_counter()
+    exposure_df = load_csv_dataframe(csv_path)
 
     last_tick = [time.perf_counter()]
 
@@ -1849,16 +2090,9 @@ def enrich_exposure_csv(
         if progress_callback:
             progress_callback(phase, percent)
 
-    report_progress("Resolving CSV scan settings", 4)
-    csv_con = duckdb.connect()
-    try:
-        scan_options_sql = resolve_csv_scan_options(csv_con, csv_path)
-        log_step("Resolved CSV scan options")
-        report_progress("Reading CSV columns", 6)
-        columns = csv_columns(csv_con, csv_path, scan_options_sql=scan_options_sql)
-        log_step("Read CSV columns")
-    finally:
-        csv_con.close()
+    report_progress("Reading CSV columns", 6)
+    columns = [str(column) for column in exposure_df.columns]
+    log_step("Read CSV columns")
 
     if lat_col not in columns or lon_col not in columns:
         raise ValueError("Selected latitude/longitude columns were not found in the CSV.")
@@ -1872,8 +2106,7 @@ def enrich_exposure_csv(
         try:
             effective_db_path, staging_mode, staged_temp_db = stage_remote_lookup_database(
                 db_path=db_path,
-                csv_path=csv_path,
-                scan_options_sql=scan_options_sql,
+                exposure_df=exposure_df,
                 lat_col=lat_col,
                 lon_col=lon_col,
                 report_progress=report_progress,
@@ -1904,15 +2137,11 @@ def enrich_exposure_csv(
         quadkey_prefix_column, quadkey_prefix_zoom, allow_null_quadkey_prefix = enrichment_quadkey_config(con)
         log_step("Loaded quadkey config")
 
-        csv_sql = sql_string(str(csv_path.resolve()))
         output_sql = sql_string(str(output_path.resolve()))
+        con.register("exposure_input_df", exposure_df)
         report_progress("Building enrichment SQL", 78)
 
         if staging_mode == "row_by_row_fallback":
-            exposure_df = con.execute(
-                f"SELECT * FROM read_csv_auto({csv_sql}, {scan_options_sql});"
-            ).fetchdf()
-
             total_rows = len(exposure_df)
             log_step(f"Loaded CSV for row-by-row remote enrichment: {total_rows} rows")
             report_progress("Running spatial enrichment row-by-row", 78)
@@ -1958,13 +2187,12 @@ def enrich_exposure_csv(
                     log_step(f"Processed rows {row_idx - 18}-{row_idx + 1}")
 
             result_df = pd.DataFrame(enriched_rows)
-            result_df.to_csv(output_path, index=False)
+            result_df.to_csv(output_path, index=False, encoding="utf-8-sig")
             log_step("Finished row-by-row remote enrichment and wrote CSV")
 
         else:
             select_sql = enrichment_select_sql(
-                csv_sql=csv_sql,
-                scan_options_sql=scan_options_sql,
+                source_relation_sql="exposure_input_df",
                 lat_sql=sql_identifier(lat_col),
                 lon_sql=sql_identifier(lon_col),
                 mode=mode,
@@ -1983,6 +2211,7 @@ def enrich_exposure_csv(
                     {select_sql}
                 ) TO {output_sql} (HEADER, DELIMITER ',');
             """)
+            ensure_utf8_bom(output_path)
             log_step("Finished enrichment COPY")
         report_progress("Summarizing enriched output", 93)
 
@@ -2488,8 +2717,7 @@ def chunk_lookup_sql(
     """
 
 def enrichment_select_sql(
-    csv_sql: str,
-    scan_options_sql: str,
+    source_relation_sql: str,
     lat_sql: str,
     lon_sql: str,
     mode: str,
@@ -2580,7 +2808,7 @@ def enrichment_select_sql(
             SELECT
                 ROW_NUMBER() OVER () AS __exposure_row_id,
                 *
-            FROM read_csv_auto({csv_sql}, {scan_options_sql})
+            FROM {source_relation_sql}
             {limit_offset_clause}
         ),
         exposure_parsed AS MATERIALIZED (

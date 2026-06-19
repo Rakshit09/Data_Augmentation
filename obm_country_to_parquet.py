@@ -194,6 +194,7 @@ class OpenBuildingMapCountryETL:
 
         self.con.execute(f"SET threads = {self.cfg.threads};")
         self.con.execute(f"SET memory_limit = '{self.cfg.memory_limit}';")
+        self.con.execute("SET preserve_insertion_order = false;")
         self.con.execute(f"SET temp_directory = '{str(Path(self.cfg.temp_directory))}';")
         self.con.execute("SET s3_use_ssl = false;")
         self.con.execute("SET enable_curl_server_cert_verification = false;")

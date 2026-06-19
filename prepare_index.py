@@ -84,7 +84,7 @@ def prepare_index(parquet_path: str, db_path: str, force: bool = False, threads:
             ST_XMax(geom_3035) AS bbox_3035_xmax,
             ST_YMax(geom_3035) AS bbox_3035_ymax
         FROM projected_buildings
-        ORDER BY quadkey_prefix_14, bbox_xmin, bbox_ymin;
+        ;
     """)
 
     print("Creating spatial index.")

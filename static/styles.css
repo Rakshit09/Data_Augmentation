@@ -44,7 +44,7 @@ html,
 body {
   height: 100%;
   margin: 0;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--ink);
   background: var(--page);
   -webkit-font-smoothing: antialiased;
@@ -98,6 +98,56 @@ input[type=number] {
   overflow-y: auto;
 }
 
+.panel-note {
+  display: grid;
+  gap: 8px;
+  margin-top: auto;
+  padding: 14px 16px;
+  border: 1px solid rgba(191, 87, 0, 0.2);
+  border-radius: 14px;
+  background: #fff4dd;
+  box-shadow: var(--shadow-sm);
+}
+
+.panel-note-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.panel-note-title {
+  color: #8a4b08;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.panel-note-close {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgba(138, 75, 8, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.6);
+  color: #8a4b08;
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.panel-note-close:hover {
+  background: rgba(255, 255, 255, 0.95);
+}
+
+.panel-note p {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .tabs {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
@@ -117,7 +167,8 @@ input[type=number] {
   color: var(--button-text);
   font: inherit;
   font-size: 14px;
-  font-weight: 700;
+  font-weight: 600;
+  letter-spacing: 0.01em;
   cursor: pointer;
   transition: all var(--transition-fast);
 }
@@ -146,8 +197,8 @@ input[type=number] {
   margin: 0 0 4px;
   color: var(--muted);
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
   text-transform: uppercase;
 }
 
@@ -210,6 +261,84 @@ h2 {
   font-weight: 700;
 }
 
+.field-label-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.field-tip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: rgba(0, 38, 62, 0.08);
+  color: var(--button-text);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  text-transform: none;
+  letter-spacing: 0;
+  cursor: help;
+}
+
+.field-tip::before,
+.field-tip::after {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+  z-index: 30;
+}
+
+.field-tip::before {
+  content: "";
+  left: 6px;
+  bottom: calc(100% + 4px);
+  border-width: 6px;
+  border-style: solid;
+  border-color: #0f172a transparent transparent transparent;
+  transform: translateY(4px);
+}
+
+.field-tip::after {
+  content: attr(data-tooltip);
+  left: 0;
+  bottom: calc(100% + 10px);
+  width: 260px;
+  max-width: min(260px, calc(100vw - 48px));
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #0f172a;
+  color: #fff;
+  box-shadow: var(--shadow-lg);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: pre-line;
+  overflow-wrap: break-word;
+  transform: translateY(4px);
+}
+
+.field-tip:hover::before,
+.field-tip:hover::after,
+.field-tip:focus-visible::before,
+.field-tip:focus-visible::after {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.field-tip:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
 .path-picker-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -264,7 +393,8 @@ h2 {
   box-shadow: none;
   text-align: left;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 500;
+  letter-spacing: 0.01em;
   overflow-wrap: anywhere;
 }
 
@@ -287,6 +417,16 @@ h2 {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
+}
+
+.search-field {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
 }
 
 .search input,
@@ -346,7 +486,9 @@ h2 {
   background: var(--button-primary);
   color: #fff;
   font: inherit;
-  font-weight: 700;
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0.01em;
   cursor: pointer;
   box-shadow: var(--shadow-md);
   transition: all var(--transition-fast);
@@ -486,6 +628,37 @@ button:focus-visible,
   font-weight: 700;
 }
 
+.lookup-field-picker summary .field-label-row {
+  display: inline-flex;
+}
+
+.lookup-field-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.lookup-field-picker .lookup-field-actions button {
+  height: auto;
+  padding: 4px 10px;
+  border: 1px solid var(--brand);
+  border-radius: 6px;
+  background: var(--button-secondary);
+  color: var(--button-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: none;
+  transform: none;
+}
+
+.lookup-field-picker .lookup-field-actions button:hover {
+  background: var(--button-secondary-hover);
+  transform: none;
+  box-shadow: none;
+}
+
 .lookup-field-options {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -577,6 +750,16 @@ button:focus-visible,
 .dropzone-title {
   font-size: 16px;
   font-weight: 800;
+}
+
+.dropzone-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dropzone-title-row .field-tip {
+  flex: none;
 }
 
 .dropzone-subtitle {
@@ -802,6 +985,11 @@ button:focus-visible,
   margin-top: 20px;
   border-top: 1px solid var(--line);
   padding-top: 18px;
+}
+
+.stats-download {
+  display: inline-flex;
+  margin-top: 12px;
 }
 
 .stats-tables {

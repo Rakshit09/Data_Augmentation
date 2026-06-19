@@ -11,13 +11,9 @@ const etlTools = document.getElementById("etlTools");
 const modeEyebrow = document.getElementById("modeEyebrow");
 const modeTitle = document.getElementById("modeTitle");
 const dataSourcePanel = document.getElementById("dataSourcePanel");
-const activeParquetPath = document.getElementById("activeParquetPath");
 const activeDbPath = document.getElementById("activeDbPath");
-const parquetFileOptions = document.getElementById("parquetFileOptions");
 const dbFileOptions = document.getElementById("dbFileOptions");
-const browseParquet = document.getElementById("browseParquet");
 const browseDb = document.getElementById("browseDb");
-const parquetPicker = document.getElementById("parquetPicker");
 const dbPicker = document.getElementById("dbPicker");
 const refreshSources = document.getElementById("refreshSources");
 const applyDataSource = document.getElementById("applyDataSource");
@@ -33,6 +29,8 @@ const searchInput = document.getElementById("searchInput");
 const searchResults = document.getElementById("searchResults");
 const uploadForm = document.getElementById("uploadForm");
 const csvFile = document.getElementById("csvFile");
+const csvDropzoneTitle = document.getElementById("csvDropzoneTitle");
+const csvDropzoneSubtitle = document.getElementById("csvDropzoneSubtitle");
 const mappingControls = document.getElementById("mappingControls");
 const latColumn = document.getElementById("latColumn");
 const lonColumn = document.getElementById("lonColumn");
@@ -44,11 +42,138 @@ const previewTable = document.getElementById("previewTable");
 const downloadLink = document.getElementById("downloadLink");
 const statsPanel = document.getElementById("statsPanel");
 const statsGrid = document.getElementById("statsGrid");
+const criticalNote = document.getElementById("criticalNote");
+const criticalNoteClose = document.getElementById("criticalNoteClose");
 
 let currentUploadId = null;
-let availableParquetFiles = [];
+let currentUploadFilename = null;
+let currentStatsDownloadUrl = null;
 let availableDbFiles = [];
 let selectedBuilding = null;
+
+const statsDownloadLink = ensureStatsDownloadLink();
+
+function dismissCriticalNote() {
+  criticalNote?.classList.add("hidden");
+}
+
+criticalNoteClose?.addEventListener("click", dismissCriticalNote);
+
+function ensureStatsDownloadLink() {
+  if (!statsPanel || !statsGrid) return null;
+
+  let link = document.getElementById("statsDownloadLink");
+  if (!link) {
+    link = document.createElement("a");
+    link.id = "statsDownloadLink";
+    link.className = "download stats-download hidden";
+    link.href = "#";
+    link.textContent = "Download stats CSV";
+
+    const statsHeading = statsPanel.querySelector("h2");
+    if (statsHeading) {
+      statsHeading.insertAdjacentElement("afterend", link);
+    } else {
+      statsGrid.before(link);
+    }
+  }
+
+  return link;
+}
+
+function baseFilename(filename, fallback = "exposure") {
+  const raw = String(filename || "").trim();
+  if (!raw) return fallback;
+  const parts = raw.split(".");
+  if (parts.length > 1) parts.pop();
+  return parts.join(".") || fallback;
+}
+
+function makeEnrichedCsvFilename(filename) {
+  return `${baseFilename(filename)}_enriched.csv`;
+}
+
+function makeStatsCsvFilename(filename) {
+  return `${baseFilename(filename)}_enriched_stats.csv`;
+}
+
+function releaseStatsDownload() {
+  if (currentStatsDownloadUrl) {
+    URL.revokeObjectURL(currentStatsDownloadUrl);
+    currentStatsDownloadUrl = null;
+  }
+
+  if (statsDownloadLink) {
+    statsDownloadLink.classList.add("hidden");
+    statsDownloadLink.removeAttribute("href");
+    statsDownloadLink.removeAttribute("download");
+  }
+}
+
+function csvCell(value) {
+  const text = value == null ? "" : String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function buildStatsCsv(summary) {
+  const total = Number(summary.total_rows || 0);
+  const lines = [["Section", "Name", "Count", "Share"]];
+  const overviewRows = [
+    ["Total rows", summary.total_rows],
+    ["Valid coordinates", summary.valid_coordinate_rows],
+    ["Inside polygon", summary.inside_polygon_matches],
+    ["Nearest matches", summary.nearest_matches],
+    ["No match", summary.no_matches],
+    ["Elapsed", summary.enrichment_elapsed_seconds == null
+      ? "n/a"
+      : `${Number(summary.enrichment_elapsed_seconds).toFixed(1)} s`, null],
+    ["DuckDB threads", summary.engine_threads ?? "n/a", null],
+    ["Lookup prefix", summary.lookup_quadkey_prefix_column
+      ? `${summary.lookup_quadkey_prefix_column} (z${summary.lookup_quadkey_prefix_zoom})`
+      : "n/a", null],
+    ["Mode", summary.enrichment_mode || "n/a", null],
+    ["Avg nearest distance", summary.average_nearest_distance_m == null
+      ? "n/a"
+      : `${Number(summary.average_nearest_distance_m).toFixed(1)} m`, null]
+  ];
+
+  overviewRows.forEach(([label, value, customShare]) => {
+    const share = customShare === null ? "" : formatShare(Number(value || 0), total);
+    lines.push(["Match Summary", label, formatStatValue(value), share]);
+  });
+
+  const appendDistribution = (section, rows) => {
+    const sectionTotal = rows.reduce((sum, row) => sum + Number(row.count || 0), 0);
+    rows.forEach((row) => {
+      lines.push([
+        section,
+        row.name,
+        formatInteger(row.count),
+        formatShare(row.count, sectionTotal)
+      ]);
+    });
+
+    if (!rows.length) {
+      lines.push([section, "No data", "", ""]);
+    }
+  };
+
+  appendDistribution("Detailed Occupancy", summary.detailed_occupancy || summary.occupancy_raw || []);
+  appendDistribution("Occupancy Group", summary.occupancy_group || []);
+
+  return lines.map((row) => row.map(csvCell).join(",")).join("\r\n");
+}
+
+function updateStatsDownload(summary) {
+  if (!statsDownloadLink) return;
+
+  releaseStatsDownload();
+  const csv = buildStatsCsv(summary);
+  currentStatsDownloadUrl = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+  statsDownloadLink.href = currentStatsDownloadUrl;
+  statsDownloadLink.download = makeStatsCsvFilename(currentUploadFilename);
+  statsDownloadLink.classList.remove("hidden");
+}
 
 const selectedSource = {
   type: "FeatureCollection",
@@ -88,10 +213,18 @@ map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-
 lookupTab.addEventListener("click", () => switchMode("lookup"));
 exposureTab.addEventListener("click", () => switchMode("exposure"));
 etlTab.addEventListener("click", () => switchMode("etl"));
-refreshSources.addEventListener("click", () => loadDataSources());
-applyDataSource.addEventListener("click", () => applySelectedDataSource());
-browseParquet.addEventListener("click", () => browseLocalFile("parquet"));
-browseDb.addEventListener("click", () => browseLocalFile("db"));
+refreshSources.addEventListener("click", () => {
+  dismissCriticalNote();
+  loadDataSources();
+});
+applyDataSource.addEventListener("click", () => {
+  dismissCriticalNote();
+  applySelectedDataSource();
+});
+browseDb.addEventListener("click", () => {
+  dismissCriticalNote();
+  browseDbFile();
+});
 
 function switchMode(mode) {
   const isLookup = mode === "lookup";
@@ -133,17 +266,13 @@ async function loadDataSources() {
       throw new Error(payload.error || "Could not load data source files");
     }
 
-    activeParquetPath.value = payload.parquet_path || "";
     activeDbPath.value = payload.db_path || "";
-    availableParquetFiles = payload.parquet_files || [];
     availableDbFiles = payload.db_files || [];
-    renderFileOptions(parquetFileOptions, availableParquetFiles);
     renderFileOptions(dbFileOptions, availableDbFiles);
-    renderFilePicker(parquetPicker, availableParquetFiles, activeParquetPath);
     renderFilePicker(dbPicker, availableDbFiles, activeDbPath);
     await window.buildingInfoFields?.load();
     await window.exposureEnrichmentFields?.load();
-    setDataSourceMessage("Choose a local Parquet and DuckDB lookup database.", "success");
+    setDataSourceMessage("Choose a local DuckDB lookup database.", "success");
   } catch (error) {
     setDataSourceMessage(error.message, "error");
   } finally {
@@ -175,29 +304,19 @@ function renderFilePicker(pickerEl, files, inputEl) {
   });
 }
 
-function toggleFilePicker(kind) {
-  const picker = kind === "parquet" ? parquetPicker : dbPicker;
-  const otherPicker = kind === "parquet" ? dbPicker : parquetPicker;
-  otherPicker.classList.add("hidden");
-
-  const files = kind === "parquet" ? availableParquetFiles : availableDbFiles;
-  if (!files.length) {
+function toggleDbFilePicker() {
+  if (!availableDbFiles.length) {
     setDataSourceMessage("No matching local files found. Press Refresh after creating files.", "error");
   }
-  picker.classList.toggle("hidden");
+  dbPicker.classList.toggle("hidden");
 }
 
-async function browseLocalFile(kind) {
-  const button = kind === "parquet" ? browseParquet : browseDb;
-  const input = kind === "parquet" ? activeParquetPath : activeDbPath;
-  const picker = kind === "parquet" ? parquetPicker : dbPicker;
-  const label = kind === "parquet" ? "Parquet" : "DuckDB";
-
-  button.disabled = true;
-  setDataSourceMessage(`Opening ${label} file picker...`);
+async function browseDbFile() {
+  browseDb.disabled = true;
+  setDataSourceMessage("Opening DuckDB file picker...");
 
   try {
-    const response = await fetch(`api/browse-file?kind=${encodeURIComponent(kind)}`);
+    const response = await fetch("api/browse-file?kind=db");
     const payload = await response.json();
 
     if (!response.ok) {
@@ -209,14 +328,14 @@ async function browseLocalFile(kind) {
       return;
     }
 
-    input.value = payload.path || "";
-    picker.classList.add("hidden");
-    setDataSourceMessage("File selected. Press Use selected files.", "success");
+    activeDbPath.value = payload.path || "";
+    dbPicker.classList.add("hidden");
+    setDataSourceMessage("Database selected. Press Use selected database.", "success");
   } catch (error) {
     setDataSourceMessage(`${error.message} Showing the local file list instead.`, "error");
-    toggleFilePicker(kind);
+    toggleDbFilePicker();
   } finally {
-    button.disabled = false;
+    browseDb.disabled = false;
   }
 }
 
@@ -231,7 +350,6 @@ async function applySelectedDataSource() {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        parquet_path: activeParquetPath.value.trim(),
         db_path: activeDbPath.value.trim()
       })
     });
@@ -241,15 +359,11 @@ async function applySelectedDataSource() {
       throw new Error(payload.error || "Could not apply data source");
     }
 
-    activeParquetPath.value = payload.parquet_path || "";
     activeDbPath.value = payload.db_path || "";
     clearSelection();
     await window.buildingInfoFields?.load();
     await window.exposureEnrichmentFields?.load();
-    const message = payload.generated_lookup
-      ? `Created lookup DB and switched to ${payload.db_path}.`
-      : "Active data source updated.";
-    setDataSourceMessage(message, "success");
+    setDataSourceMessage("Active lookup database updated.", "success");
     statusEl.textContent = "Ready";
   } catch (error) {
     setDataSourceMessage(error.message, "error");
@@ -295,6 +409,7 @@ map.on("load", () => {
 
 map.on("click", async (event) => {
   const { lng, lat } = event.lngLat;
+  dismissCriticalNote();
   hideSearchResults();
   statusEl.textContent = "Searching";
 
@@ -356,6 +471,7 @@ window.addEventListener("building-info-fields-change", () => {
 
 searchForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  dismissCriticalNote();
 
   const query = searchInput.value.trim();
   if (query.length < 3) {
@@ -430,15 +546,19 @@ csvFile.addEventListener("change", () => {
 
 async function uploadSelectedCsv() {
   if (!csvFile.files.length) {
-    setUploadSummary("Choose a CSV file first.");
+    setUploadedCsvName("");
+    setUploadSummary("Choose a CSV or Excel (.xlsx) file first.");
     return;
   }
 
+  dismissCriticalNote();
+
   const formData = new FormData();
   formData.append("file", csvFile.files[0]);
+  setUploadedCsvName(csvFile.files[0].name);
 
   statusEl.textContent = "Uploading";
-  setUploadSummary("Reading CSV preview...");
+  setUploadSummary("Reading file preview...");
   downloadLink.classList.add("hidden");
 
   try {
@@ -453,10 +573,13 @@ async function uploadSelectedCsv() {
     }
 
     currentUploadId = payload.upload_id;
+    currentUploadFilename = payload.filename;
+  setUploadedCsvName(payload.filename);
     populateColumnSelectors(payload.columns);
     renderPreview(payload.columns, payload.rows);
     mappingControls.classList.remove("hidden");
     statsPanel.classList.add("hidden");
+    releaseStatsDownload();
     renderFileSummary(payload.filename, payload.rows.length);
     statusEl.textContent = "Ready";
   } catch (error) {
@@ -467,8 +590,10 @@ async function uploadSelectedCsv() {
 }
 
 runEnrichment.addEventListener("click", async () => {
+  dismissCriticalNote();
+
   if (!currentUploadId) {
-    setUploadSummary("Upload a CSV first.");
+    setUploadSummary("Upload a file first.");
     return;
   }
 
@@ -477,6 +602,7 @@ runEnrichment.addEventListener("click", async () => {
   setUploadSummary("Running batch spatial enrichment...");
   downloadLink.classList.add("hidden");
   statsPanel.classList.add("hidden");
+  releaseStatsDownload();
 
   try {
     const response = await fetch("api/exposure/enrich", {
@@ -520,9 +646,11 @@ async function pollEnrichmentProgress(jobId) {
 
     if (payload.status === "complete") {
       downloadLink.href = payload.download_url;
+      downloadLink.download = payload.download_name || makeEnrichedCsvFilename(currentUploadFilename);
       downloadLink.classList.remove("hidden");
       renderSummary(payload.summary);
       renderStats(payload.summary);
+      updateStatsDownload(payload.summary);
       statusEl.textContent = "Done";
       runEnrichment.disabled = false;
       return;
@@ -554,8 +682,6 @@ function renderProgress(payload) {
 function renderFileSummary(filename, rowCount) {
   uploadSummary.innerHTML = `
     <div class="file-summary">
-      <span class="file-label">Selected CSV</span>
-      <strong>${escapeHtml(filename)}</strong>
       <span>${formatInteger(rowCount)} preview rows loaded</span>
     </div>
   `;
@@ -724,6 +850,18 @@ function setUploadSummary(message) {
   uploadSummary.textContent = message;
 }
 
+function setUploadedCsvName(filename) {
+  if (csvDropzoneTitle) {
+    csvDropzoneTitle.textContent = filename || "Choose Exposure File";
+  }
+
+  if (csvDropzoneSubtitle) {
+    csvDropzoneSubtitle.textContent = filename
+      ? "Click to choose a different file"
+      : "CSV or Excel (.xlsx) with latitude, longitude, and other columns";
+  }
+}
+
 function formatInteger(value) {
   return Number(value || 0).toLocaleString();
 }
@@ -768,7 +906,6 @@ const boundaryFileName = document.getElementById("boundaryFileName");
 const etlOutputDir = document.getElementById("etlOutputDir");
 const browseOutputDir = document.getElementById("browseOutputDir");
 const etlOutputParquet = document.getElementById("etlOutputParquet");
-const etlDuckdbFile = document.getElementById("etlDuckdbFile");
 const etlLookupDbFile = document.getElementById("etlLookupDbFile");
 const runEtlBtn = document.getElementById("runEtl");
 const etlStatusEl = document.getElementById("etlStatus");
@@ -788,11 +925,13 @@ function setExpandedEtlWorkflow(workflow) {
 }
 
 etlWorkflowToggle.addEventListener("click", () => {
+  dismissCriticalNote();
   const isExpanded = etlWorkflowToggle.getAttribute("aria-expanded") === "true";
   setExpandedEtlWorkflow(isExpanded ? null : "create");
 });
 
 customParquetToggle.addEventListener("click", () => {
+  dismissCriticalNote();
   const isExpanded = customParquetToggle.getAttribute("aria-expanded") === "true";
   setExpandedEtlWorkflow(isExpanded ? null : "custom");
 });
@@ -800,6 +939,10 @@ customParquetToggle.addEventListener("click", () => {
 setExpandedEtlWorkflow(null);
 
 boundaryFile.addEventListener("change", () => {
+  if (boundaryFile.files.length) {
+    dismissCriticalNote();
+  }
+
   if (boundaryFile.files.length) {
     boundaryFileName.textContent = boundaryFile.files[0].name;
     boundaryFileName.classList.remove("hidden");
@@ -813,9 +956,6 @@ function updateEtlOutputPlaceholders() {
   if (!etlOutputParquet.dataset.userEdited) {
     etlOutputParquet.placeholder = `${dir}/buildings_cleaned.parquet`;
   }
-  if (!etlDuckdbFile.dataset.userEdited) {
-    etlDuckdbFile.placeholder = `${dir}/work_obm.duckdb`;
-  }
   if (!etlLookupDbFile.dataset.userEdited) {
     etlLookupDbFile.placeholder = `${dir}/building_lookup.duckdb`;
   }
@@ -825,11 +965,11 @@ function updateEtlOutputPlaceholders() {
 etlOutputDir.addEventListener("input", updateEtlOutputPlaceholders);
 
 etlOutputParquet.addEventListener("input", () => { etlOutputParquet.dataset.userEdited = "1"; });
-etlDuckdbFile.addEventListener("input", () => { etlDuckdbFile.dataset.userEdited = "1"; });
 etlLookupDbFile.addEventListener("input", () => { etlLookupDbFile.dataset.userEdited = "1"; });
 updateEtlOutputPlaceholders();
 
 browseOutputDir.addEventListener("click", async () => {
+  dismissCriticalNote();
   browseOutputDir.disabled = true;
   showEtlStatus("info", "Opening output folder picker...");
 
@@ -857,6 +997,7 @@ browseOutputDir.addEventListener("click", async () => {
 });
 
 runEtlBtn.addEventListener("click", async () => {
+  dismissCriticalNote();
   runEtlBtn.disabled = true;
   statusEl.textContent = "ETL running";
   showEtlStatus("info", "Submitting ETL job...");
@@ -869,7 +1010,6 @@ runEtlBtn.addEventListener("click", async () => {
   const dir = etlOutputDir.value.trim() || "./etl_output";
   formData.append("output_dir", dir);
   formData.append("output_parquet", etlOutputParquet.value.trim() || `${dir}/buildings_cleaned.parquet`);
-  formData.append("duckdb_file", etlDuckdbFile.value.trim() || `${dir}/work_obm.duckdb`);
   formData.append("lookup_db_file", etlLookupDbFile.value.trim() || `${dir}/building_lookup.duckdb`);
   try {
     const response = await fetch("api/etl/create-database", {
@@ -910,7 +1050,6 @@ async function pollEtlProgress(jobId) {
         <strong>Database created successfully.</strong><br>
         ${formatBoundaryExtent(payload.boundary_extent)}
         Parquet: <code>${escapeHtml(payload.output_parquet || "")}</code><br>
-        DuckDB work file: <code>${escapeHtml(payload.duckdb_file || "")}</code><br>
         DuckDB lookup table: <code>${escapeHtml(payload.lookup_db_file || "")}</code>
       `);
       runEtlBtn.disabled = false;

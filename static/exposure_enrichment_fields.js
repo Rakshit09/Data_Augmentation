@@ -3,6 +3,28 @@
   const selectedFields = new Set();
   let fields = [];
 
+  function ensureActionButtons() {
+    const fieldPicker = controls?.closest(".lookup-field-picker");
+    if (!fieldPicker) return { markAllBtn: null, clearAllBtn: null };
+    fieldPicker.open = true;
+
+    let actions = fieldPicker.querySelector(".lookup-field-actions");
+    if (!actions) {
+      actions = document.createElement("div");
+      actions.className = "lookup-field-actions";
+      actions.innerHTML = [
+        '<button type="button" id="markAllFields">Mark all</button>',
+        '<button type="button" id="clearAllFields">Clear all</button>'
+      ].join("");
+      controls.before(actions);
+    }
+
+    return {
+      markAllBtn: actions.querySelector("#markAllFields"),
+      clearAllBtn: actions.querySelector("#clearAllFields")
+    };
+  }
+
   controls.addEventListener("change", (event) => {
     if (!event.target.matches("input[type=checkbox]")) return;
     if (event.target.checked) {
@@ -49,6 +71,21 @@
       return fields.filter((field) => selectedFields.has(field));
     }
   };
+
+  const { markAllBtn, clearAllBtn } = ensureActionButtons();
+
+  if (markAllBtn) {
+    markAllBtn.addEventListener("click", () => {
+      controls.querySelectorAll("input[type=checkbox]").forEach(cb => { cb.checked = true; selectedFields.add(cb.value); });
+    });
+  }
+
+  if (clearAllBtn) {
+    clearAllBtn.addEventListener("click", () => {
+      controls.querySelectorAll("input[type=checkbox]").forEach(cb => { cb.checked = false; });
+      selectedFields.clear();
+    });
+  }
 
   load();
 })();

@@ -132,10 +132,10 @@
     const row = document.createElement("div");
     row.className = "custom-field-row";
     row.innerHTML = `
-      <label>Field name
+      <label><span class="field-label-row"><span>Field name</span><span class="field-tip" tabindex="0" data-tooltip="Name of the new field to create in the lookup database. Use letters, numbers, and underscores, and start with a letter or underscore.">i</span></span>
         <input type="text" data-role="name" placeholder="custom_field" value="${escapeHtml(field.name || "")}">
       </label>
-      <label>Source column
+      <label><span class="field-label-row"><span>Source column</span><span class="field-tip" tabindex="0" data-tooltip="Choose which source column from the Parquet file should be copied into this additional output field.">i</span></span>
         <select data-role="column"></select>
       </label>
       <button class="etl-tab-button" type="button" data-role="remove">Remove</button>
