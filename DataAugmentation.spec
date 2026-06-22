@@ -8,13 +8,35 @@ _ext_path = os.path.expanduser(
     f"~/.duckdb/extensions/v{_ddb_version}/windows_amd64/spatial.duckdb_extension"
 )
 _extra_datas = [(_ext_path, "duckdb_extensions")] if os.path.isfile(_ext_path) else []
+_country_catalog_zip = os.path.join("etl_output", "boundary", "ne_10m_admin_0_countries.zip")
+_boundary_datas = [(_country_catalog_zip, os.path.join("etl_output", "boundary"))] if os.path.isfile(_country_catalog_zip) else []
+_readme_path = "README.md"
+_readme_datas = [(_readme_path, ".")] if os.path.isfile(_readme_path) else []
+
+
+def _filter_packaged_datas(entries):
+    filtered = []
+    blocked_suffixes = (".parquet", ".duckdb")
+    for source, target in entries:
+        lower_source = str(source).lower()
+        if lower_source.endswith(blocked_suffixes):
+            continue
+        filtered.append((source, target))
+    return filtered
+
+
+_packaged_datas = _filter_packaged_datas([
+    ('templates', 'templates'),
+    ('static', 'static'),
+    ('favicon.ico', '.'),
+] + _extra_datas + _boundary_datas + _readme_datas)
 
 
 a = Analysis(
     ['run_app.py'],
     pathex=[],
     binaries=[],
-    datas=[('templates', 'templates'), ('static', 'static'), ('favicon.ico', '.')] + _extra_datas,
+    datas=_packaged_datas,
     
     hiddenimports=[
         'duckdb',
@@ -41,7 +63,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='DataAugmentation_v2.0',
+    name='DataAugmentation_v2.1',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -61,5 +83,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='DataAugmentation_v2.0',
+    name='DataAugmentation_v2.1',
 )

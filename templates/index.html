@@ -55,7 +55,10 @@
           <p id="modeEyebrow" class="eyebrow">Germany</p>
           <h1 id="modeTitle">Building Lookup</h1>
         </div>
-        <span id="status" class="status">Ready</span>
+        <div class="panel-actions">
+          <span id="status" class="status">Ready</span>
+          <a id="openReadmeHelp" class="header-help-button" href="/help/readme" target="_blank" rel="noopener">Help</a>
+        </div>
       </header>
 
       <section id="dataSourcePanel" class="data-source">
@@ -262,6 +265,9 @@
                     </select>
                   </label>
                   <p class="etl-hint">Choose a country here for the standard OBM workflow. Upload a custom boundary only when you need a custom extent instead of a catalog country.</p>
+                  <div class="etl-choice-divider" aria-hidden="true">
+                    <span>OR</span>
+                  </div>
                   <label class="dropzone" for="boundaryFile">
                     <span class="dropzone-title-row">
                       <span class="dropzone-title">Upload Custom Boundary (optional)</span>

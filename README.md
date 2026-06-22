@@ -1,183 +1,195 @@
-# Data Augmentation Tool
+# Data Augmentation Platform User Manual
 
-Data Augmentation Tool is a web application for working with building lookup data. It supports three main tasks:
+The Data Augmentation Platform is a local web application for working with building lookup data. Use it when you need to:
 
-- Look up a building on the map and inspect its attributes.
-- Enrich a CSV exposure file with building attributes from a local DuckDB lookup database.
-- Create a new DuckDB lookup database either from OpenBuildingMap data or from an existing Parquet file.
+- inspect individual building footprints and attributes on a map
+- enrich an exposure CSV with local building attributes
+- create a new local DuckDB lookup database from OpenBuildingMap or from an existing Parquet file
 
-The application runs locally in your browser. Building queries and CSV enrichment use local files. Address search and map tiles depend on online services.
+> [!IMPORTANT]
+> **Run the application, the Parquet files, and the DuckDB files from a local drive.** Do not work directly against `J:` or other network locations.
 
+## 1. Install and Start the Application
 
-## Starting the Application
+### Where to get the package
 
-The application is placed as a bundled zip file at: "J:\cms\Internal\Tools\Data Augmentation Tool\DataAugmentation.zip"
-The version numer changes with each update, so make sure you pick the latest version.
+- The packaged zip file is stored at `J:\cms\Internal\Tools\Data Augmentation Tool\DataAugmentation.zip`.
+- The version number changes over time, so always use the latest available package.
 
-Copy the zip file to your local C:\ drive or "Documents" folder in the analytics desktop. Unzip the package. This will create a folder with the same name. Inside this folder, you will find an EXE. Launch the EXE by double clicking. It starts a local server, opens the browser automatically, and serves the app at `http://127.0.0.1:8100`.
+### Start-up steps
 
-CRITICAL NOTE: Do not run the application from your local desktop if the Parquet or DuckDB files are stored on the J: drive — this will not work reliably.
+1. Copy the zip file to a **local** folder such as `C:\` or your local `Documents` folder in Analytics Desktop.
+2. Unzip the package.
+3. Open the extracted folder.
+4. Double-click the `.exe` file.
+5. Wait for the browser to open automatically.
+6. If needed, open `http://127.0.0.1:8100` manually in your browser.
 
-You must follow one of the options below:
+> [!WARNING]
+> **Do not launch the app from your local Desktop if the Parquet or DuckDB files still live on `J:`.** That setup is not reliable.
 
-Option 1: Use the Analytics Desktop environment.
-Option 2 : Move the Parquet and DuckDB files to a local drive before running the application.
+### Local file rule
 
-If using the Analytics Desktop, you must first copy the DuckDB and Parquet files from the J: drive into the etl_output folder inside the application directory. 
+- If you use Analytics Desktop, copy the Parquet and DuckDB files from `J:` into a local folder inside the application area before you start.
+- If you are not using Analytics Desktop, move the working Parquet and DuckDB files to a local drive first.
+- **The app should read and write local files only.**
 
-What ever you use, the parquet/DuckDB files should be placed locally
+## 2. Understand the Main Areas of the App
 
+The application has three main tabs:
 
-## Application Layout
+1. `Building Lookup` lets you search for a location or click the map and inspect building attributes.
+2. `Enrich Exposure` lets you upload a CSV and append building information to each row.
+3. `Create OBM Database` lets you create a new local DuckDB lookup database.
 
-The app has three tabs:
+You will also see an `Active Data Source` section. This controls which `.duckdb` lookup database is currently in use by both `Building Lookup` and `Enrich Exposure`.
 
-1. `Building Lookup`: search for an address or click on the map to inspect a building.
-2. `Enrich Exposure`: upload a CSV and append building attributes to each row.
-3. `Create OBM Database`: build a new lookup database from OpenBuildingMap or from your own Parquet file.
-
-
-## Before You Begin
+## 3. Select an Existing Lookup Database
 
 If you already have a lookup database:
 
 1. Open the app.
-2. In `Active Data Source`, click `Refresh` to scan for local `.duckdb` files.
-3. Select the correct lookup database or type its path.
+2. In `Active Data Source`, click `Refresh`.
+3. Select the correct `.duckdb` file from the list, or type the local path manually.
 4. Click `Use selected database`.
 
-The selected file must already contain a `buildings` table. A generic DuckDB file is not enough.
+> [!IMPORTANT]
+> **The selected DuckDB file must already contain a `buildings` table.** A generic DuckDB file is not enough.
 
-## Tab 1: Building Lookup
+## 4. Use the Building Lookup Tab
 
-Use this tab to inspect individual buildings.
+Use `Building Lookup` when you want to inspect one building at a time.
 
-### Search by Address
+### Search by address
 
 1. Open `Building Lookup`.
-2. Enter at least 3 characters in `Search address`.
+2. Type at least 3 characters into `Search address`.
 3. Choose a result from the list.
-4. The map zooms to that location.
-5. Click on a building footprint to load its attributes.
+4. The map will zoom to the selected location.
+5. Click a building footprint to load the building details.
 
-### Search by Clicking the Map
+### Search by clicking the map
 
 1. Open `Building Lookup`.
 2. Pan and zoom to the area you need.
-3. Click on the building footprint.
-4. Review the building details in the right panel.
+3. Click directly on a building footprint.
+4. Review the building details in the right-hand panel.
 
-### What You See
+### What the result fields mean
 
-- `Match type`: whether the point matched inside a polygon or by nearest feature logic.
-- `Distance`: the lookup distance in meters when a nearest-feature match was used.
-- `Choose displayed fields`: controls which building attributes are shown.
+- `Match type` tells you whether the point matched inside a polygon or by nearest-feature logic.
+- `Distance` shows the lookup distance in meters when a nearest-feature match was used.
+- `Choose displayed fields` lets you control which building attributes appear in the result panel.
 
-Typical fields can include building ID, source, height, occupancy, floorspace, and data quality indicators. The exact list depends on the active lookup database.
+Typical fields include building ID, source, height, occupancy, floorspace, and data quality indicators. The exact list depends on the active lookup database.
 
-## Tab 2: Enrich Exposure
+## 5. Use the Enrich Exposure Tab
 
-Use this tab to append building information to each row in an exposure CSV.
+Use `Enrich Exposure` when you need to append building information to every row in an exposure CSV.
 
-### Required Input
+### You need all of the following
 
-- A CSV file.
-- One latitude column.
-- One longitude column.
-- An active DuckDB lookup database.
+- a CSV file
+- one latitude column
+- one longitude column
+- an active DuckDB lookup database
 
-### Steps
+### Enrichment steps
 
 1. Open `Enrich Exposure`.
-2. Upload a CSV file.
+2. Upload the CSV file.
 3. Review the preview table.
-4. Select the latitude and longitude columns.
-5. Choose a `Match mode`.
-6. Set `Max nearest distance (m)`. The defaults is set to 50 meters.
-7. Choose which database fields to append.
-8. Click `Run enrichment`.
-9. Wait for the progress indicator to complete.
-10. Download the enriched CSV.
+4. Select the latitude column.
+5. Select the longitude column.
+6. Choose the `Match mode`.
+7. Set `Max nearest distance (m)` if needed. The default is `50`.
+8. Select the building fields you want to append.
+9. Click `Run enrichment`.
+10. Wait for the progress indicator to finish.
+11. Download the enriched CSV.
 
-### Match Modes
+### Match modes
 
-- `Inside polygon + Nearest polygon`: tries to match the point inside a building first, then falls back to the nearest building polygon.
-- `Inside polygon only`: only accepts rows whose point falls inside a building polygon.
-- `Nearest centroid only`: matches the nearest building centroid within the allowed distance.
+- `Inside polygon + Nearest polygon` first tries to match a point inside a building, then falls back to the nearest building polygon.
+- `Inside polygon only` only accepts rows whose point falls inside a building polygon.
+- `Nearest centroid only` matches the nearest building centroid within the allowed distance.
 
-### Output Files
+### What you get back
 
-The enriched CSV keeps your original columns and adds the fields you select in the "Choose appended columns" container.
+- The enriched CSV keeps your original columns.
+- The selected building fields are added as new columns.
+- A statistics panel is shown in the app when the run completes.
+- A separate statistics CSV is also available for download.
 
-The app also shows a statistics panel and offers a separate stats CSV download after the run completes.
+> [!NOTE]
+> Only one enrichment job can run at a time. Uploads and results are temporary. **Download your output as soon as the job finishes.**
 
-### Operational Limits
+## 6. Use the Create OBM Database Tab
 
-- Only one enrichment job can run at a time.
-- Uploads and results are cleaned up automatically by the app.
-- The app keeps only the latest recent upload and result artifacts.
+Use `Create OBM Database` when you need a new lookup database.
 
-Download your enriched CSV as soon as the run finishes. Do not treat the app's working folders as long-term storage.
-
-## Tab 3: Create OBM Database
-
-Use this tab when you need a new lookup database.
-
-There are two database creation workflows.
+There are two workflows.
 
 ### Workflow 1: Create OBM Database
 
-This workflow downloads and prepares building data using OpenBuildingMap.
+This workflow downloads and prepares building data from OpenBuildingMap.
 
 #### Inputs
 
-- Optional boundary file:
-  - `.gpkg`
-  - `.zip` containing a shapefile and its sidecar files
-- Output folder
-- Output Parquet file name
+- built-in country selection from the catalog
+- or a custom boundary file
+- output folder
+- output Parquet file name
 - DuckDB work file name
 - DuckDB lookup file name
 
-#### Steps
+> [!IMPORTANT]
+> **Use the built-in country dropdown OR upload a custom boundary file, not both.** If both are provided, the custom boundary takes priority.
+
+#### Supported custom boundary formats
+
+- `.gpkg`
+- `.zip` containing a shapefile and its required sidecar files
+
+#### Workflow 1 steps
 
 1. Open `Create OBM Database`.
 2. Expand `Workflow 1: Create OBM Database`.
-3. Upload a boundary file if you are not using the default Germany extent.
+3. Choose a country from the built-in catalog **or** upload a custom boundary.
 4. Choose the output folder.
 5. Confirm the output file names.
 6. Click `Create database`.
-7. Wait for the ETL progress to finish.
+7. Watch the ETL progress until it completes.
 
-#### Result
+#### Workflow 1 result
 
 The workflow creates:
 
-- A cleaned Parquet file.
-- A DuckDB work file.
-- A DuckDB lookup database.
+- a cleaned Parquet file
+- a DuckDB work file
+- a DuckDB lookup database
 
 When the job completes, the new lookup database is activated automatically in the app.
 
-#### Important Rules
+#### Workflow 1 rules
 
-- If no boundary file is supplied, the workflow uses the default Germany boundary.
-- The DuckDB work file and DuckDB lookup file must be different paths.
+- If you leave both boundary options empty, the app uses the legacy default Germany boundary.
+- The DuckDB work file and the DuckDB lookup file must be different paths.
 - Output paths are treated as local filesystem paths.
-- Existing output files may be replaced by this workflow.
+- Existing files at the same output path may be replaced.
 
 ### Workflow 2: Use Custom Parquet
 
-Use this when you already have a local Parquet file with building data.
+Use this workflow when you already have a local Parquet file with building data.
 
-#### Required Mappings
+#### Required field mappings
 
 - Latitude
 - Longitude
 - Geometry
 - Occupancy
 
-#### Optional Mappings
+#### Optional field mappings
 
 - Height
 - Year built
@@ -187,7 +199,7 @@ Use this when you already have a local Parquet file with building data.
 
 You can also add up to 10 extra mapped fields.
 
-#### Steps
+#### Workflow 2 steps
 
 1. Expand `Workflow 2: Use Custom Parquet`.
 2. Browse to a local `.parquet` file.
@@ -199,85 +211,86 @@ You can also add up to 10 extra mapped fields.
 8. Click `Create database from Parquet`.
 9. Wait for the progress indicator to complete.
 
-#### Mapping Rules
+#### Workflow 2 rules
 
 - The Parquet file must exist locally.
 - The output path must end with `.duckdb`.
 - Extra field names must use letters, numbers, and underscores, and must start with a letter or underscore.
 - Extra field names cannot reuse reserved building column names.
 
-#### Result
+#### Workflow 2 result
 
 The app creates a new DuckDB lookup database and activates it automatically.
 
-## Files and Folders Used by the App
+## 7. Files and Working Folders
 
-Common locations in this repo:
+Common runtime locations include:
 
-- `etl_output/building_lookup.duckdb`: default lookup database.
-- `etl_output/app_uploads`: temporary uploaded CSV files.
-- `etl_output/app_results`: temporary enrichment outputs.
-- `etl_output/duckdb_temp`: temporary working files used by database creation.
+- `etl_output/building_lookup.duckdb` for the default lookup database
+- `etl_output/app_uploads` for temporary uploaded CSV files
+- `etl_output/app_results` for temporary enrichment results
+- `etl_output/duckdb_temp` for temporary database-creation working files
 
-These folders are runtime working areas. Important outputs should be moved or backed up elsewhere after creation or download.
+> [!IMPORTANT]
+> These are **working folders**, not long-term storage. Move or back up important output files after creation or download.
 
-## Troubleshooting
+## 8. Troubleshooting
 
 ### "Lookup database has not been selected or prepared"
 
-Select a valid `.duckdb` lookup database from `Active Data Source`, or create one in `Create OBM Database`.
+Select a valid `.duckdb` lookup database in `Active Data Source`, or create a new one in `Create OBM Database`.
 
 ### "The selected DuckDB file is not a lookup database"
 
-The chosen file does not contain the required `buildings` table. Pick a different `.duckdb` file or create a new one.
+The chosen file does not contain the required `buildings` table. Select a different `.duckdb` file or create a new lookup database.
 
 ### CSV upload succeeds but enrichment does not start
 
-Check that:
+Check the following:
 
-- You selected both latitude and longitude columns.
-- The active lookup database is valid.
-- Another enrichment job is not already running.
+- both latitude and longitude columns were selected
+- the active lookup database is valid
+- another enrichment job is not already running
 
 ### Many rows come back with no match
 
-Check that:
+Check the following:
 
-- Coordinates are in decimal degrees.
-- Latitude and longitude were mapped correctly.
-- The lookup database covers the same geographic area as your CSV.
-- `Max nearest distance (m)` is large enough for your use case.
-- The chosen match mode is appropriate.
+- coordinates are in decimal degrees
+- latitude and longitude were mapped correctly
+- the lookup database covers the same geographic area as the CSV
+- `Max nearest distance (m)` is large enough for your use case
+- the selected match mode fits your use case
 
 ### Address search fails
 
-Address search depends on external geocoding services. If it fails:
+Address search depends on online geocoding services. If it fails:
 
-- Check your internet connection.
-- Try a broader or simpler query.
-- Click directly on the map instead.
+- check your internet connection
+- try a broader or simpler query
+- click directly on the map instead
 
 ### File or folder browse dialogs do not open
 
-In some runtime environments the native file picker is unavailable. If that happens, type the local path into the field manually.
+In some runtime environments the native file picker is unavailable. If that happens, type the local path directly into the field.
 
-## Recommended User Workflow
+## 9. Recommended First-Time Workflow
 
-If you are using the app for the first time:
+If you are using the application for the first time:
 
-1. Make sure you have or create a DuckDB lookup database.
+1. Make sure you already have a lookup database, or create one.
 2. Activate that database in `Active Data Source`.
 3. Test a few points in `Building Lookup`.
 4. Run a small CSV through `Enrich Exposure` before processing a large file.
 5. Download the enriched CSV immediately after completion.
 
-## Command Reference
+## 10. Run From Source
 
-If you are running from source, the main CLI commands are:
+If you are running the application from source, these are the main commands:
 
 ```powershell
 python building_lookup_app.py serve --db etl_output/building_lookup.duckdb --host 127.0.0.1 --port 5000
 python building_lookup_app.py prepare-index --parquet etl_output/buildings_de_cleaned.parquet --db etl_output/building_lookup.duckdb --force
 ```
 
-`prepare-index` builds a lookup database from an existing Parquet file. `serve` starts the web app against a lookup database that already exists.
+`prepare-index` builds a lookup database from an existing Parquet file. `serve` starts the web app using a lookup database that already exists.

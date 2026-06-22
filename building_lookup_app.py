@@ -5,9 +5,11 @@ import argparse
 import codecs
 import csv
 from genericpath import exists
+from html import escape
 import json
 import math
 import os
+import re
 import shutil
 import tempfile
 import subprocess
@@ -25,6 +27,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import duckdb
 import pandas as pd
 from flask import Flask, jsonify, render_template, request, send_file
+from markupsafe import Markup
 from werkzeug.utils import secure_filename
 
 from country_boundary_catalog import DEFAULT_COUNTRY_BOUNDARY_CATALOG, list_catalog_countries
@@ -94,6 +97,141 @@ DEFAULT_EXPOSURE_FIELD_CANDIDATES = [
     "stories_min",
     "stories_max",
 ]
+
+HELP_CALLOUT_TITLES = {
+    "important": "Important",
+    "warning": "Warning",
+    "note": "Note",
+}
+
+
+def _render_help_inline(text: str) -> str:
+    rendered = escape(text.strip())
+    rendered = re.sub(r"\*\*(.+?)\*\*", lambda match: f"<strong>{match.group(1)}</strong>", rendered)
+    rendered = re.sub(r"`([^`]+)`", lambda match: f"<code>{match.group(1)}</code>", rendered)
+    return rendered
+
+
+def _render_help_markdown(text: str) -> str:
+    html_parts: List[str] = []
+    paragraph_lines: List[str] = []
+    unordered_items: List[str] = []
+    ordered_items: List[str] = []
+    callout_lines: List[str] = []
+    code_lines: List[str] = []
+    callout_kind = "note"
+    in_code_block = False
+
+    def flush_paragraph() -> None:
+        if paragraph_lines:
+            html_parts.append(f"<p>{_render_help_inline(' '.join(paragraph_lines))}</p>")
+            paragraph_lines.clear()
+
+    def flush_unordered() -> None:
+        if unordered_items:
+            items = "".join(f"<li>{_render_help_inline(item)}</li>" for item in unordered_items)
+            html_parts.append(f"<ul>{items}</ul>")
+            unordered_items.clear()
+
+    def flush_ordered() -> None:
+        if ordered_items:
+            items = "".join(f"<li>{_render_help_inline(item)}</li>" for item in ordered_items)
+            html_parts.append(f"<ol>{items}</ol>")
+            ordered_items.clear()
+
+    def flush_callout() -> None:
+        nonlocal callout_kind
+        if callout_lines:
+            body = _render_help_inline(" ".join(callout_lines))
+            title = HELP_CALLOUT_TITLES.get(callout_kind, "Note")
+            html_parts.append(
+                f'<div class="help-callout help-callout--{callout_kind}">'
+                f'<p class="help-callout-title">{title}</p>'
+                f"<p>{body}</p>"
+                "</div>"
+            )
+            callout_lines.clear()
+            callout_kind = "note"
+
+    def flush_code() -> None:
+        nonlocal in_code_block
+        if code_lines:
+            html_parts.append(
+                "<pre class=\"help-code\"><code>"
+                + escape("\n".join(code_lines))
+                + "</code></pre>"
+            )
+            code_lines.clear()
+        in_code_block = False
+
+    def flush_lists() -> None:
+        flush_unordered()
+        flush_ordered()
+
+    def flush_all() -> None:
+        flush_paragraph()
+        flush_lists()
+        flush_callout()
+
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+
+        if stripped.startswith("```"):
+            if in_code_block:
+                flush_code()
+            else:
+                flush_all()
+                in_code_block = True
+            continue
+
+        if in_code_block:
+            code_lines.append(line)
+            continue
+
+        if stripped.startswith(">"):
+            flush_paragraph()
+            flush_lists()
+            quote_text = stripped[1:].strip()
+            marker_match = re.fullmatch(r"\[!(IMPORTANT|WARNING|NOTE)\]", quote_text, re.IGNORECASE)
+            if marker_match:
+                callout_kind = marker_match.group(1).lower()
+            elif quote_text:
+                callout_lines.append(quote_text)
+            continue
+
+        flush_callout()
+
+        if not stripped:
+            flush_all()
+            continue
+
+        heading_match = re.match(r"^(#{1,3})\s+(.*)$", stripped)
+        if heading_match:
+            flush_all()
+            level = len(heading_match.group(1))
+            html_parts.append(f"<h{level}>{_render_help_inline(heading_match.group(2))}</h{level}>")
+            continue
+
+        if re.match(r"^[-*]\s+", stripped):
+            flush_paragraph()
+            flush_ordered()
+            unordered_items.append(re.sub(r"^[-*]\s+", "", stripped, count=1))
+            continue
+
+        if re.match(r"^\d+\.\s+", stripped):
+            flush_paragraph()
+            flush_unordered()
+            ordered_items.append(re.sub(r"^\d+\.\s+", "", stripped, count=1))
+            continue
+
+        paragraph_lines.append(stripped)
+
+    if in_code_block:
+        flush_code()
+
+    flush_all()
+    return "\n".join(html_parts)
 
 
 def sql_string(value: str) -> str:
@@ -1166,6 +1304,19 @@ def create_app(
     @app.route("/")
     def index():
         return render_template("index.html")
+
+    @app.route("/help/readme")
+    def open_readme_help():
+        readme_path = Path(__file__).resolve().with_name("README.md")
+        if not readme_path.is_file():
+            return jsonify({"error": "README file not found."}), 404
+        readme_text = readme_path.read_text(encoding="utf-8")
+        manual_html = Markup(_render_help_markdown(readme_text))
+        return render_template(
+            "help_readme.html",
+            page_title="Data Augmentation Tool User Manual",
+            manual_html=manual_html,
+        )
 
     
     @app.route("/api/health")
