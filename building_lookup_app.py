@@ -20,13 +20,14 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from threading import Event, Lock, Thread
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import duckdb
 import pandas as pd
 from flask import Flask, jsonify, render_template, request, send_file
 from werkzeug.utils import secure_filename
 
+from country_boundary_catalog import DEFAULT_COUNTRY_BOUNDARY_CATALOG, list_catalog_countries
 from custom_parquet_database import register_custom_parquet_routes
 from obm_country_to_parquet import ETLConfig, OpenBuildingMapCountryETL
 
@@ -902,7 +903,18 @@ def workflow_duckdb_thread_count() -> int:
     return max(1, min(os.cpu_count() or 1, 2))
 
 
-def prepare_index(parquet_path: str, db_path: str, force: bool = False, threads: int = 8) -> None:
+def prepare_index(
+    parquet_path: str,
+    db_path: str,
+    force: bool = False,
+    threads: int = 8,
+    progress_callback: Optional[Callable[[str, int, Optional[str]], None]] = None,
+) -> None:
+    def report_progress_update(phase: str, percent: int, detail: Optional[str] = None) -> None:
+        if progress_callback is None:
+            return
+        progress_callback(phase, max(0, min(99, int(percent))), detail)
+
     parquet = Path(parquet_path)
     if not parquet.exists():
         raise FileNotFoundError(f"Parquet file not found: {parquet}")
@@ -927,13 +939,16 @@ def prepare_index(parquet_path: str, db_path: str, force: bool = False, threads:
         if exists:
             print(f"Index database already exists: {db_path}")
             print("Use --force to rebuild it.")
+            report_progress_update("DuckDB lookup ready", 99, f"Index database already exists: {db_path}")
             con.close()
             return
 
 
     parquet_sql = sql_string(str(parquet))
 
-    print("Creating lookup table from Parquet. This is a one-time step. Generating 3035 Projections (May take a few minutes)...")
+    create_message = "Creating lookup table from Parquet. This is a one-time step. Generating 3035 Projections (May take a few minutes)..."
+    print(create_message)
+    report_progress_update("Creating DuckDB lookup table", 82, create_message)
     
     # Notice the new geom_3035 and bbox_3035_* columns!
     con.execute(f"""
@@ -990,13 +1005,16 @@ def prepare_index(parquet_path: str, db_path: str, force: bool = False, threads:
     """)
 
     print("Creating spatial index.")
+    report_progress_update("Creating spatial indexes", 92, "Creating spatial index.")
     con.execute("CREATE INDEX buildings_geom_rtree ON buildings USING RTREE (geom);")
     con.execute("CREATE INDEX buildings_geom_3035_rtree ON buildings USING RTREE (geom_3035);")
     con.execute("CREATE INDEX buildings_quadkey_prefix_14_idx ON buildings(quadkey_prefix_14);")
 
     row_count = con.execute("SELECT COUNT(*) FROM buildings;").fetchone()[0]
     con.close()
-    print(f"Ready: {db_path} ({row_count:,} buildings)")
+    ready_message = f"Ready: {db_path} ({row_count:,} buildings)"
+    print(ready_message)
+    report_progress_update("Finalizing DuckDB lookup table", 98, ready_message)
 
 def create_app(
     db_path: str = DEFAULT_DB,
@@ -1011,6 +1029,7 @@ def create_app(
     app.config["GEOCODER_USER_AGENT"] = "OBMBuildingLookup/0.1 local-development"
     app.config["UPLOAD_DIR"] = upload_dir or str(Path(__file__).resolve().parent / "etl_output" / "app_uploads")
     app.config["RESULT_DIR"] = result_dir or str(Path(__file__).resolve().parent / "etl_output" / "app_results")
+    app.config["COUNTRY_BOUNDARY_CATALOG"] = str(DEFAULT_COUNTRY_BOUNDARY_CATALOG)
     geocode_cache: Dict[str, Any] = {}
     last_geocode_at = [0.0]
     jobs: Dict[str, Dict[str, Any]] = {}
@@ -1661,10 +1680,22 @@ def create_app(
         with etl_jobs_lock:
             etl_jobs.setdefault(job_id, {}).update(updates)
 
+    @app.route("/api/etl/countries", methods=["GET"])
+    def etl_country_catalog():
+        try:
+            countries = list_catalog_countries(app.config["COUNTRY_BOUNDARY_CATALOG"])
+        except FileNotFoundError as exc:
+            return jsonify({"error": str(exc)}), 404
+        except Exception as exc:
+            return jsonify({"error": f"Could not load country catalog: {exc}"}), 500
+
+        return jsonify({"countries": countries})
+
     @app.route("/api/etl/create-database", methods=["POST"])
     def etl_create_database():
         # ---------- boundary file (optional) ----------
         boundary_file_path: Optional[str] = None
+        country_key = request.form.get("country_key", "").strip() or None
         boundary_file = request.files.get("boundary_file")
         if boundary_file and boundary_file.filename:
             filename = secure_filename(boundary_file.filename)
@@ -1717,6 +1748,8 @@ def create_app(
             threads=workflow_duckdb_thread_count(),
             temp_directory=f"{output_dir}/duckdb_temp",
             boundary_file=boundary_file_path,
+            country_boundary_catalog=app.config["COUNTRY_BOUNDARY_CATALOG"],
+            country_key=None if boundary_file_path else country_key,
             force=True,
         )
 
@@ -1726,6 +1759,7 @@ def create_app(
             status="running",
             phase="Starting ETL",
             percent=1,
+            detail="Waiting for ETL worker",
             error=None,
             output_parquet=cfg.output_parquet,
             duckdb_file=cfg.duckdb_file,
@@ -1733,9 +1767,25 @@ def create_app(
         )
 
         def run_etl() -> None:
+            def report_etl_progress(phase: str, percent: int, detail: Optional[str] = None) -> None:
+                bounded_percent = max(0, min(99, int(percent)))
+                with etl_jobs_lock:
+                    job = etl_jobs.setdefault(job_id, {})
+                    current_percent = int(job.get("percent") or 0)
+                    if job.get("status") == "running":
+                        bounded_percent = max(current_percent, bounded_percent)
+                    job.update({
+                        "status": "running",
+                        "phase": phase,
+                        "percent": bounded_percent,
+                    })
+                    if detail is not None:
+                        job["detail"] = detail
+
             try:
-                set_etl_job(job_id, phase="Initialising DuckDB", percent=5)
+                report_etl_progress("Preparing ETL workspace", 3, "Starting OpenBuildingMap country ETL")
                 etl = OpenBuildingMapCountryETL(cfg)
+                etl.progress_callback = report_etl_progress
                 etl.run()
                 set_etl_job(
                     job_id,
@@ -1746,16 +1796,22 @@ def create_app(
                         "lat_max": cfg.lat_max,
                     },
                 )
-                set_etl_job(job_id, phase="Creating DuckDB lookup table", percent=85)
                 prepare_index(
                     cfg.output_parquet,
                     lookup_db_file,
                     force=True,
                     threads=workflow_duckdb_thread_count(),
+                    progress_callback=report_etl_progress,
                 )
                 app.config["PARQUET_PATH"] = display_path(Path(cfg.output_parquet))
                 app.config["DB_PATH"] = display_path(Path(lookup_db_file))
-                set_etl_job(job_id, status="complete", phase="Complete", percent=100)
+                set_etl_job(
+                    job_id,
+                    status="complete",
+                    phase="Complete",
+                    percent=100,
+                    detail="Database created successfully.",
+                )
             except Exception as exc:
                 set_etl_job(job_id, status="error", phase="Error", percent=100, error=str(exc))
 
@@ -3360,7 +3416,7 @@ def row_to_response(row: tuple, building_columns: List[str]) -> Dict[str, Any]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Building lookup app over Germany OBM Parquet.")
+    parser = argparse.ArgumentParser(description="Building lookup app over OBM Parquet.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     prepare = subparsers.add_parser("prepare-index")

@@ -9,7 +9,7 @@ import zipfile
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 
 import duckdb
 import pandas as pd
@@ -92,6 +92,8 @@ class OpenBuildingMapGermanyETL:
         self.temp_dir.mkdir(parents=True, exist_ok=True)
 
         self.con: Optional[duckdb.DuckDBPyConnection] = None
+        self._obm_existing_paths: Optional[Set[str]] = None
+        self._obm_existing_paths_loaded = False
 
     # ---------------------------------------------------------------------
     # Lifecycle
@@ -448,6 +450,37 @@ class OpenBuildingMapGermanyETL:
 
         return "".join(quadkey)
 
+    def _list_existing_obm_paths(self) -> Optional[Set[str]]:
+        if self._obm_existing_paths_loaded:
+            return self._obm_existing_paths
+
+        self._obm_existing_paths_loaded = True
+
+        if self.con is None or not self.cfg.obm_s3.endswith("*.parquet"):
+            return None
+
+        try:
+            cursor = self.con.execute("SELECT * FROM glob(?)", [self.cfg.obm_s3])
+            rows = cursor.fetchall()
+        except Exception as exc:
+            logger.warning(
+                "Could not enumerate OBM parquet objects for %s; falling back to synthesized paths. Error: %s",
+                self.cfg.obm_s3,
+                exc,
+            )
+            return None
+
+        self._obm_existing_paths = {
+            str(row[0])
+            for row in rows
+            if row and row[0]
+        }
+        logger.info(
+            "Discovered %s OBM parquet object(s) from remote listing",
+            len(self._obm_existing_paths),
+        )
+        return self._obm_existing_paths
+
     def _obm_input_paths(self) -> List[str]:
         """
         OpenBuildingMap files are partitioned by zoom-6 quadkey. Reading only
@@ -468,7 +501,24 @@ class OpenBuildingMapGermanyETL:
         })
 
         prefix = self.cfg.obm_s3[:-len("*.parquet")]
-        paths = [f"{prefix}building.{quadkey}.parquet" for quadkey in quadkeys]
+        candidate_paths = [f"{prefix}building.{quadkey}.parquet" for quadkey in quadkeys]
+        existing_paths = self._list_existing_obm_paths()
+
+        if existing_paths is None:
+            paths = candidate_paths
+        else:
+            paths = [path for path in candidate_paths if path in existing_paths]
+            missing_count = len(candidate_paths) - len(paths)
+            if missing_count:
+                logger.info(
+                    "Skipped %s synthesized OBM quadkey file(s) that are absent from the remote listing",
+                    missing_count,
+                )
+            if not paths:
+                raise FileNotFoundError(
+                    "No existing OBM parquet files matched the boundary-derived quadkeys. "
+                    "The remote catalog did not contain any of the expected tiles."
+                )
 
         logger.info("Using %s OBM quadkey Parquet file(s): %s", len(paths), ", ".join(paths))
 

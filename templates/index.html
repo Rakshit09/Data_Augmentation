@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Germany Data Enrichment</title>
+  <title>Data Enrichment Platform </title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
@@ -252,16 +252,26 @@
               <form id="etlForm" class="etl-form">
                 <fieldset class="etl-fieldset">
                   <legend>Boundary</legend>
+                  <label>
+                    <span class="field-label-row">
+                      <span>Country from built-in catalog</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Select a country from the Natural Earth admin-0 catalog saved in etl_output/boundary. The ETL will filter that all-countries shapefile down to the selected country before creating the working boundary.">i</span>
+                    </span>
+                    <select id="etlCountrySelect">
+                      <option value="">Loading countries...</option>
+                    </select>
+                  </label>
+                  <p class="etl-hint">Choose a country here for the standard OBM workflow. Upload a custom boundary only when you need a custom extent instead of a catalog country.</p>
                   <label class="dropzone" for="boundaryFile">
                     <span class="dropzone-title-row">
-                      <span class="dropzone-title">Upload Boundary (optional)</span>
-                      <span class="field-tip" tabindex="0" data-tooltip="Optional boundary file used to limit the OpenBuildingMap download area. Leave it empty to use the default Germany boundary.">i</span>
+                      <span class="dropzone-title">Upload Custom Boundary (optional)</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Optional custom boundary file used to limit the OpenBuildingMap download area. Selecting a file clears the built-in country selection.">i</span>
                     </span>
                     <span class="dropzone-subtitle">.gpkg or .zip containing a shapefile and its sidecar files</span>
                   </label>
                   <input id="boundaryFile" class="file-input" type="file" accept=".zip,.gpkg" tabindex="-1" aria-hidden="true">
                   <span id="boundaryFileName" class="file-chosen hidden"></span>
-                  <p class="etl-hint">Upload a country boundary for non-Germany runs. Its latitude and longitude extent is detected automatically. Leave empty only for the default Germany boundary.</p>
+                  <p class="etl-hint">Leave both fields empty only if you want the legacy default Germany boundary. Uploading a custom boundary overrides the built-in country selector.</p>
                 </fieldset>
 
                 <fieldset class="etl-fieldset">

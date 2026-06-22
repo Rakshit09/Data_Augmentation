@@ -1123,6 +1123,7 @@ function escapeHtml(value) {
 // -----------------------------------------------------------------------
 // ETL: Create OBM Database
 // -----------------------------------------------------------------------
+const etlCountrySelect = document.getElementById("etlCountrySelect");
 const boundaryFile = document.getElementById("boundaryFile");
 const boundaryFileName = document.getElementById("boundaryFileName");
 const etlOutputDir = document.getElementById("etlOutputDir");
@@ -1160,9 +1161,57 @@ customParquetToggle.addEventListener("click", () => {
 
 setExpandedEtlWorkflow(null);
 
+function resetBoundaryFileSelection() {
+  boundaryFile.value = "";
+  boundaryFileName.textContent = "";
+  boundaryFileName.classList.add("hidden");
+}
+
+async function loadEtlCountries() {
+  if (!etlCountrySelect) return;
+
+  etlCountrySelect.disabled = true;
+  etlCountrySelect.innerHTML = '<option value="">Loading countries...</option>';
+
+  try {
+    const response = await fetch("api/etl/countries");
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error || "Could not load country catalog");
+    }
+
+    const options = ['<option value="">Use uploaded boundary or default Germany boundary</option>'];
+    for (const country of payload.countries || []) {
+      options.push(
+        `<option value="${escapeHtml(country.key || "")}">${escapeHtml(country.label || country.name || "")}</option>`
+      );
+    }
+
+    etlCountrySelect.innerHTML = options.join("");
+    etlCountrySelect.disabled = false;
+  } catch (error) {
+    console.error(error);
+    etlCountrySelect.innerHTML = '<option value="">Country catalog unavailable</option>';
+    etlCountrySelect.disabled = true;
+  }
+}
+
+etlCountrySelect?.addEventListener("change", () => {
+  if (etlCountrySelect.value) {
+    dismissCriticalNote();
+    resetBoundaryFileSelection();
+  }
+});
+
+loadEtlCountries();
+
 boundaryFile.addEventListener("change", () => {
   if (boundaryFile.files.length) {
     dismissCriticalNote();
+    if (etlCountrySelect) {
+      etlCountrySelect.value = "";
+    }
   }
 
   if (boundaryFile.files.length) {
@@ -1227,6 +1276,8 @@ runEtlBtn.addEventListener("click", async () => {
   const formData = new FormData();
   if (boundaryFile.files.length) {
     formData.append("boundary_file", boundaryFile.files[0]);
+  } else if (etlCountrySelect?.value) {
+    formData.append("country_key", etlCountrySelect.value);
   }
 
   const dir = etlOutputDir.value.trim() || "./etl_output";
@@ -1260,8 +1311,13 @@ async function pollEtlProgress(jobId) {
     if (!response.ok) throw new Error(payload.error || "Could not read ETL progress");
 
     const percent = Math.max(0, Math.min(100, Number(payload.percent || 0)));
+    const phaseText = escapeHtml(payload.phase || payload.status || "Working");
+    const detailHtml = payload.detail
+      ? `<div class="progress-copy">${escapeHtml(payload.detail)}</div>`
+      : "";
     showEtlStatus("info", `
-      <div class="progress-copy">${escapeHtml(payload.phase || payload.status || "Working")}</div>
+      <div class="progress-copy">${phaseText}</div>
+      ${detailHtml}
       <div class="progress-track"><div class="progress-fill" style="width:${percent}%"></div></div>
       <div class="progress-copy">${percent.toFixed(0)}%</div>
     `);

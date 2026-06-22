@@ -12,11 +12,16 @@ import zipfile
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Set, Tuple
 
 import duckdb
 import pandas as pd
 import requests
+
+from country_boundary_catalog import (
+    DEFAULT_COUNTRY_BOUNDARY_CATALOG,
+    prepare_country_boundary,
+)
 
 
 logging.basicConfig(
@@ -100,11 +105,15 @@ class ETLConfig:
     sample_only: bool = False
     sample_limit: int = 100_000
     obm_quadkey_zoom: int = 6
-    chunk_size: int = 2  # Number of quadkey files to process per batch
+    chunk_size: int = 2  # Minimum number of quadkey files to process per batch
 
     # Optional local boundary file (shapefile .zip or .shp, or GeoPackage .gpkg/.zip).
     # When set, the bkg_boundary_zip_url download is skipped.
     boundary_file: Optional[str] = None
+
+    # Optional Natural Earth admin-0 catalog and selected country key.
+    country_boundary_catalog: Optional[str] = str(DEFAULT_COUNTRY_BOUNDARY_CATALOG)
+    country_key: Optional[str] = None
 
 
 class OpenBuildingMapCountryETL:
@@ -124,6 +133,11 @@ class OpenBuildingMapCountryETL:
         self.temp_dir.mkdir(parents=True, exist_ok=True)
 
         self.con: Optional[duckdb.DuckDBPyConnection] = None
+        self._obm_existing_paths: Optional[Set[str]] = None
+        self._obm_existing_paths_loaded = False
+        self._obm_boundary_quadkeys: Optional[List[str]] = None
+        self._obm_input_paths_cache: Optional[List[str]] = None
+        self.progress_callback: Optional[Callable[[str, int, Optional[str]], None]] = None
 
     # ---------------------------------------------------------------------
     # Lifecycle
@@ -134,22 +148,30 @@ class OpenBuildingMapCountryETL:
 
         logger.info("Starting OpenBuildingMap country ETL")
 
+        self._report_progress("Preparing ETL workspace", 3, "Starting OpenBuildingMap country ETL")
         self._prepare_output_target()
+        self._report_progress("Initialising DuckDB", 5, f"DuckDB work file: {Path(self.cfg.duckdb_file).name}")
         self._initialize_duckdb()
 
-        boundary_gpkg, boundary_layer, boundary_epsg, boundary_geom_col = self._download_and_prepare_boundary()
+        self._report_progress("Loading country boundary", 8, "Resolving selected country boundary")
+        boundary_gpkg, boundary_layer, boundary_epsg, boundary_geom_col, boundary_where_sql = self._download_and_prepare_boundary()
+        self._report_progress("Building country boundary", 12, f"Boundary source: {Path(boundary_gpkg).name}")
         self._create_country_boundary_table(
             boundary_gpkg,
             boundary_layer,
             boundary_epsg,
             boundary_geom_col,
+            boundary_where_sql,
         )
         self._set_bbox_from_country_boundary()
 
+        self._report_progress("Inspecting OpenBuildingMap schema", 18, "Inspecting selected OBM parquet tiles")
         geom_expr = self._detect_obm_geometry_expression()
         self._extract_clean_parquet(geom_expr)
 
+        self._report_progress("Profiling ETL output", 74, f"Profiling {Path(self.cfg.output_parquet).name}")
         self._profile_output()
+        self._report_progress("Writing ETL manifest", 78, "Saving ETL summary and profile outputs")
         self._write_manifest(start)
 
         self.close()
@@ -163,6 +185,24 @@ class OpenBuildingMapCountryETL:
         if self.con is not None:
             self.con.close()
             self.con = None
+
+    def _report_progress(self, phase: str, percent: int, detail: Optional[str] = None) -> None:
+        callback = self.progress_callback
+        if callback is None:
+            return
+        try:
+            callback(phase, max(0, min(99, int(percent))), detail)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _chunk_progress_percent(chunk_index: int, total_chunks: int, stage_fraction: float) -> int:
+        start = 22
+        end = 68
+        if total_chunks <= 0:
+            return end
+        completed = min(float(total_chunks), max(0.0, float(chunk_index) + float(stage_fraction)))
+        return max(start, min(end, int(round(start + (end - start) * completed / float(total_chunks)))))
 
     # ---------------------------------------------------------------------
     # Setup
@@ -219,7 +259,7 @@ class OpenBuildingMapCountryETL:
     # Boundary
     # ---------------------------------------------------------------------
 
-    def _download_and_prepare_boundary(self) -> Tuple[Path, Optional[str], int, str]:
+    def _download_and_prepare_boundary(self) -> Tuple[Path, Optional[str], int, str, Optional[str]]:
         """
         Resolves the country boundary file.
 
@@ -229,13 +269,17 @@ class OpenBuildingMapCountryETL:
         GeoPackage for backwards compatibility.
 
         Returns:
-            boundary_path, layer_name_or_None, source_epsg, geometry_column
+            boundary_path, layer_name_or_None, source_epsg, geometry_column, where_sql
 
         ``layer_name_or_None`` is None for plain shapefiles (layer arg omitted).
         """
 
         if self.cfg.boundary_file:
-            return self._prepare_local_boundary(Path(self.cfg.boundary_file))
+            boundary_path, layer_name, source_epsg, geometry_column = self._prepare_local_boundary(Path(self.cfg.boundary_file))
+            return boundary_path, layer_name, source_epsg, geometry_column, None
+
+        if self.cfg.country_key:
+            return self._prepare_catalog_boundary(self.cfg.country_key)
 
         zip_path = self.boundary_dir / "vg250_bkg_boundary.zip"
 
@@ -267,7 +311,24 @@ class OpenBuildingMapCountryETL:
         logger.info("Boundary source EPSG: %s", source_epsg)
         logger.info("Boundary geometry column: %s", geometry_column)
 
-        return gpkg_path, layer_name, source_epsg, geometry_column
+        return gpkg_path, layer_name, source_epsg, geometry_column, None
+
+    def _prepare_catalog_boundary(self, country_key: str) -> Tuple[Path, Optional[str], int, str, Optional[str]]:
+        catalog_path = Path(self.cfg.country_boundary_catalog or DEFAULT_COUNTRY_BOUNDARY_CATALOG).expanduser()
+        if not catalog_path.is_absolute():
+            catalog_path = (Path.cwd() / catalog_path).resolve()
+
+        prepared = prepare_country_boundary(catalog_path, country_key, self.boundary_dir / "catalog_cache")
+        source_epsg = self._detect_shapefile_epsg(prepared.boundary_file)
+        geometry_column = self._detect_shapefile_geom_column(prepared.boundary_file)
+
+        logger.info(
+            "Using catalog country boundary: %s (%s) from %s",
+            prepared.country_name,
+            prepared.country_code,
+            prepared.boundary_file,
+        )
+        return prepared.boundary_file, None, source_epsg, geometry_column, prepared.where_sql
 
     def _prepare_local_boundary(self, boundary_file: Path) -> Tuple[Path, Optional[str], int, str]:
         """
@@ -428,6 +489,7 @@ class OpenBuildingMapCountryETL:
         layer_name: Optional[str],
         source_epsg: int,
         geometry_column: str,
+        where_sql: Optional[str] = None,
     ):
         """
         Creates a single dissolved country boundary geometry in OGC:CRS84.
@@ -457,6 +519,10 @@ class OpenBuildingMapCountryETL:
                 f")"
             )
 
+        where_clause = f"WHERE {geom_col_sql} IS NOT NULL"
+        if where_sql:
+            where_clause += f" AND ({where_sql})"
+
         self.con.execute(f"""
             CREATE OR REPLACE TABLE country_boundary AS
             SELECT ST_Union_Agg({geom_sql}) AS geom
@@ -465,7 +531,7 @@ class OpenBuildingMapCountryETL:
                 {layer_clause}
                 keep_wkb = false
             )
-            WHERE {geom_col_sql} IS NOT NULL;
+            {where_clause};
         """)
 
         boundary_check = self.con.execute("""
@@ -541,31 +607,192 @@ class OpenBuildingMapCountryETL:
 
         return "".join(quadkey)
 
+    @staticmethod
+    def _tile_bounds(x: int, y: int, zoom: int) -> Tuple[float, float, float, float]:
+        n = 2 ** zoom
+        lon_min = x / n * 360.0 - 180.0
+        lon_max = (x + 1) / n * 360.0 - 180.0
+        lat_max = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n))))
+        lat_min = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 1) / n))))
+        return lon_min, lat_min, lon_max, lat_max
+
+    def _bbox_covering_quadkeys(self, zoom: int) -> List[str]:
+        x_min, y_max = self._lon_lat_to_tile(self.cfg.lon_min, self.cfg.lat_min, zoom)
+        x_max, y_min = self._lon_lat_to_tile(self.cfg.lon_max, self.cfg.lat_max, zoom)
+
+        return sorted({
+            self._tile_to_quadkey(x, y, zoom)
+            for x in range(min(x_min, x_max), max(x_min, x_max) + 1)
+            for y in range(min(y_min, y_max), max(y_min, y_max) + 1)
+        })
+
+    def _boundary_intersecting_quadkeys(self, zoom: int) -> List[str]:
+        if self._obm_boundary_quadkeys is not None:
+            return list(self._obm_boundary_quadkeys)
+
+        bbox_quadkeys = self._bbox_covering_quadkeys(zoom)
+        if not bbox_quadkeys or self.con is None:
+            self._obm_boundary_quadkeys = bbox_quadkeys
+            return list(bbox_quadkeys)
+
+        x_min, y_max = self._lon_lat_to_tile(self.cfg.lon_min, self.cfg.lat_min, zoom)
+        x_max, y_min = self._lon_lat_to_tile(self.cfg.lon_max, self.cfg.lat_max, zoom)
+
+        candidate_tiles: List[Tuple[int, int, str, float, float, float, float]] = []
+        for x in range(min(x_min, x_max), max(x_min, x_max) + 1):
+            for y in range(min(y_min, y_max), max(y_min, y_max) + 1):
+                lon_min, lat_min, lon_max, lat_max = self._tile_bounds(x, y, zoom)
+                candidate_tiles.append((
+                    x,
+                    y,
+                    self._tile_to_quadkey(x, y, zoom),
+                    lon_min,
+                    lat_min,
+                    lon_max,
+                    lat_max,
+                ))
+
+        values_sql = ",\n                    ".join(
+            (
+                f"({tile_x}, {tile_y}, '{quadkey}', "
+                f"{lon_min:.15f}, {lat_min:.15f}, {lon_max:.15f}, {lat_max:.15f})"
+            )
+            for tile_x, tile_y, quadkey, lon_min, lat_min, lon_max, lat_max in candidate_tiles
+        )
+
+        try:
+            rows = self.con.execute(f"""
+                WITH candidate_tiles(tile_x, tile_y, quadkey, lon_min, lat_min, lon_max, lat_max) AS (
+                    VALUES
+                    {values_sql}
+                )
+                SELECT quadkey
+                FROM candidate_tiles t
+                CROSS JOIN country_boundary g
+                WHERE COALESCE(
+                    TRY(
+                        ST_Intersects(
+                            ST_MakeEnvelope(t.lon_min, t.lat_min, t.lon_max, t.lat_max),
+                            g.geom
+                        )
+                    ),
+                    FALSE
+                )
+                ORDER BY quadkey;
+            """).fetchall()
+        except Exception as exc:
+            logger.warning(
+                "Could not compute precise country/tile intersections; falling back to bbox-derived OBM tiles. Error: %s",
+                exc,
+            )
+            self._obm_boundary_quadkeys = bbox_quadkeys
+            return list(bbox_quadkeys)
+
+        quadkeys = [str(row[0]) for row in rows if row and row[0]]
+        if not quadkeys:
+            logger.warning(
+                "Precise country/tile intersection returned no OBM tiles; falling back to bbox-derived OBM tiles."
+            )
+            quadkeys = bbox_quadkeys
+
+        logger.info(
+            "Country/tile intersection kept %s of %s bbox-derived OBM tile(s)",
+            len(quadkeys),
+            len(bbox_quadkeys),
+        )
+        self._obm_boundary_quadkeys = quadkeys
+        return list(quadkeys)
+
+    def _list_existing_obm_paths(self) -> Optional[Set[str]]:
+        if self._obm_existing_paths_loaded:
+            return self._obm_existing_paths
+
+        self._obm_existing_paths_loaded = True
+
+        if self.con is None or not self.cfg.obm_s3.endswith("*.parquet"):
+            return None
+
+        try:
+            cursor = self.con.execute("SELECT * FROM glob(?)", [self.cfg.obm_s3])
+            rows = cursor.fetchall()
+        except Exception as exc:
+            logger.warning(
+                "Could not enumerate OBM parquet objects for %s; falling back to synthesized paths. Error: %s",
+                self.cfg.obm_s3,
+                exc,
+            )
+            return None
+
+        self._obm_existing_paths = {
+            str(row[0])
+            for row in rows
+            if row and row[0]
+        }
+        logger.info(
+            "Discovered %s OBM parquet object(s) from remote listing",
+            len(self._obm_existing_paths),
+        )
+        return self._obm_existing_paths
+
     def _obm_input_paths(self) -> List[str]:
         """
         OpenBuildingMap files are partitioned by zoom-6 quadkey. Reading only
         intersecting quadkey files avoids listing/scanning the full global prefix.
         """
 
+        if self._obm_input_paths_cache is not None:
+            return list(self._obm_input_paths_cache)
+
         if not self.cfg.obm_s3.endswith("*.parquet"):
-            return [self.cfg.obm_s3]
+            self._obm_input_paths_cache = [self.cfg.obm_s3]
+            return list(self._obm_input_paths_cache)
 
         zoom = int(self.cfg.obm_quadkey_zoom)
-        x_min, y_max = self._lon_lat_to_tile(self.cfg.lon_min, self.cfg.lat_min, zoom)
-        x_max, y_min = self._lon_lat_to_tile(self.cfg.lon_max, self.cfg.lat_max, zoom)
-
-        quadkeys = sorted({
-            self._tile_to_quadkey(x, y, zoom)
-            for x in range(min(x_min, x_max), max(x_min, x_max) + 1)
-            for y in range(min(y_min, y_max), max(y_min, y_max) + 1)
-        })
+        quadkeys = self._boundary_intersecting_quadkeys(zoom)
 
         prefix = self.cfg.obm_s3[:-len("*.parquet")]
-        paths = [f"{prefix}building.{quadkey}.parquet" for quadkey in quadkeys]
+        candidate_paths = [f"{prefix}building.{quadkey}.parquet" for quadkey in quadkeys]
+        existing_paths = self._list_existing_obm_paths()
 
-        logger.info("Using %s OBM quadkey Parquet file(s): %s", len(paths), ", ".join(paths))
+        if existing_paths is None:
+            paths = candidate_paths
+        else:
+            paths = [path for path in candidate_paths if path in existing_paths]
+            missing_count = len(candidate_paths) - len(paths)
+            if missing_count:
+                logger.info(
+                    "Skipped %s synthesized OBM quadkey file(s) that are absent from the remote listing",
+                    missing_count,
+                )
+            if not paths:
+                raise FileNotFoundError(
+                    "No existing OBM parquet files matched the boundary-derived quadkeys. "
+                    "The remote catalog did not contain any of the expected tiles."
+                )
 
-        return paths
+        preview = ", ".join(paths[:12])
+        if len(paths) > 12:
+            preview += f", ... (+{len(paths) - 12} more)"
+        logger.info("Using %s OBM quadkey Parquet file(s): %s", len(paths), preview)
+
+        self._obm_input_paths_cache = paths
+        self._report_progress(
+            "Selecting OBM tiles",
+            19,
+            f"Selected {len(paths):,} OBM quadkey parquet file(s) for the country boundary",
+        )
+        return list(paths)
+
+    def _effective_chunk_size(self, path_count: int) -> int:
+        configured = max(1, int(self.cfg.chunk_size))
+        if path_count <= configured:
+            return path_count
+
+        # Large countries become dominated by repeated temp-table and boundary
+        # intersection overhead if we keep the historical 2-file batch size.
+        target_chunk_count = 12
+        auto_scaled = max(configured, math.ceil(path_count / target_chunk_count))
+        return min(path_count, min(auto_scaled, 32))
 
     @staticmethod
     def _duckdb_string_list(values: List[str]) -> str:
@@ -628,8 +855,18 @@ class OpenBuildingMapCountryETL:
         obm_paths = self._obm_input_paths()
 
         # Process in chunks to avoid OOM on large countries
-        chunk_size = self.cfg.chunk_size
+        chunk_size = self._effective_chunk_size(len(obm_paths))
+        logger.info(
+            "Processing %s OBM file(s) with effective chunk size %s",
+            len(obm_paths),
+            chunk_size,
+        )
         chunks = [obm_paths[i:i + chunk_size] for i in range(0, len(obm_paths), chunk_size)]
+        self._report_progress(
+            "Processing OBM chunks",
+            22,
+            f"{len(obm_paths):,} parquet file(s) across {len(chunks):,} chunk(s)",
+        )
         chunk_dir = Path(self.cfg.temp_directory) / "chunks"
         chunk_dir.mkdir(parents=True, exist_ok=True)
 
@@ -637,58 +874,108 @@ class OpenBuildingMapCountryETL:
 
         for chunk_idx, chunk_paths in enumerate(chunks):
             chunk_file = chunk_dir / f"chunk_{chunk_idx:04d}.parquet"
-            chunk_files.append(chunk_file.as_posix())
             chunk_paths_sql = self._duckdb_string_list(chunk_paths)
+            chunk_label = f"Chunk {chunk_idx + 1}/{len(chunks)}"
 
             logger.info(
                 "Processing chunk %d/%d (%d file(s)): %s",
                 chunk_idx + 1, len(chunks), len(chunk_paths),
                 ", ".join(chunk_paths),
             )
+            self._report_progress(
+                "Reading OBM chunk",
+                self._chunk_progress_percent(chunk_idx, len(chunks), 0.05),
+                f"{chunk_label}: reading {len(chunk_paths):,} parquet file(s)",
+            )
 
             sample_limit_sql = ""
             if self.cfg.sample_only:
                 sample_limit_sql = f"LIMIT {int(self.cfg.sample_limit)}"
 
+            # -----------------------------------------------------------
+            # STEP 1: Load bbox-filtered candidates into a temp table.
+            # This is a cheap filter that avoids holding geometry objects
+            # for the entire global dataset in memory.
+            # -----------------------------------------------------------
+            self.con.execute("DROP TABLE IF EXISTS _tmp_candidates;")
+            self.con.execute(f"""
+                CREATE TEMP TABLE _tmp_candidates AS
+                SELECT
+                    id,
+                    source,
+                    relation_id,
+                    quadkey,
+                    last_update,
+                    occupancy,
+                    height,
+                    TRY_CAST(floorspace AS DOUBLE) AS floorspace_obm_m2,
+                    {geom_expr} AS geom,
+                    bbox
+                FROM read_parquet(
+                    {chunk_paths_sql},
+                    union_by_name = true
+                )
+                WHERE
+                    bbox.xmax >= {self.cfg.lon_min}
+                    AND bbox.xmin <= {self.cfg.lon_max}
+                    AND bbox.ymax >= {self.cfg.lat_min}
+                    AND bbox.ymin <= {self.cfg.lat_max}
+                {sample_limit_sql};
+            """)
+
+            cand_count = self.con.execute(
+                "SELECT COUNT(*) FROM _tmp_candidates;"
+            ).fetchone()[0]
+            logger.info("Chunk %d: %d bbox-filtered candidates", chunk_idx + 1, cand_count)
+            self._report_progress(
+                "Filtering candidate buildings",
+                self._chunk_progress_percent(chunk_idx, len(chunks), 0.4),
+                f"{chunk_label}: {cand_count:,} bbox-filtered candidates",
+            )
+
+            if cand_count == 0:
+                self.con.execute("DROP TABLE IF EXISTS _tmp_candidates;")
+                continue
+
+            # -----------------------------------------------------------
+            # STEP 2: Spatial intersection against country boundary.
+            # Writing to a table lets DuckDB spill to disk.
+            # -----------------------------------------------------------
+            self.con.execute("DROP TABLE IF EXISTS _tmp_country;")
+            self.con.execute("""
+                CREATE TEMP TABLE _tmp_country AS
+                SELECT c.*
+                FROM _tmp_candidates c, country_boundary g
+                WHERE
+                    c.geom IS NOT NULL
+                    AND COALESCE(TRY(ST_Intersects(c.geom, g.geom)), FALSE);
+            """)
+
+            country_count = self.con.execute(
+                "SELECT COUNT(*) FROM _tmp_country;"
+            ).fetchone()[0]
+            logger.info("Chunk %d: %d buildings inside boundary", chunk_idx + 1, country_count)
+            self._report_progress(
+                "Clipping buildings to country boundary",
+                self._chunk_progress_percent(chunk_idx, len(chunks), 0.72),
+                f"{chunk_label}: {country_count:,} buildings inside boundary",
+            )
+
+            # Free candidates memory
+            self.con.execute("DROP TABLE IF EXISTS _tmp_candidates;")
+
+            if country_count == 0:
+                self.con.execute("DROP TABLE IF EXISTS _tmp_country;")
+                continue
+
+            # -----------------------------------------------------------
+            # STEP 3: Enrich and write to chunk Parquet file.
+            # -----------------------------------------------------------
             chunk_output_sql = chunk_file.as_posix().replace("'", "''")
 
-            query = f"""
+            self.con.execute(f"""
             COPY (
-                WITH candidates AS (
-                    SELECT
-                        id,
-                        source,
-                        relation_id,
-                        quadkey,
-                        last_update,
-                        occupancy,
-                        height,
-                        TRY_CAST(floorspace AS DOUBLE) AS floorspace_obm_m2,
-                        {geom_expr} AS geom,
-                        bbox
-                    FROM read_parquet(
-                        {chunk_paths_sql},
-                        union_by_name = true,
-                        filename = true
-                    )
-                    WHERE
-                        bbox.xmax >= {self.cfg.lon_min}
-                        AND bbox.xmin <= {self.cfg.lon_max}
-                        AND bbox.ymax >= {self.cfg.lat_min}
-                        AND bbox.ymin <= {self.cfg.lat_max}
-                    {sample_limit_sql}
-                ),
-
-                country_buildings AS (
-                    SELECT c.*
-                    FROM candidates c, country_boundary g
-                    WHERE
-                        c.geom IS NOT NULL
-                        AND ST_IsValid(c.geom)
-                        AND ST_Intersects(c.geom, g.geom)
-                ),
-
-                height_parsed AS (
+                WITH height_parsed AS (
                     SELECT
                         *,
 
@@ -712,26 +999,24 @@ class OpenBuildingMapCountryETL:
                             AS INTEGER
                         ) AS stories_max_parsed
 
-                    FROM country_buildings
+                    FROM _tmp_country
                 ),
 
                 measured AS (
                     SELECT
                         *,
-                        ST_Area(
-                            ST_Transform(
-                                geom,
-                                'OGC:CRS84',
-                                'EPSG:3035',
-                                always_xy := true
-                            )
-                        ) AS footprint_area_m2
+                        ST_Centroid(geom) AS centroid_geom,
+                        ST_Transform(
+                            geom,
+                            'OGC:CRS84',
+                            'EPSG:3035',
+                            always_xy := true
+                        ) AS geom_3035
                     FROM height_parsed
                 ),
 
                 enriched AS (
                     SELECT
-                        -- Stable identifiers
                         CAST(id AS VARCHAR) AS building_id,
                         source,
                         relation_id,
@@ -739,25 +1024,22 @@ class OpenBuildingMapCountryETL:
                         SUBSTR(CAST(quadkey AS VARCHAR), 1, 6) AS quadkey_prefix_6,
                         last_update,
 
-                        -- Geometry staging for MSSQL
                         ST_AsWKB(geom) AS geom_wkb,
 
-                        ST_X(ST_Centroid(geom)) AS centroid_lon,
-                        ST_Y(ST_Centroid(geom)) AS centroid_lat,
+                        CASE WHEN centroid_geom IS NOT NULL THEN ST_X(centroid_geom) ELSE NULL END AS centroid_lon,
+                        CASE WHEN centroid_geom IS NOT NULL THEN ST_Y(centroid_geom) ELSE NULL END AS centroid_lat,
 
                         bbox.xmin AS bbox_xmin,
                         bbox.ymin AS bbox_ymin,
                         bbox.xmax AS bbox_xmax,
                         bbox.ymax AS bbox_ymax,
 
-                        footprint_area_m2,
+                        ST_Area(geom_3035) AS footprint_area_m2,
 
-                        -- Raw attributes
                         height AS height_raw,
                         occupancy AS occupancy_raw,
                         floorspace_obm_m2,
 
-                        -- Height interpretation
                         CASE
                             WHEN height_direct_m IS NOT NULL
                                 THEN 'exact_height_m'
@@ -795,7 +1077,6 @@ class OpenBuildingMapCountryETL:
                             ELSE 'none'
                         END AS height_quality,
 
-                        -- Occupancy interpretation
                         COALESCE(
                             NULLIF(SUBSTR(UPPER(occupancy), 1, 3), ''),
                             'UNK'
@@ -821,9 +1102,6 @@ class OpenBuildingMapCountryETL:
                             ELSE 'low'
                         END AS occupancy_quality,
 
-                        -- Estimated floorspace:
-                        -- Prefer OBM floorspace if available.
-                        -- Otherwise estimate from footprint x storeys if storeys are known.
                         CASE
                             WHEN floorspace_obm_m2 IS NOT NULL
                                 THEN floorspace_obm_m2
@@ -855,17 +1133,16 @@ class OpenBuildingMapCountryETL:
                 COMPRESSION ZSTD,
                 ROW_GROUP_SIZE {self.cfg.row_group_size}
             );
-            """
+            """)
 
-            try:
-                self.con.execute(query)
-                logger.info("Chunk %d written: %s", chunk_idx + 1, chunk_file)
-            except Exception as exc:
-                if "no data" in str(exc).lower() or "empty" in str(exc).lower():
-                    logger.info("Chunk %d produced no rows, skipping.", chunk_idx + 1)
-                    chunk_files.pop()
-                else:
-                    raise
+            self.con.execute("DROP TABLE IF EXISTS _tmp_country;")
+            chunk_files.append(chunk_file.as_posix())
+            logger.info("Chunk %d written: %s", chunk_idx + 1, chunk_file)
+            self._report_progress(
+                "Writing chunk parquet",
+                self._chunk_progress_percent(chunk_idx, len(chunks), 1.0),
+                f"{chunk_label}: wrote {chunk_file.name}",
+            )
 
         # Combine all chunk files into the final output via streaming read
         if not chunk_files:
@@ -875,6 +1152,11 @@ class OpenBuildingMapCountryETL:
         chunk_list_sql = self._duckdb_string_list(chunk_files)
 
         logger.info("Combining %d chunk file(s) into final output: %s", len(chunk_files), output_path)
+        self._report_progress(
+            "Combining chunk parquet files",
+            70,
+            f"Combining {len(chunk_files):,} chunk file(s) into {output_path.name}",
+        )
         self.con.execute(f"""
             COPY (
                 SELECT * FROM read_parquet({chunk_list_sql})
@@ -899,6 +1181,7 @@ class OpenBuildingMapCountryETL:
             pass
 
         logger.info("Parquet written: %s", output_path)
+        self._report_progress("Wrote ETL parquet", 72, f"Parquet written: {output_path.name}")
 
     # ---------------------------------------------------------------------
     # Profiling
@@ -1023,7 +1306,7 @@ def parse_args() -> argparse.Namespace:
         "--chunk-size",
         type=int,
         default=2,
-        help="Number of quadkey files to process per batch. Lower values use less memory."
+        help="Minimum number of quadkey files to process per batch. Large runs auto-scale upward to reduce chunk overhead."
     )
 
     parser.add_argument(
@@ -1049,6 +1332,16 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional country boundary file: .gpkg, .shp, or .zip containing one."
     )
+    parser.add_argument(
+        "--country-boundary-catalog",
+        default=str(DEFAULT_COUNTRY_BOUNDARY_CATALOG),
+        help="Path to a Natural Earth admin-0 all-countries zip used for dropdown country selection."
+    )
+    parser.add_argument(
+        "--country-key",
+        default=None,
+        help="Selected country key from the boundary catalog, for example ADM0_A3:GBR."
+    )
 
     return parser.parse_args()
 
@@ -1073,6 +1366,8 @@ def main():
         sample_only=args.sample_only,
         sample_limit=args.sample_limit,
         boundary_file=args.boundary_file,
+        country_boundary_catalog=args.country_boundary_catalog,
+        country_key=args.country_key,
         chunk_size=args.chunk_size,
     )
 
