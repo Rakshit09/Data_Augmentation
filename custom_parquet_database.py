@@ -1,5 +1,8 @@
+import os
 import re
+import shutil
 import uuid
+from functools import lru_cache
 from pathlib import Path
 from threading import Lock, Thread
 from typing import Any, Dict, List, Optional
@@ -87,7 +90,7 @@ def _resolve_local_path(path_value: str, suffix: str, label: str, must_exist: bo
     path = Path(path_value).expanduser()
     if not path.is_absolute():
         path = Path.cwd() / path
-    path = path.resolve()
+    path = _normalize_mapped_drive_path(path.resolve())
 
     if path.suffix.lower() != suffix:
         raise ValueError(f"{label} must end with {suffix}: {path_value}")
@@ -98,9 +101,92 @@ def _resolve_local_path(path_value: str, suffix: str, label: str, must_exist: bo
 
 def _display_path(path: Path) -> str:
     try:
-        return path.resolve().relative_to(Path.cwd().resolve()).as_posix()
+        resolved = _normalize_mapped_drive_path(path.resolve())
+        return resolved.relative_to(Path.cwd().resolve()).as_posix()
     except ValueError:
         return path.as_posix()
+
+
+def _is_unc_path(path: Path) -> bool:
+    anchor = path.anchor.replace("/", "\\")
+    return anchor.startswith("\\\\")
+
+
+@lru_cache(maxsize=1)
+def _windows_mapped_drive_roots() -> tuple[tuple[str, str], ...]:
+    if os.name != "nt":
+        return ()
+
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        drive_buffer = ctypes.create_unicode_buffer(512)
+        length = ctypes.windll.kernel32.GetLogicalDriveStringsW(len(drive_buffer), drive_buffer)
+        drives = [drive for drive in drive_buffer[:length].split("\x00") if drive]
+        mappings: List[tuple[str, str]] = []
+
+        for drive in drives:
+            local_name = drive[:2]
+            buffer_size = 512
+            while True:
+                remote_buffer = ctypes.create_unicode_buffer(buffer_size)
+                size = wintypes.DWORD(buffer_size)
+                result = ctypes.windll.mpr.WNetGetConnectionW(local_name, remote_buffer, ctypes.byref(size))
+                if result == 0:
+                    remote_root = remote_buffer.value.rstrip("\\/")
+                    if remote_root:
+                        mappings.append((remote_root.casefold(), drive))
+                    break
+                if result == 234 and int(size.value) > buffer_size:
+                    buffer_size = int(size.value) + 1
+                    continue
+                break
+
+        mappings.sort(key=lambda item: len(item[0]), reverse=True)
+        return tuple(mappings)
+    except Exception:
+        return ()
+
+
+def _normalize_mapped_drive_path(path: Path) -> Path:
+    resolved = path.resolve()
+    if os.name != "nt" or not _is_unc_path(resolved):
+        return resolved
+
+    resolved_text = str(resolved)
+    resolved_folded = resolved_text.casefold()
+    for remote_root, drive_root in _windows_mapped_drive_roots():
+        if resolved_folded == remote_root:
+            return Path(drive_root)
+        if resolved_folded.startswith(remote_root + "\\"):
+            suffix = resolved_text[len(remote_root):].lstrip("\\/")
+            return Path(drive_root) / Path(suffix)
+
+    return resolved
+
+
+def _custom_parquet_work_root(parquet_path: Path, output_path: Path) -> Path:
+    output_parent = _normalize_mapped_drive_path(output_path.parent.resolve())
+    if not _is_unc_path(output_parent):
+        output_parent.mkdir(parents=True, exist_ok=True)
+        return output_parent
+
+    parquet_parent = _normalize_mapped_drive_path(parquet_path.parent.resolve())
+    if _is_unc_path(parquet_parent):
+        raise ValueError(
+            "Workflow 2 needs a local working folder. When the Parquet source and DuckDB output are both on a network share, "
+            "DuckDB cannot safely create the staging database there. Move either the Parquet file or the DuckDB output path to a local folder."
+        )
+
+    parquet_parent.mkdir(parents=True, exist_ok=True)
+    return parquet_parent
+
+
+def _local_staged_db_path(parquet_path: Path, output_path: Path, job_id: str) -> Path:
+    suffix = output_path.suffix or ".duckdb"
+    work_root = _custom_parquet_work_root(parquet_path, output_path)
+    return work_root / f".cpd_{job_id}{suffix}"
 
 
 def _parquet_columns(parquet_path: Path) -> List[Dict[str, str]]:
@@ -260,6 +346,9 @@ def prepare_custom_parquet_database(
     con = duckdb.connect(str(db_path))
     try:
         con.execute("LOAD spatial;")
+        temp_directory = db_path.parent / ".duckdb_temp"
+        temp_directory.mkdir(parents=True, exist_ok=True)
+        con.execute(f"SET temp_directory = {_sql_string(str(temp_directory))};")
         con.execute("SET enable_geoparquet_conversion = false;")
         con.execute(f"SET threads = {int(threads)};")
         con.execute(f"""
@@ -450,7 +539,8 @@ def register_custom_parquet_routes(app: Flask) -> None:
             return jsonify({"error": str(exc)}), 400
 
         job_id = uuid.uuid4().hex
-        temp_db_path = db_path.with_name(f".{db_path.name}.{job_id}.tmp")
+        transfer_db_path = db_path.with_name(f".cpd_{job_id}{db_path.suffix or '.duckdb'}")
+        staged_db_path = _local_staged_db_path(parquet_path, db_path, job_id)
         set_job(
             job_id,
             status="running",
@@ -465,12 +555,19 @@ def register_custom_parquet_routes(app: Flask) -> None:
             try:
                 row_count = prepare_custom_parquet_database(
                     parquet_path,
-                    temp_db_path,
+                    staged_db_path,
                     normalized_mappings,
                     columns,
                     normalized_extra_fields,
                 )
-                temp_db_path.replace(db_path)
+                db_path.parent.mkdir(parents=True, exist_ok=True)
+                if staged_db_path == transfer_db_path:
+                    transfer_db_path.replace(db_path)
+                else:
+                    transfer_db_path.unlink(missing_ok=True)
+                    shutil.copy2(staged_db_path, transfer_db_path)
+                    transfer_db_path.replace(db_path)
+                    staged_db_path.unlink(missing_ok=True)
                 app.config["PARQUET_PATH"] = _display_path(parquet_path)
                 app.config["DB_PATH"] = _display_path(db_path)
                 set_job(
@@ -481,7 +578,8 @@ def register_custom_parquet_routes(app: Flask) -> None:
                     row_count=row_count,
                 )
             except Exception as exc:
-                temp_db_path.unlink(missing_ok=True)
+                transfer_db_path.unlink(missing_ok=True)
+                staged_db_path.unlink(missing_ok=True)
                 set_job(
                     job_id,
                     status="error",
