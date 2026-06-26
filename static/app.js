@@ -44,6 +44,13 @@ const maxDistance = document.getElementById("maxDistance");
 const runEnrichment = document.getElementById("runEnrichment");
 const uploadSummary = document.getElementById("uploadSummary");
 const previewTable = document.getElementById("previewTable");
+const exposureMapControls = document.getElementById("exposureMapControls");
+const showExposureOnMap = document.getElementById("showExposureOnMap");
+const exposureMapMessage = document.getElementById("exposureMapMessage");
+const exposureMapPanel = document.getElementById("exposureMapPanel");
+const exposureMapTitle = document.getElementById("exposureMapTitle");
+const exposureMapStats = document.getElementById("exposureMapStats");
+const clearExposureMap = document.getElementById("clearExposureMap");
 const downloadLink = document.getElementById("downloadLink");
 const statsPanel = document.getElementById("statsPanel");
 const statsGrid = document.getElementById("statsGrid");
@@ -57,6 +64,11 @@ let availableDbFiles = [];
 let selectedBuilding = null;
 let activeViewFilter = null;
 let viewFilterRequestId = 0;
+let activeExposureMap = null;
+let exposureMapRefreshTimer = null;
+let exposureMapRefreshRunning = false;
+let exposureMapRefreshQueued = false;
+let exposureMapRequestId = 0;
 
 const statsDownloadLink = ensureStatsDownloadLink();
 const emptyFeatureCollection = {
@@ -419,6 +431,51 @@ map.on("load", () => {
     }
   });
 
+  map.addSource("exposure-points", {
+    type: "geojson",
+    data: emptyFeatureCollection
+  });
+
+  map.addLayer({
+    id: "exposure-points-halo",
+    type: "circle",
+    source: "exposure-points",
+    paint: {
+      "circle-color": "#ffffff",
+      "circle-opacity": 0.84,
+      "circle-radius": [
+        "interpolate",
+        ["linear"],
+        ["coalesce", ["get", "csv_count"], 1],
+        1, 5,
+        20, 8,
+        200, 12
+      ],
+      "circle-stroke-color": "rgba(0, 31, 63, 0.16)",
+      "circle-stroke-width": 1
+    }
+  });
+
+  map.addLayer({
+    id: "exposure-points-circle",
+    type: "circle",
+    source: "exposure-points",
+    paint: {
+      "circle-color": "#0f766e",
+      "circle-opacity": 0.88,
+      "circle-radius": [
+        "interpolate",
+        ["linear"],
+        ["coalesce", ["get", "csv_count"], 1],
+        1, 3,
+        20, 5,
+        200, 8
+      ],
+      "circle-stroke-color": "#064e3b",
+      "circle-stroke-width": 0.5
+    }
+  });
+
   map.addSource("selected-building", {
     type: "geojson",
     data: selectedSource
@@ -449,9 +506,23 @@ map.on("moveend", () => {
   if (activeViewFilter) {
     refreshViewFilter({ silent: true });
   }
+  requestExposurePointRefresh({ immediate: true });
+});
+
+map.on("move", () => {
+  requestExposurePointRefresh();
 });
 
 map.on("click", async (event) => {
+  if (activeExposureMap && map.isStyleLoaded()) {
+    const pointFeatures = map.queryRenderedFeatures(event.point, {
+      layers: ["exposure-points-circle"]
+    });
+    if (pointFeatures.length) {
+      return;
+    }
+  }
+
   const { lng, lat } = event.lngLat;
   dismissCriticalNote();
   hideSearchResults();
@@ -757,10 +828,19 @@ csvFile.addEventListener("change", () => {
   uploadSelectedCsv();
 });
 
+showExposureOnMap?.addEventListener("click", () => {
+  activateExposureMap();
+});
+
+clearExposureMap?.addEventListener("click", () => {
+  clearActiveExposureMap();
+});
+
 async function uploadSelectedCsv() {
   if (!csvFile.files.length) {
     setUploadedCsvName("");
     setUploadSummary("Choose a CSV or Excel (.xlsx) file first.");
+    exposureMapControls?.classList.add("hidden");
     return;
   }
 
@@ -769,6 +849,9 @@ async function uploadSelectedCsv() {
   const formData = new FormData();
   formData.append("file", csvFile.files[0]);
   setUploadedCsvName(csvFile.files[0].name);
+  clearActiveExposureMap({ keepControls: true });
+  setExposureMapMessage("");
+  exposureMapControls?.classList.add("hidden");
 
   statusEl.textContent = "Uploading";
   setUploadSummary("Reading file preview...");
@@ -787,10 +870,11 @@ async function uploadSelectedCsv() {
 
     currentUploadId = payload.upload_id;
     currentUploadFilename = payload.filename;
-  setUploadedCsvName(payload.filename);
+    setUploadedCsvName(payload.filename);
     populateColumnSelectors(payload.columns);
     renderPreview(payload.columns, payload.rows);
     mappingControls.classList.remove("hidden");
+    exposureMapControls?.classList.remove("hidden");
     statsPanel.classList.add("hidden");
     releaseStatsDownload();
     renderFileSummary(payload.filename, payload.rows.length);
@@ -799,7 +883,253 @@ async function uploadSelectedCsv() {
     statusEl.textContent = "Error";
     setUploadSummary(error.message);
     previewTable.classList.add("hidden");
+    exposureMapControls?.classList.add("hidden");
   }
+}
+
+async function activateExposureMap() {
+  if (!currentUploadId) {
+    setExposureMapMessage("Upload a file first.", "error");
+    return;
+  }
+
+  const latCol = latColumn.value;
+  const lonCol = lonColumn.value;
+  if (!latCol || !lonCol) {
+    setExposureMapMessage("Choose latitude and longitude columns first.", "error");
+    return;
+  }
+
+  showExposureOnMap.disabled = true;
+  statusEl.textContent = "Preparing map";
+  setExposureMapMessage("Preparing map points...");
+
+  try {
+    const params = new URLSearchParams({
+      upload_id: currentUploadId,
+      lat_col: latCol,
+      lon_col: lonCol
+    });
+    const response = await fetch(`api/exposure/map-points?${params.toString()}`);
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.error || "Could not prepare map points");
+    }
+
+    const validRows = Number(payload.valid_rows || 0);
+    if (!validRows || !payload.extent) {
+      throw new Error("No valid latitude/longitude rows were found.");
+    }
+
+    activeExposureMap = {
+      upload_id: currentUploadId,
+      filename: payload.filename || currentUploadFilename || "Exposure",
+      lat_col: latCol,
+      lon_col: lonCol,
+      total_rows: Number(payload.total_rows || 0),
+      valid_rows: validRows,
+      extent: payload.extent
+    };
+    exposureMapRequestId += 1;
+    exposureMapRefreshQueued = false;
+
+    updateExposureMapPanel({
+      visible_count: 0,
+      returned_count: 0,
+      cell_count: 0
+    });
+    setExposureMapMessage(`Ready to map ${formatInteger(validRows)} locations.`, "success");
+    switchMode("lookup");
+    clearSelection();
+
+    window.setTimeout(() => {
+      map.resize();
+      fitMapToExposureExtent(activeExposureMap.extent);
+    }, 80);
+  } catch (error) {
+    clearActiveExposureMap({ keepControls: true });
+    statusEl.textContent = "Error";
+    setExposureMapMessage(error.message, "error");
+  } finally {
+    showExposureOnMap.disabled = false;
+  }
+}
+
+function fitMapToExposureExtent(extent) {
+  if (!extent) {
+    requestExposurePointRefresh({ immediate: true });
+    return;
+  }
+
+  const minLon = Number(extent.min_lon);
+  const minLat = Number(extent.min_lat);
+  const maxLon = Number(extent.max_lon);
+  const maxLat = Number(extent.max_lat);
+  if (![minLon, minLat, maxLon, maxLat].every(Number.isFinite)) {
+    requestExposurePointRefresh({ immediate: true });
+    return;
+  }
+
+  const center = [(minLon + maxLon) / 2, (minLat + maxLat) / 2];
+  const lonSpan = Math.abs(maxLon - minLon);
+  const latSpan = Math.abs(maxLat - minLat);
+
+  if (lonSpan < 0.00005 && latSpan < 0.00005) {
+    map.flyTo({
+      center,
+      zoom: Math.max(map.getZoom(), 16),
+      speed: 1.5
+    });
+  } else {
+    map.fitBounds([[minLon, minLat], [maxLon, maxLat]], {
+      padding: 72,
+      maxZoom: 15,
+      duration: 650
+    });
+  }
+
+  requestExposurePointRefresh({ immediate: true });
+  window.setTimeout(() => requestExposurePointRefresh({ immediate: true }), 760);
+}
+
+function requestExposurePointRefresh({ immediate = false } = {}) {
+  if (!activeExposureMap || !map.isStyleLoaded()) return;
+
+  if (immediate) {
+    if (exposureMapRefreshTimer) {
+      window.clearTimeout(exposureMapRefreshTimer);
+      exposureMapRefreshTimer = null;
+    }
+    refreshExposurePoints({ silent: true });
+    return;
+  }
+
+  if (exposureMapRefreshTimer) return;
+  exposureMapRefreshTimer = window.setTimeout(() => {
+    exposureMapRefreshTimer = null;
+    refreshExposurePoints({ silent: true });
+  }, 180);
+}
+
+async function refreshExposurePoints({ silent = false } = {}) {
+  if (!activeExposureMap || !map.isStyleLoaded()) return;
+
+  if (exposureMapRefreshRunning) {
+    exposureMapRefreshQueued = true;
+    return;
+  }
+
+  const requestId = ++exposureMapRequestId;
+  const bounds = map.getBounds();
+  const canvas = map.getCanvas();
+  const params = new URLSearchParams({
+    upload_id: activeExposureMap.upload_id,
+    lat_col: activeExposureMap.lat_col,
+    lon_col: activeExposureMap.lon_col,
+    min_lon: String(bounds.getWest()),
+    min_lat: String(bounds.getSouth()),
+    max_lon: String(bounds.getEast()),
+    max_lat: String(bounds.getNorth()),
+    width: String(canvas.clientWidth || 1200),
+    height: String(canvas.clientHeight || 800)
+  });
+
+  exposureMapRefreshRunning = true;
+  if (!silent) {
+    statusEl.textContent = "Loading points";
+  }
+
+  try {
+    const response = await fetch(`api/exposure/map-points?${params.toString()}`);
+    const payload = await response.json();
+
+    if (requestId !== exposureMapRequestId || !activeExposureMap) return;
+    if (!response.ok) {
+      throw new Error(payload.error || "Could not load map points");
+    }
+
+    map.getSource("exposure-points")?.setData({
+      type: "FeatureCollection",
+      features: payload.features || []
+    });
+
+    activeExposureMap = {
+      ...activeExposureMap,
+      total_rows: Number(payload.total_rows || activeExposureMap.total_rows || 0),
+      valid_rows: Number(payload.valid_rows || activeExposureMap.valid_rows || 0),
+      visible_count: Number(payload.visible_count || 0),
+      returned_count: Number(payload.returned_count || (payload.features || []).length || 0),
+      cell_count: Number(payload.cell_count || 0)
+    };
+    updateExposureMapPanel(activeExposureMap);
+    if (!silent) {
+      statusEl.textContent = "Ready";
+    }
+  } catch (error) {
+    if (requestId !== exposureMapRequestId) return;
+    setExposureMapPanelError(error.message);
+    if (!silent) {
+      statusEl.textContent = "Error";
+    }
+  } finally {
+    exposureMapRefreshRunning = false;
+    if (exposureMapRefreshQueued && activeExposureMap) {
+      exposureMapRefreshQueued = false;
+      requestExposurePointRefresh({ immediate: true });
+    }
+  }
+}
+
+function updateExposureMapPanel(payload) {
+  if (!activeExposureMap || !exposureMapPanel) return;
+
+  exposureMapPanel.classList.remove("hidden", "error");
+  if (exposureMapTitle) {
+    exposureMapTitle.textContent = activeExposureMap.filename || "Exposure locations";
+  }
+
+  const visible = Number(payload.visible_count || 0);
+  const drawn = Number(payload.returned_count || 0);
+  const valid = Number(activeExposureMap.valid_rows || 0);
+  if (exposureMapStats) {
+    exposureMapStats.textContent = visible
+      ? `${formatInteger(visible)} in view · ${formatInteger(drawn)} drawn · ${formatInteger(valid)} valid`
+      : `${formatInteger(valid)} valid locations`;
+  }
+}
+
+function setExposureMapPanelError(message) {
+  if (!exposureMapPanel || !exposureMapStats) return;
+  exposureMapPanel.classList.remove("hidden");
+  exposureMapPanel.classList.add("error");
+  exposureMapStats.textContent = message;
+}
+
+function clearActiveExposureMap({ keepControls = false } = {}) {
+  activeExposureMap = null;
+  exposureMapRequestId += 1;
+  exposureMapRefreshQueued = false;
+  if (exposureMapRefreshTimer) {
+    window.clearTimeout(exposureMapRefreshTimer);
+    exposureMapRefreshTimer = null;
+  }
+
+  map.getSource("exposure-points")?.setData(emptyFeatureCollection);
+  exposureMapPanel?.classList.add("hidden");
+  exposureMapPanel?.classList.remove("error");
+  if (exposureMapStats) exposureMapStats.textContent = "";
+  if (!keepControls) setExposureMapMessage("");
+  if (statusEl.textContent === "Loading points" || statusEl.textContent === "Preparing map") {
+    statusEl.textContent = "Ready";
+  }
+}
+
+function setExposureMapMessage(message, type = "") {
+  if (!exposureMapMessage) return;
+  exposureMapMessage.textContent = message;
+  exposureMapMessage.classList.toggle("error", type === "error");
+  exposureMapMessage.classList.toggle("success", type === "success");
 }
 
 runEnrichment.addEventListener("click", async () => {

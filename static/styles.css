@@ -688,6 +688,7 @@ h2 {
 .data-source button,
 .upload-form button,
 .mapping button,
+.preview-map-actions button,
 .download {
   border: 2px solid var(--button-primary);
   border-radius: 12px;
@@ -705,7 +706,8 @@ h2 {
 .search button,
 .data-source button,
 .upload-form button,
-.mapping button {
+.mapping button,
+.preview-map-actions button {
   height: 44px;
   padding: 0 16px;
 }
@@ -722,6 +724,7 @@ h2 {
 .data-source button:hover,
 .upload-form button:hover,
 .mapping button:hover,
+.preview-map-actions button:hover,
 .download:hover {
   border-color: var(--button-primary-hover);
   background: var(--button-primary-hover);
@@ -731,7 +734,8 @@ h2 {
 }
 
 .mapping button:disabled,
-.data-source button:disabled {
+.data-source button:disabled,
+.preview-map-actions button:disabled {
   border-color: var(--button-disabled);
   background: var(--button-disabled);
   cursor: not-allowed;
@@ -820,6 +824,64 @@ button:focus-visible,
   display: grid;
   gap: 6px;
   margin-top: -8px;
+}
+
+.map-dataset-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(15, 118, 110, 0.24);
+  border-radius: 12px;
+  background: #ecfdf5;
+}
+
+.map-dataset-panel strong {
+  display: block;
+  overflow: hidden;
+  color: #064e3b;
+  font-size: 13px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-dataset-panel span {
+  display: block;
+  margin-top: 4px;
+  color: #0f766e;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.map-dataset-panel.error {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.map-dataset-panel.error strong,
+.map-dataset-panel.error span {
+  color: #b91c1c;
+}
+
+.map-dataset-panel button {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid rgba(15, 118, 110, 0.32);
+  border-radius: 8px;
+  background: #fff;
+  color: #064e3b;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.map-dataset-panel button:hover {
+  border-color: #0f766e;
+  background: #f8fffb;
 }
 
 .lookup-field-picker {
@@ -1277,6 +1339,30 @@ button:focus-visible,
 
 .preview-table h3{
   background-color: var(--brand)
+}
+
+.preview-map-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.preview-map-message {
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.preview-map-message.error {
+  color: #b91c1c;
+}
+
+.preview-map-message.success {
+  color: var(--brand-dark);
 }
 
 .stats-panel {

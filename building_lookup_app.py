@@ -4,6 +4,7 @@ import psutil
 import argparse
 import codecs
 import csv
+import hashlib
 from genericpath import exists
 from html import escape
 import json
@@ -51,6 +52,8 @@ MAX_RETAINED_EXPOSURE_UPLOADS = 1
 MAX_RETAINED_EXPOSURE_RESULTS = 1
 EXPOSURE_ARTIFACT_MAX_AGE_SECONDS = 6 * 60 * 60
 SUPPORTED_EXPOSURE_UPLOAD_EXTENSIONS = {".csv", ".xlsx"}
+EXPOSURE_MAP_MAX_FEATURES = int(os.environ.get("EXPOSURE_MAP_MAX_FEATURES", "12000"))
+EXPOSURE_MAP_CACHE_MAX_FILES = int(os.environ.get("EXPOSURE_MAP_CACHE_MAX_FILES", "3"))
 MAX_BUILDING_FILTER_VALUES = 500
 MAX_VIEW_FILTER_FEATURES = 5000
 BUILDING_COLUMNS = [
@@ -1173,6 +1176,7 @@ def create_app(
     jobs: Dict[str, Dict[str, Any]] = {}
     jobs_lock = Lock()
     enrichment_lock = Lock()
+    exposure_map_cache_lock = Lock()
     latest_upload_id: List[Optional[str]] = [None]
     for _startup_dir in (app.config["UPLOAD_DIR"], app.config["RESULT_DIR"]):
         _dir = Path(_startup_dir)
@@ -1620,6 +1624,77 @@ def create_app(
             "rows": rows,
         })
 
+    @app.route("/api/exposure/map-points")
+    def exposure_map_points():
+        upload_id = str(request.args.get("upload_id", "")).strip()
+        lat_col = str(request.args.get("lat_col", "")).strip()
+        lon_col = str(request.args.get("lon_col", "")).strip()
+
+        if not upload_id or not lat_col or not lon_col:
+            return jsonify({"error": "Upload id, latitude column, and longitude column are required."}), 400
+
+        upload_path = find_upload(Path(app.config["UPLOAD_DIR"]), upload_id)
+        if upload_path is None:
+            return jsonify({"error": "Uploaded file was not found. Upload it again."}), 404
+
+        try:
+            with exposure_map_cache_lock:
+                cache_path, metadata = prepare_exposure_map_cache(upload_path, upload_id, lat_col, lon_col)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except Exception as exc:
+            return jsonify({"error": f"Could not prepare exposure map points: {exc}"}), 500
+
+        has_bounds = all(
+            key in request.args
+            for key in ("min_lon", "min_lat", "max_lon", "max_lat")
+        )
+        if not has_bounds:
+            return jsonify({
+                **metadata,
+                "type": "FeatureCollection",
+                "features": [],
+                "visible_count": 0,
+                "returned_count": 0,
+                "cell_count": 0,
+            })
+
+        try:
+            min_lon = float(request.args["min_lon"])
+            min_lat = float(request.args["min_lat"])
+            max_lon = float(request.args["max_lon"])
+            max_lat = float(request.args["max_lat"])
+            width = int(float(request.args.get("width", 1200)))
+            height = int(float(request.args.get("height", 800)))
+            limit = int(float(request.args.get("limit", EXPOSURE_MAP_MAX_FEATURES)))
+        except (KeyError, TypeError, ValueError):
+            return jsonify({
+                "error": "Valid min_lon, min_lat, max_lon, max_lat, width, and height query parameters are required."
+            }), 400
+
+        if not (
+            math.isfinite(min_lon)
+            and math.isfinite(min_lat)
+            and math.isfinite(max_lon)
+            and math.isfinite(max_lat)
+        ):
+            return jsonify({"error": "Map bounds must be finite numeric values."}), 400
+
+        points_payload = lookup_exposure_points_in_view(
+            cache_path=cache_path,
+            min_lon=min_lon,
+            min_lat=min_lat,
+            max_lon=max_lon,
+            max_lat=max_lat,
+            width=width,
+            height=height,
+            max_features=limit,
+        )
+        return jsonify({
+            **metadata,
+            **points_payload,
+        })
+
     @app.route("/api/exposure/enrich", methods=["POST"])
     def exposure_enrich():
         payload = request.get_json(silent=True) or {}
@@ -2001,20 +2076,32 @@ def preview_uploaded_file(upload_path: Path) -> tuple[List[str], List[Dict[str, 
         except Exception as exc:
             raise ValueError(f"Could not parse the uploaded Excel file: {exc}") from exc
 
+    con = duckdb.connect()
     try:
-        frame = load_csv_dataframe(upload_path)
-        columns = [str(column) for column in frame.columns]
+        con.execute(f"SET temp_directory = {sql_string(str(local_runtime_dir('duckdb_temp').resolve()))};")
+        scan_options_sql = resolve_csv_scan_options(con, upload_path)
+        csv_sql = sql_string(str(upload_path.resolve()))
+        result = con.execute(f"""
+            SELECT *
+            FROM read_csv_auto({csv_sql}, {scan_options_sql})
+            LIMIT 10;
+        """)
+        columns = [str(description[0]) for description in (result.description or [])]
         if not columns:
             raise ValueError("Uploaded file does not contain any readable columns.")
 
-        preview_rows = frame.head(10).to_dict(orient="records")
         rows = [
-            {column: json_safe(record.get(column)) for column in columns}
-            for record in preview_rows
+            {
+                column: json_safe(raw_row[index])
+                for index, column in enumerate(columns)
+            }
+            for raw_row in result.fetchall()
         ]
         return columns, rows
     except (duckdb.Error, pd.errors.ParserError, ValueError) as exc:
         raise ValueError(f"Could not parse the uploaded file: {exc}") from exc
+    finally:
+        con.close()
 
 
 def resolve_csv_scan_options(con: duckdb.DuckDBPyConnection, csv_path: Path) -> str:
@@ -2050,6 +2137,335 @@ def csv_columns(
         FROM read_csv_auto({csv_sql}, {resolved_scan_options_sql});
     """).fetchall()
     return [row[0] for row in rows]
+
+
+def exposure_map_cache_key(
+    upload_path: Path,
+    upload_id: str,
+    lat_col: str,
+    lon_col: str,
+) -> str:
+    stat = upload_path.stat()
+    payload = {
+        "upload_id": upload_id,
+        "path": str(upload_path.resolve()),
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+        "lat_col": lat_col,
+        "lon_col": lon_col,
+    }
+    return hashlib.sha1(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:20]
+
+
+def exposure_map_cache_path(
+    upload_path: Path,
+    upload_id: str,
+    lat_col: str,
+    lon_col: str,
+) -> Path:
+    digest = exposure_map_cache_key(upload_path, upload_id, lat_col, lon_col)
+    return local_runtime_dir("exposure_map_cache") / f"{upload_id}_{digest}.duckdb"
+
+
+def unlink_duckdb_file(path: Path) -> None:
+    path.unlink(missing_ok=True)
+    path.with_name(f"{path.name}.wal").unlink(missing_ok=True)
+
+
+def prune_exposure_map_caches(keep_path: Optional[Path] = None) -> None:
+    cache_dir = local_runtime_dir("exposure_map_cache")
+    keep_name = keep_path.name if keep_path else ""
+    now = time.time()
+    caches = sorted(
+        (path for path in cache_dir.glob("*.duckdb") if path.is_file()),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+
+    retained = 0
+    for path in caches:
+        try:
+            age_seconds = now - path.stat().st_mtime
+        except FileNotFoundError:
+            continue
+
+        if path.name == keep_name:
+            retained += 1
+            continue
+
+        if retained >= EXPOSURE_MAP_CACHE_MAX_FILES or age_seconds > EXPOSURE_ARTIFACT_MAX_AGE_SECONDS:
+            unlink_duckdb_file(path)
+        else:
+            retained += 1
+
+    for temp_path in cache_dir.glob("*.tmp.duckdb"):
+        try:
+            if now - temp_path.stat().st_mtime > 30 * 60:
+                unlink_duckdb_file(temp_path)
+        except FileNotFoundError:
+            continue
+
+
+def read_exposure_map_cache_metadata(cache_path: Path) -> Dict[str, Any]:
+    con = duckdb.connect(str(cache_path), read_only=True)
+    try:
+        rows = con.execute("""
+            SELECT key, value
+            FROM metadata;
+        """).fetchall()
+    finally:
+        con.close()
+
+    metadata = {str(key): value for key, value in rows}
+    for key in ("total_rows", "valid_rows"):
+        metadata[key] = int(float(metadata.get(key) or 0))
+
+    extent = None
+    if metadata["valid_rows"]:
+        extent = {
+            "min_lon": float(metadata["min_lon"]),
+            "min_lat": float(metadata["min_lat"]),
+            "max_lon": float(metadata["max_lon"]),
+            "max_lat": float(metadata["max_lat"]),
+        }
+
+    return {
+        "upload_id": str(metadata.get("upload_id") or ""),
+        "filename": str(metadata.get("filename") or ""),
+        "lat_col": str(metadata.get("lat_col") or ""),
+        "lon_col": str(metadata.get("lon_col") or ""),
+        "total_rows": metadata["total_rows"],
+        "valid_rows": metadata["valid_rows"],
+        "extent": extent,
+    }
+
+
+def prepare_exposure_map_cache(
+    upload_path: Path,
+    upload_id: str,
+    lat_col: str,
+    lon_col: str,
+) -> Tuple[Path, Dict[str, Any]]:
+    cache_path = exposure_map_cache_path(upload_path, upload_id, lat_col, lon_col)
+    if cache_path.is_file():
+        try:
+            metadata = read_exposure_map_cache_metadata(cache_path)
+            prune_exposure_map_caches(cache_path)
+            return cache_path, metadata
+        except Exception:
+            unlink_duckdb_file(cache_path)
+
+    cache_dir = cache_path.parent
+    tmp_cache_path = cache_dir / f"{cache_path.stem}.{uuid.uuid4().hex}.tmp.duckdb"
+    converted_csv_path: Optional[Path] = None
+    csv_path = upload_path
+
+    try:
+        if upload_path.suffix.lower() == ".xlsx":
+            converted_csv_path = local_runtime_dir("exposure_map_uploads") / f"{cache_path.stem}.csv"
+            convert_excel_to_csv(upload_path, converted_csv_path)
+            csv_path = converted_csv_path
+
+        con = duckdb.connect(str(tmp_cache_path))
+        try:
+            con.execute(f"SET temp_directory = {sql_string(str(local_runtime_dir('duckdb_temp').resolve()))};")
+            scan_options_sql = resolve_csv_scan_options(con, csv_path)
+            columns = csv_columns(con, csv_path, scan_options_sql)
+            if lat_col not in columns or lon_col not in columns:
+                raise ValueError("Selected latitude/longitude columns were not found in the uploaded file.")
+
+            csv_sql = sql_string(str(csv_path.resolve()))
+            lat_sql = f"source.{sql_identifier(lat_col)}"
+            lon_sql = f"source.{sql_identifier(lon_col)}"
+
+            con.execute(f"""
+                CREATE TABLE source_points AS
+                SELECT
+                    row_number() OVER () AS row_id,
+                    TRY_CAST(NULLIF(TRIM(CAST({lon_sql} AS VARCHAR)), '') AS DOUBLE) AS lon,
+                    TRY_CAST(NULLIF(TRIM(CAST({lat_sql} AS VARCHAR)), '') AS DOUBLE) AS lat
+                FROM read_csv_auto({csv_sql}, {scan_options_sql}) AS source;
+            """)
+
+            total_rows, valid_rows, min_lon, min_lat, max_lon, max_lat = con.execute("""
+                SELECT
+                    COUNT(*) AS total_rows,
+                    COALESCE(SUM(CASE
+                        WHEN lon BETWEEN -180 AND 180 AND lat BETWEEN -90 AND 90 THEN 1
+                        ELSE 0
+                    END), 0) AS valid_rows,
+                    MIN(lon) FILTER (WHERE lon BETWEEN -180 AND 180 AND lat BETWEEN -90 AND 90) AS min_lon,
+                    MIN(lat) FILTER (WHERE lon BETWEEN -180 AND 180 AND lat BETWEEN -90 AND 90) AS min_lat,
+                    MAX(lon) FILTER (WHERE lon BETWEEN -180 AND 180 AND lat BETWEEN -90 AND 90) AS max_lon,
+                    MAX(lat) FILTER (WHERE lon BETWEEN -180 AND 180 AND lat BETWEEN -90 AND 90) AS max_lat
+                FROM source_points;
+            """).fetchone()
+
+            con.execute("""
+                CREATE TABLE points AS
+                SELECT row_id, lon, lat
+                FROM source_points
+                WHERE lon BETWEEN -180 AND 180
+                    AND lat BETWEEN -90 AND 90
+                ORDER BY lon, lat;
+            """)
+            con.execute("DROP TABLE source_points;")
+            con.execute("CREATE INDEX points_lon_idx ON points(lon);")
+            con.execute("CREATE INDEX points_lat_idx ON points(lat);")
+            con.execute("CREATE TABLE metadata(key VARCHAR PRIMARY KEY, value VARCHAR);")
+
+            original_upload_name = upload_path.name.partition("_")[2] or upload_path.name
+            metadata_rows = [
+                ("upload_id", upload_id),
+                ("filename", original_upload_name),
+                ("lat_col", lat_col),
+                ("lon_col", lon_col),
+                ("total_rows", str(int(total_rows or 0))),
+                ("valid_rows", str(int(valid_rows or 0))),
+                ("min_lon", "" if min_lon is None else str(float(min_lon))),
+                ("min_lat", "" if min_lat is None else str(float(min_lat))),
+                ("max_lon", "" if max_lon is None else str(float(max_lon))),
+                ("max_lat", "" if max_lat is None else str(float(max_lat))),
+            ]
+            con.executemany("INSERT INTO metadata VALUES (?, ?);", metadata_rows)
+            con.execute("CHECKPOINT;")
+        finally:
+            con.close()
+
+        os.replace(tmp_cache_path, cache_path)
+        metadata = read_exposure_map_cache_metadata(cache_path)
+        prune_exposure_map_caches(cache_path)
+        return cache_path, metadata
+    finally:
+        unlink_duckdb_file(tmp_cache_path)
+        if converted_csv_path is not None:
+            converted_csv_path.unlink(missing_ok=True)
+
+
+def exposure_view_grid(width: int, height: int, max_features: int) -> Tuple[int, int, int]:
+    safe_width = max(320, min(3840, int(width or 1200)))
+    safe_height = max(240, min(2160, int(height or 800)))
+    safe_max = max(500, min(int(max_features or EXPOSURE_MAP_MAX_FEATURES), EXPOSURE_MAP_MAX_FEATURES))
+
+    cols = max(24, min(260, math.ceil(safe_width / 8)))
+    rows = max(18, min(200, math.ceil(safe_height / 8)))
+    cell_count = cols * rows
+
+    if cell_count > safe_max:
+        scale = math.sqrt(safe_max / cell_count)
+        cols = max(24, int(cols * scale))
+        rows = max(18, int(rows * scale))
+
+    return cols, rows, safe_max
+
+
+def lookup_exposure_points_in_view(
+    cache_path: Path,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    width: int,
+    height: int,
+    max_features: int = EXPOSURE_MAP_MAX_FEATURES,
+) -> Dict[str, Any]:
+    min_lon, max_lon = sorted((max(-180.0, min_lon), min(180.0, max_lon)))
+    min_lat, max_lat = sorted((max(-90.0, min_lat), min(90.0, max_lat)))
+
+    if min_lon >= max_lon or min_lat >= max_lat:
+        return {
+            "type": "FeatureCollection",
+            "features": [],
+            "visible_count": 0,
+            "returned_count": 0,
+            "cell_count": 0,
+        }
+
+    grid_cols, grid_rows, safe_max = exposure_view_grid(width, height, max_features)
+    lon_step = max((max_lon - min_lon) / grid_cols, 1e-12)
+    lat_step = max((max_lat - min_lat) / grid_rows, 1e-12)
+
+    con = duckdb.connect(str(cache_path), read_only=True)
+    try:
+        rows = con.execute("""
+            WITH bounded AS (
+                SELECT
+                    row_id,
+                    lon,
+                    lat,
+                    LEAST(GREATEST(CAST(FLOOR((lon - ?) / ?) AS BIGINT), 0), ?) AS grid_x,
+                    LEAST(GREATEST(CAST(FLOOR((lat - ?) / ?) AS BIGINT), 0), ?) AS grid_y
+                FROM points
+                WHERE lon BETWEEN ? AND ?
+                    AND lat BETWEEN ? AND ?
+            ),
+            cells AS (
+                SELECT
+                    MIN(row_id) AS row_id,
+                    AVG(lon) AS lon,
+                    AVG(lat) AS lat,
+                    COUNT(*) AS csv_count
+                FROM bounded
+                GROUP BY grid_x, grid_y
+            ),
+            ranked AS (
+                SELECT
+                    row_id,
+                    lon,
+                    lat,
+                    csv_count,
+                    SUM(csv_count) OVER () AS visible_count,
+                    COUNT(*) OVER () AS cell_count
+                FROM cells
+            )
+            SELECT row_id, lon, lat, csv_count, visible_count, cell_count
+            FROM ranked
+            ORDER BY csv_count DESC, row_id
+            LIMIT ?;
+        """, [
+            min_lon,
+            lon_step,
+            grid_cols - 1,
+            min_lat,
+            lat_step,
+            grid_rows - 1,
+            min_lon,
+            max_lon,
+            min_lat,
+            max_lat,
+            safe_max,
+        ]).fetchall()
+    finally:
+        con.close()
+
+    visible_count = int(rows[0][4]) if rows else 0
+    cell_count = int(rows[0][5]) if rows else 0
+    features = [
+        {
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [float(lon), float(lat)],
+            },
+            "properties": {
+                "row_id": int(row_id),
+                "csv_count": int(csv_count),
+            },
+        }
+        for row_id, lon, lat, csv_count, _visible_count, _cell_count in rows
+    ]
+
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+        "visible_count": visible_count,
+        "returned_count": len(features),
+        "cell_count": cell_count,
+        "grid": {
+            "cols": grid_cols,
+            "rows": grid_rows,
+        },
+    }
 
 
 def csv_scan_options(encoding: str) -> str:
@@ -3579,7 +3995,7 @@ def parse_args() -> argparse.Namespace:
     serve = subparsers.add_parser("serve")
     serve.add_argument("--db", default=DEFAULT_DB)
     serve.add_argument("--host", default="127.0.0.1")
-    serve.add_argument("--port", type=int, default=5000)
+    serve.add_argument("--port", type=int, default=8000)
     serve.add_argument("--nearest-radius-m", type=float, default=50.0)
     serve.add_argument("--debug", action="store_true")
 

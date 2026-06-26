@@ -28,6 +28,10 @@
           Upload an exposure to preview
         </div>
         <div id="previewTable" class="preview-table hidden"></div>
+        <div id="exposureMapControls" class="preview-map-actions hidden">
+          <button id="showExposureOnMap" type="button">Show on Map</button>
+          <p id="exposureMapMessage" class="preview-map-message"></p>
+        </div>
         <section id="statsPanel" class="stats-panel hidden">
           <h2>Statistics</h2>
           <div id="statsGrid" class="stats-tables"></div>
@@ -100,6 +104,13 @@
           <button type="submit">Search</button>
         </form>
         <div id="searchResults" class="search-results hidden"></div>
+        <section id="exposureMapPanel" class="map-dataset-panel hidden">
+          <div>
+            <strong id="exposureMapTitle">Exposure locations</strong>
+            <span id="exposureMapStats"></span>
+          </div>
+          <button id="clearExposureMap" type="button">Clear</button>
+        </section>
 
         <details id="filterViewPanel" class="lookup-field-picker filter-view">
           <summary>
