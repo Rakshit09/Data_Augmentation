@@ -33,6 +33,7 @@ from werkzeug.utils import secure_filename
 
 from country_boundary_catalog import DEFAULT_COUNTRY_BOUNDARY_CATALOG, list_catalog_countries
 from custom_parquet_database import register_custom_parquet_routes
+from layer_upload_routes import register_layer_upload_routes
 from obm_country_to_parquet import ETLConfig, OpenBuildingMapCountryETL
 
 
@@ -1185,6 +1186,7 @@ def create_app(
             if _f.is_file():
                 _f.unlink(missing_ok=True)
     register_custom_parquet_routes(app)
+    register_layer_upload_routes(app)
 
     def set_job(job_id: str, **updates: Any) -> None:
         with jobs_lock:

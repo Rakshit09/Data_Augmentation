@@ -1,0 +1,1614 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<WMS_Capabilities version="1.3.0"
+  xmlns="http://www.opengis.net/wms"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:esri_wms="http://www.esri.com/wms"
+  xsi:schemaLocation="http://www.opengis.net/wms http://schemas.opengis.net/wms/1.3.0/capabilities_1_3_0.xsd http://www.esri.com/wms https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?version=1.3.0%26service=WMS%26request=GetSchemaExtension">
+  <Service>
+    <Name><![CDATA[WMS]]></Name>
+    <Title><![CDATA[WMS Hochwasser-Gefahrenkarte NRW]]></Title>
+    <Abstract><![CDATA[Nordrhein-Westfalen unternimmt seit vielen Jahren erhebliche Anstrengungen. um Menschen, Umwelt. Wirtschafts- und Kulturgüter vor den Gefahren durch Hochwasser zu schützen. Neben baulichen Maßnahmen kommt dabei der Kartierung von Risiken, der Information der betroffenen Bürgerinnen und Bürger, der Vorsorgeplanung sowie der hochwassergerechten Entwicklungsplanung eine zentrale Bedeutung zu. Bis zum Jahr 2015 werden in Nordrhein-Westfalen für alle Gebiete. in denen signifikante Hochwasserschäden auftreten können, Hochwasserrisikomanagementpläne erarbeitet. Ziel der neuen Pläne ist es. über bestehende Gefahren zu informieren und Maßnahmen unterschiedlicher Akteure zu erfassen und abzustimmen, um hochwasserbedingte Risiken für die menschliche Gesundheit, die Umwelt, Infrastrukturen und Eigentum zu verringern und zu bewältigen. Grundlage dafür ist die EG-Richtlinie über die Bewertung und das Management von Hochwasserrisiken (EG-HWRM-RL), die am 26. November 2007 in Kraft getreten ist. Die Zielsetzung der Richtlinie wurde von der Bundesregierung in die Novelle des Wasserhaushaltsgesetzes (WHG) übernommen (in Kraft seit 1. März 2010). Zur Umsetzung des WHG sind folgende Schritte vorgesehen: Bis Dezember 2011: Vorläufige Bewertung und Festlegung der Gebiete. in denen Hochwasser eine erhebliche Gefahr für menschliche Gesundheit, Umwelt, Kulturerbe, wirtschaftliche Tätigkeiten oder Sachwerte darstellen können (sogenannte Risikogebiete). Bis Dezember 2013: Erstellung von Hochwassergefahren- und risikokarten für diese Gebiete.  Hochwassergefahrenkarten informieren über die mögliche Ausdehnung und Tiefe einer Überflutung. Dabei wird die örtliche Hochwassersituation für ein Extremhochwasser, für ein 100-jährliches Ereignis und auch für ein häufiges Hochwasserereignis darstellt.  Ersteller: Bezirksregierungen von NRW Stand: Dezember 2019]]></Abstract>
+    <KeywordList><Keyword><![CDATA[Gefahr, Gefahrenkarte, Hochwassergefahr, Hochwasserrisiko, Risiko, EG-HWRM-RL, Hochwassergefahren, WMS, Geodatendienst, Gewässerflächen, Wahrscheinlichkeit, HQ100, HQ500, HQ10, Schutzeinrichtungen, Becken, Hochwassergefahrenkarte, Hochwasser-Gefahrenkarte]]></Keyword></KeywordList>
+    <OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?"/>
+    <ContactInformation>
+      <ContactPersonPrimary>
+        <ContactPerson><![CDATA[Bezirksregierungen von NRW]]></ContactPerson>
+        <ContactOrganization><![CDATA[Landesamt für Natur, Umwelt und Verbraucherschutz Nordrhein-Westfalen]]></ContactOrganization>
+      </ContactPersonPrimary>
+      <ContactPosition><![CDATA[]]></ContactPosition>
+      <ContactAddress>
+        <AddressType><![CDATA[postalisch]]></AddressType>
+        <Address><![CDATA[Leibnizstraße 10]]></Address>
+        <City><![CDATA[Recklinghausen]]></City>
+        <StateOrProvince><![CDATA[NRW]]></StateOrProvince>
+        <PostCode><![CDATA[D-45610]]></PostCode>
+        <Country><![CDATA[Deutschland]]></Country>
+      </ContactAddress>
+      <ContactVoiceTelephone><![CDATA[02361 305-0]]></ContactVoiceTelephone>
+      <ContactFacsimileTelephone><![CDATA[02361 305-215]]></ContactFacsimileTelephone>
+      <ContactElectronicMailAddress><![CDATA[poststelle@lanuv.nrw.de]]></ContactElectronicMailAddress>
+    </ContactInformation>
+    <Fees><![CDATA[keine]]></Fees>
+    <AccessConstraints><![CDATA[Open Data: Dieses Angebot vom Landesamt für Natur, Umwelt und Verbraucherschutz Nordrhein-Westfalen ist lizensiert unter der Datenlizenz Deutschland Namensnennung 2.0 (https://www.govdata.de/dl-de/by-2-0). Datensätze unter dieser Lizenz müssen bei Weiterverwendung mit dem Quellenverweis „Land NRW“ versehen werden.]]></AccessConstraints>
+    <MaxWidth>4096</MaxWidth>
+    <MaxHeight>4096</MaxHeight>
+  </Service>
+  <Capability>
+    <Request>
+      <GetCapabilities>
+        <Format>application/vnd.ogc.wms_xml</Format>
+        <Format>text/xml</Format>
+        <DCPType>
+          <HTTP><Get><OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?"/></Get></HTTP>
+        </DCPType>
+      </GetCapabilities>
+      <GetMap>
+        <Format>image/bmp</Format>
+        <Format>image/jpeg</Format>
+        <Format>image/tiff</Format>
+        <Format>image/png</Format>
+        <Format>image/png8</Format>
+        <Format>image/png24</Format>
+        <Format>image/png32</Format>
+        <Format>image/gif</Format>
+        <Format>image/svg+xml</Format>
+        <DCPType>
+          <HTTP><Get><OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?"/></Get></HTTP>
+        </DCPType>
+      </GetMap>
+      <GetFeatureInfo>
+        <Format>application/vnd.esri.wms_raw_xml</Format>
+        <Format>application/vnd.esri.wms_featureinfo_xml</Format>
+        <Format>application/vnd.ogc.wms_xml</Format>
+        <Format>application/geo+json</Format>
+        <Format>text/xml</Format>
+        <Format>text/html</Format>
+        <Format>text/plain</Format>
+        <DCPType>
+          <HTTP><Get><OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?"/></Get></HTTP>
+        </DCPType>
+      </GetFeatureInfo>
+      <esri_wms:GetStyles>
+        <Format>application/vnd.ogc.sld+xml</Format>
+        <DCPType>
+          <HTTP><Get><OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?"/></Get></HTTP>
+        </DCPType>
+      </esri_wms:GetStyles>
+    </Request>
+    <Exception>
+      <Format>application/vnd.ogc.se_xml</Format>
+      <Format>application/vnd.ogc.se_inimage</Format>
+      <Format>application/vnd.ogc.se_blank</Format>
+      <Format>text/xml</Format>
+      <Format>XML</Format>
+    </Exception>
+    <Layer>
+      <Title><![CDATA[HWRM-RL Gefahrenkarte]]></Title>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>6.709410</westBoundLongitude><eastBoundLongitude>6.717444</eastBoundLongitude><southBoundLatitude>50.886418</southBoundLatitude><northBoundLatitude>50.890242</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="6.709410" miny="50.886418" maxx="6.717444" maxy="50.890242"/>
+<BoundingBox CRS="EPSG:4326" minx="50.886418" miny="6.709410" maxx="50.890242" maxy="6.717444"/>
+<BoundingBox CRS="EPSG:25832" minx="338899.479340" miny="5639693.279978" maxx="339452.425662" maxy="5640101.665170"/>
+<BoundingBox CRS="EPSG:3034" minx="2685327.040492" miny="3776491.040848" maxx="2685728.594250" maxy="3777030.299623"/>
+<BoundingBox CRS="EPSG:3035" minx="3091304.826423" miny="4089541.314525" maxx="3091720.973680" maxy="4090099.764939"/>
+<BoundingBox CRS="EPSG:3043" minx="5643751.539000" miny="760865.135799" maxx="5644203.709519" maxy="761449.720651"/>
+<BoundingBox CRS="EPSG:3044" minx="5639693.279978" miny="338899.479340" maxx="5640101.665170" maxy="339452.425662"/>
+<BoundingBox CRS="EPSG:3045" minx="5669963.585591" miny="-82734.097110" maxx="5670417.403205" maxy="-82147.466996"/>
+<BoundingBox CRS="EPSG:3857" minx="746888.074072" miny="6601226.949243" maxx="747782.499370" maxy="6601901.656228"/>
+<BoundingBox CRS="EPSG:102100" minx="746888.074072" miny="6601226.949243" maxx="747782.499370" maxy="6601901.656228"/>
+<BoundingBox CRS="EPSG:4258" minx="50.886418" miny="6.709410" maxx="50.890242" maxy="6.717444"/>
+<BoundingBox CRS="EPSG:4647" minx="32338899.479340" miny="5639693.279978" maxx="32339452.425662" maxy="5640101.665170"/>
+<BoundingBox CRS="EPSG:102362" minx="32338899.479340" miny="5639693.279978" maxx="32339452.425662" maxy="5640101.665170"/>
+<BoundingBox CRS="EPSG:5649" minx="31760865.135799" miny="5643751.539000" maxx="31761449.720651" maxy="5644203.709519"/>
+<BoundingBox CRS="EPSG:5650" minx="32917265.902890" miny="5669963.585591" maxx="32917852.533004" maxy="5670417.403205"/>
+<BoundingBox CRS="EPSG:5651" minx="31760865.135799" miny="5643751.539000" maxx="31761449.720651" maxy="5644203.709519"/>
+<BoundingBox CRS="EPSG:5652" minx="32338899.479340" miny="5639693.279978" maxx="32339452.425662" maxy="5640101.665170"/>
+<BoundingBox CRS="EPSG:5653" minx="32917265.902890" miny="5669963.585591" maxx="32917852.533004" maxy="5670417.403205"/>
+<BoundingBox CRS="EPSG:25831" minx="760865.135799" miny="5643751.539000" maxx="761449.720651" maxy="5644203.709519"/>
+<BoundingBox CRS="EPSG:25833" minx="-82734.097110" miny="5669963.585591" maxx="-82147.466996" maxy="5670417.403205"/>
+<BoundingBox CRS="EPSG:28992" minx="247992.239962" miny="322594.185410" maxx="248564.583311" maxy="323029.232721"/>
+<BoundingBox CRS="EPSG:31466" minx="5639111.228998" miny="2549910.128309" maxx="5639541.738869" maxy="2550479.202936"/>
+<BoundingBox CRS="EPSG:31462" minx="5639111.228998" miny="2549910.128309" maxx="5639541.738869" maxy="2550479.202936"/>
+<BoundingBox CRS="EPSG:31467" minx="5641371.037765" miny="3338854.682618" maxx="5641779.539799" maxy="3339407.782699"/>
+<BoundingBox CRS="EPSG:31463" minx="5641371.037765" miny="3338854.682618" maxx="5641779.539799" maxy="3339407.782699"/>
+      <Layer queryable="1">
+        <Name>Sonstige_Gewaesserflaechen</Name>
+        <Title><![CDATA[Sonstige_Gewaesserflaechen]]></Title>
+        <Abstract><![CDATA[]]></Abstract>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>6.010588</westBoundLongitude><eastBoundLongitude>9.191786</eastBoundLongitude><southBoundLatitude>50.412358</southBoundLatitude><northBoundLatitude>51.936546</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="6.010588" miny="50.412358" maxx="9.191786" maxy="51.936546"/>
+<BoundingBox CRS="EPSG:4326" minx="50.412358" miny="6.010588" maxx="51.936546" maxy="9.191786"/>
+<BoundingBox CRS="EPSG:25832" minx="294333.924100" miny="5588485.641500" maxx="513184.859800" maxy="5753980.728200"/>
+<BoundingBox CRS="EPSG:3034" minx="2633595.620484" miny="3732788.236666" maxx="2796257.538647" maxy="3946316.891346"/>
+<BoundingBox CRS="EPSG:3035" minx="3037685.973924" miny="4044286.487953" maxx="3206224.559475" maxy="4265416.199901"/>
+<BoundingBox CRS="EPSG:3043" minx="5589089.227626" miny="707122.595905" maxx="5772094.991097" maxy="939014.274195"/>
+<BoundingBox CRS="EPSG:3044" minx="5588485.641500" miny="294333.924100" maxx="5753980.728200" maxy="513184.859800"/>
+<BoundingBox CRS="EPSG:3045" minx="5604639.168587" miny="-131512.039947" maxx="5788040.437237" maxy="100862.453231"/>
+<BoundingBox CRS="EPSG:3857" minx="669095.570104" miny="6517997.573870" maxx="1023224.935350" maxy="6788660.297285"/>
+<BoundingBox CRS="EPSG:102100" minx="669095.570104" miny="6517997.573870" maxx="1023224.935350" maxy="6788660.297285"/>
+<BoundingBox CRS="EPSG:4258" minx="50.412358" miny="6.010588" maxx="51.936546" maxy="9.191786"/>
+<BoundingBox CRS="EPSG:4647" minx="32294333.924100" miny="5588485.641500" maxx="32513184.859800" maxy="5753980.728200"/>
+<BoundingBox CRS="EPSG:102362" minx="32294333.924100" miny="5588485.641500" maxx="32513184.859800" maxy="5753980.728200"/>
+<BoundingBox CRS="EPSG:5649" minx="31707122.595905" miny="5589089.227626" maxx="31939014.274195" maxy="5772094.991097"/>
+<BoundingBox CRS="EPSG:5650" minx="32868487.960053" miny="5604639.168587" maxx="33100862.453231" maxy="5788040.437237"/>
+<BoundingBox CRS="EPSG:5651" minx="31707122.595905" miny="5589089.227626" maxx="31939014.274195" maxy="5772094.991097"/>
+<BoundingBox CRS="EPSG:5652" minx="32294333.924100" miny="5588485.641500" maxx="32513184.859800" maxy="5753980.728200"/>
+<BoundingBox CRS="EPSG:5653" minx="32868487.960053" miny="5604639.168587" maxx="33100862.453231" maxy="5788040.437237"/>
+<BoundingBox CRS="EPSG:25831" minx="707122.595905" miny="5589089.227626" maxx="939014.274195" maxy="5772094.991097"/>
+<BoundingBox CRS="EPSG:25833" minx="-131512.039947" miny="5604639.168587" maxx="100862.453231" maxy="5788040.437237"/>
+<BoundingBox CRS="EPSG:28992" minx="197870.181200" miny="269269.807293" maxx="424685.505476" maxy="445399.025079"/>
+<BoundingBox CRS="EPSG:31466" minx="5586147.417182" miny="2500728.700348" maxx="5760488.771788" maxy="2726221.474686"/>
+<BoundingBox CRS="EPSG:31462" minx="5586147.417182" miny="2500728.700348" maxx="5760488.771788" maxy="2726221.474686"/>
+<BoundingBox CRS="EPSG:31467" minx="5590148.729381" miny="3294276.718391" maxx="5755691.174172" maxy="3513188.527086"/>
+<BoundingBox CRS="EPSG:31463" minx="5590148.729381" miny="3294276.718391" maxx="5755691.174172" maxy="3513188.527086"/>
+        <Style>
+          <Name>default</Name>
+          <Title><![CDATA[Sonstige_Gewaesserflaechen]]></Title>
+          <LegendURL width="162" height="18">
+            <Format>image/png</Format>
+            <OnlineResource xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?request=GetLegendGraphic%26version=1.3.0%26format=image/png%26layer=Sonstige_Gewaesserflaechen" xlink:type="simple" xmlns:xlink="http://www.w3.org/1999/xlink" />
+          </LegendURL>
+        </Style>
+        <MaxScaleDenominator>283482.142857</MaxScaleDenominator>
+      </Layer>
+      <Layer queryable="1">
+        <Title><![CDATA[Niedrige Wahrscheinlichkeit (> HQ500)]]></Title>
+        <Abstract><![CDATA[]]></Abstract>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>5.766018</westBoundLongitude><eastBoundLongitude>9.468521</eastBoundLongitude><southBoundLatitude>50.403519</southBoundLatitude><northBoundLatitude>52.519428</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="5.766018" miny="50.403519" maxx="9.468521" maxy="52.519428"/>
+<BoundingBox CRS="EPSG:4326" minx="50.403519" miny="5.766018" maxx="52.519428" maxy="9.468521"/>
+<BoundingBox CRS="EPSG:25832" minx="280374.000000" miny="5588063.924974" maxx="531791.213278" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:3034" minx="2632945.464851" miny="3719305.608664" maxx="2859035.441409" maxy="3965147.759454"/>
+<BoundingBox CRS="EPSG:3035" minx="3037011.275925" miny="4030326.874375" maxx="3271244.640167" maxy="4284921.949308"/>
+<BoundingBox CRS="EPSG:3043" minx="5587543.150450" miny="687852.608335" maxx="5838396.725897" maxy="957639.652019"/>
+<BoundingBox CRS="EPSG:3044" minx="5588063.924974" miny="280374.000000" maxx="5818813.000000" maxy="531791.213278"/>
+<BoundingBox CRS="EPSG:3045" minx="5602712.417777" miny="-145522.384969" maxx="5854084.049607" maxy="124815.459960"/>
+<BoundingBox CRS="EPSG:3857" minx="641870.227592" miny="6516453.730492" maxx="1054030.957847" maxy="6894595.105199"/>
+<BoundingBox CRS="EPSG:102100" minx="641870.227592" miny="6516453.730492" maxx="1054030.957847" maxy="6894595.105199"/>
+<BoundingBox CRS="EPSG:4258" minx="50.403519" miny="5.766018" maxx="52.519428" maxy="9.468521"/>
+<BoundingBox CRS="EPSG:4647" minx="32280374.000000" miny="5588063.924974" maxx="32531791.213278" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:102362" minx="32280374.000000" miny="5588063.924974" maxx="32531791.213278" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:5649" minx="31687852.608335" miny="5587543.150450" maxx="31957639.652019" maxy="5838396.725897"/>
+<BoundingBox CRS="EPSG:5650" minx="32854477.615031" miny="5602712.417777" maxx="33124815.459960" maxy="5854084.049607"/>
+<BoundingBox CRS="EPSG:5651" minx="31687852.608335" miny="5587543.150450" maxx="31957639.652019" maxy="5838396.725897"/>
+<BoundingBox CRS="EPSG:5652" minx="32280374.000000" miny="5588063.924974" maxx="32531791.213278" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:5653" minx="32854477.615031" miny="5602712.417777" maxx="33124815.459960" maxy="5854084.049607"/>
+<BoundingBox CRS="EPSG:25831" minx="687852.608335" miny="5587543.150450" maxx="957639.652019" maxy="5838396.725897"/>
+<BoundingBox CRS="EPSG:25833" minx="-145522.384969" miny="5602712.417777" maxx="124815.459960" maxy="5854084.049607"/>
+<BoundingBox CRS="EPSG:28992" minx="180704.890833" miny="268169.075062" maxx="443306.096930" maxy="511119.105213"/>
+<BoundingBox CRS="EPSG:31466" minx="5585162.988896" miny="2484103.273579" maxx="5826095.602354" maxy="2744847.421750"/>
+<BoundingBox CRS="EPSG:31462" minx="5585162.988896" miny="2484103.273579" maxx="5826095.602354" maxy="2744847.421750"/>
+<BoundingBox CRS="EPSG:31467" minx="5589726.887478" miny="3280312.911067" maxx="5820541.950244" maxy="3531800.055828"/>
+<BoundingBox CRS="EPSG:31463" minx="5589726.887478" miny="3280312.911067" maxx="5820541.950244" maxy="3531800.055828"/>
+        <MaxScaleDenominator>708705.357143</MaxScaleDenominator>
+      <Layer queryable="1">
+        <Name>Grenzen_ueberflutete_Gebiete_ohne_technischen_Hochwasserschutz_nw</Name>
+        <Title><![CDATA[Grenzen_ueberflutete_Gebiete_ohne_technischen_Hochwasserschutz_nw]]></Title>
+        <Abstract><![CDATA[]]></Abstract>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>5.766033</westBoundLongitude><eastBoundLongitude>9.468521</eastBoundLongitude><southBoundLatitude>50.403520</southBoundLatitude><northBoundLatitude>52.519419</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="5.766033" miny="50.403520" maxx="9.468521" maxy="52.519419"/>
+<BoundingBox CRS="EPSG:4326" minx="50.403520" miny="5.766033" maxx="52.519419" maxy="9.468521"/>
+<BoundingBox CRS="EPSG:25832" minx="280374.968000" miny="5588063.987600" maxx="531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:3034" minx="2632945.525459" miny="3719306.543978" maxx="2859034.522861" maxy="3965147.738556"/>
+<BoundingBox CRS="EPSG:3035" minx="3037011.338685" miny="4030327.842765" maxx="3271243.688251" maxy="4284921.927535"/>
+<BoundingBox CRS="EPSG:3043" minx="5587543.290917" miny="687853.650754" maxx="5838395.787216" maxy="957639.638174"/>
+<BoundingBox CRS="EPSG:3044" minx="5588063.987600" miny="280374.968000" maxx="5818812.061000" maxy="531791.204500"/>
+<BoundingBox CRS="EPSG:3045" minx="5602712.481027" miny="-145521.410686" maxx="5854083.028893" maxy="124815.373039"/>
+<BoundingBox CRS="EPSG:3857" minx="641871.880422" miny="6516453.891886" maxx="1054030.933451" maxy="6894593.560834"/>
+<BoundingBox CRS="EPSG:102100" minx="641871.880422" miny="6516453.891886" maxx="1054030.933451" maxy="6894593.560834"/>
+<BoundingBox CRS="EPSG:4258" minx="50.403520" miny="5.766033" maxx="52.519419" maxy="9.468521"/>
+<BoundingBox CRS="EPSG:4647" minx="32280374.968000" miny="5588063.987600" maxx="32531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:102362" minx="32280374.968000" miny="5588063.987600" maxx="32531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:5649" minx="31687853.650754" miny="5587543.290917" maxx="31957639.638174" maxy="5838395.787216"/>
+<BoundingBox CRS="EPSG:5650" minx="32854478.589314" miny="5602712.481027" maxx="33124815.373039" maxy="5854083.028893"/>
+<BoundingBox CRS="EPSG:5651" minx="31687853.650754" miny="5587543.290917" maxx="31957639.638174" maxy="5838395.787216"/>
+<BoundingBox CRS="EPSG:5652" minx="32280374.968000" miny="5588063.987600" maxx="32531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:5653" minx="32854478.589314" miny="5602712.481027" maxx="33124815.373039" maxy="5854083.028893"/>
+<BoundingBox CRS="EPSG:25831" minx="687853.650754" miny="5587543.290917" maxx="957639.638174" maxy="5838395.787216"/>
+<BoundingBox CRS="EPSG:25833" minx="-145521.410686" miny="5602712.481027" maxx="124815.373039" maxy="5854083.028893"/>
+<BoundingBox CRS="EPSG:28992" minx="180705.904161" miny="268169.184707" maxx="443306.085067" maxy="511118.166320"/>
+<BoundingBox CRS="EPSG:31466" minx="5585163.090501" miny="2484104.279429" maxx="5826094.662906" maxy="2744847.410439"/>
+<BoundingBox CRS="EPSG:31462" minx="5585163.090501" miny="2484104.279429" maxx="5826094.662906" maxy="2744847.410439"/>
+<BoundingBox CRS="EPSG:31467" minx="5589726.950122" miny="3280313.879336" maxx="5820541.010976" maxy="3531800.047047"/>
+<BoundingBox CRS="EPSG:31463" minx="5589726.950122" miny="3280313.879336" maxx="5820541.010976" maxy="3531800.047047"/>
+        <Style>
+          <Name>default</Name>
+          <Title><![CDATA[Grenzen_ueberflutete_Gebiete_ohne_technischen_Hochwasserschutz_nw]]></Title>
+          <LegendURL width="84" height="36">
+            <Format>image/png</Format>
+            <OnlineResource xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?request=GetLegendGraphic%26version=1.3.0%26format=image/png%26layer=Grenzen_ueberflutete_Gebiete_ohne_technischen_Hochwasserschutz_nw" xlink:type="simple" xmlns:xlink="http://www.w3.org/1999/xlink" />
+          </LegendURL>
+        </Style>
+      </Layer>
+      <Layer queryable="1">
+        <Name>Tiefen_ueberflutungsgefaehrdete_Gebiete_nw</Name>
+        <Title><![CDATA[Tiefen_ueberflutungsgefaehrdete_Gebiete_nw]]></Title>
+        <Abstract><![CDATA[]]></Abstract>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>6.906677</westBoundLongitude><eastBoundLongitude>9.119998</eastBoundLongitude><southBoundLatitude>50.593427</southBoundLatitude><northBoundLatitude>52.323584</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="6.906677" miny="50.593427" maxx="9.119998" maxy="52.323584"/>
+<BoundingBox CRS="EPSG:4326" minx="50.593427" miny="6.906677" maxx="52.323584" maxy="9.119998"/>
+<BoundingBox CRS="EPSG:25832" minx="357279.000000" miny="5606554.891286" maxx="508178.428571" maxy="5797029.177000"/>
+<BoundingBox CRS="EPSG:3034" minx="2651114.717884" miny="3793805.008208" maxx="2837048.332402" maxy="3942044.309851"/>
+<BoundingBox CRS="EPSG:3035" minx="3055828.199769" miny="4107466.008085" maxx="3248422.083776" maxy="4261000.960685"/>
+<BoundingBox CRS="EPSG:3043" minx="5612191.827836" miny="766316.743586" maxx="5814674.516586" maxy="932547.757372"/>
+<BoundingBox CRS="EPSG:3044" minx="5606554.891286" miny="357279.000000" maxx="5797029.177000" maxy="508178.428571"/>
+<BoundingBox CRS="EPSG:3045" minx="5623092.919961" miny="-67050.116131" maxx="5825869.177632" maxy="99429.503625"/>
+<BoundingBox CRS="EPSG:3857" minx="768847.714398" miny="6549688.370529" maxx="1015233.566384" maxy="6858846.457870"/>
+<BoundingBox CRS="EPSG:102100" minx="768847.714398" miny="6549688.370529" maxx="1015233.566384" maxy="6858846.457870"/>
+<BoundingBox CRS="EPSG:4258" minx="50.593427" miny="6.906677" maxx="52.323584" maxy="9.119998"/>
+<BoundingBox CRS="EPSG:4647" minx="32357279.000000" miny="5606554.891286" maxx="32508178.428571" maxy="5797029.177000"/>
+<BoundingBox CRS="EPSG:102362" minx="32357279.000000" miny="5606554.891286" maxx="32508178.428571" maxy="5797029.177000"/>
+<BoundingBox CRS="EPSG:5649" minx="31766316.743586" miny="5612191.827836" maxx="31932547.757372" maxy="5814674.516586"/>
+<BoundingBox CRS="EPSG:5650" minx="32932949.883869" miny="5623092.919961" maxx="33099429.503625" maxy="5825869.177632"/>
+<BoundingBox CRS="EPSG:5651" minx="31766316.743586" miny="5612191.827836" maxx="31932547.757372" maxy="5814674.516586"/>
+<BoundingBox CRS="EPSG:5652" minx="32357279.000000" miny="5606554.891286" maxx="32508178.428571" maxy="5797029.177000"/>
+<BoundingBox CRS="EPSG:5653" minx="32932949.883869" miny="5623092.919961" maxx="33099429.503625" maxy="5825869.177632"/>
+<BoundingBox CRS="EPSG:25831" minx="766316.743586" miny="5612191.827836" maxx="932547.757372" maxy="5814674.516586"/>
+<BoundingBox CRS="EPSG:25833" minx="-67050.116131" miny="5623092.919961" maxx="99429.503625" maxy="5825869.177632"/>
+<BoundingBox CRS="EPSG:28992" minx="258586.585952" miny="290392.180988" maxx="418790.476383" maxy="488170.690104"/>
+<BoundingBox CRS="EPSG:31466" minx="5606743.599859" miny="2561836.414191" maxx="5803330.166403" maxy="2720483.567920"/>
+<BoundingBox CRS="EPSG:31462" minx="5606743.599859" miny="2561836.414191" maxx="5803330.166403" maxy="2720483.567920"/>
+<BoundingBox CRS="EPSG:31467" minx="5608223.169535" miny="3357239.306729" maxx="5798751.912402" maxy="3508180.703120"/>
+<BoundingBox CRS="EPSG:31463" minx="5608223.169535" miny="3357239.306729" maxx="5798751.912402" maxy="3508180.703120"/>
+        <Style>
+          <Name>default</Name>
+          <Title><![CDATA[Tiefen_ueberflutungsgefaehrdete_Gebiete_nw]]></Title>
+          <LegendURL width="216" height="108">
+            <Format>image/png</Format>
+            <OnlineResource xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?request=GetLegendGraphic%26version=1.3.0%26format=image/png%26layer=Tiefen_ueberflutungsgefaehrdete_Gebiete_nw" xlink:type="simple" xmlns:xlink="http://www.w3.org/1999/xlink" />
+          </LegendURL>
+        </Style>
+      </Layer>
+      <Layer queryable="1">
+        <Name>Tiefen_Ueberflutungsgebiet_nw</Name>
+        <Title><![CDATA[Tiefen_Ueberflutungsgebiet_nw]]></Title>
+        <Abstract><![CDATA[]]></Abstract>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>5.766018</westBoundLongitude><eastBoundLongitude>9.468521</eastBoundLongitude><southBoundLatitude>50.403519</southBoundLatitude><northBoundLatitude>52.519428</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="5.766018" miny="50.403519" maxx="9.468521" maxy="52.519428"/>
+<BoundingBox CRS="EPSG:4326" minx="50.403519" miny="5.766018" maxx="52.519428" maxy="9.468521"/>
+<BoundingBox CRS="EPSG:25832" minx="280374.000000" miny="5588063.924974" maxx="531791.213278" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:3034" minx="2632945.464851" miny="3719305.608664" maxx="2859035.441409" maxy="3965147.759454"/>
+<BoundingBox CRS="EPSG:3035" minx="3037011.275925" miny="4030326.874375" maxx="3271244.640167" maxy="4284921.949308"/>
+<BoundingBox CRS="EPSG:3043" minx="5587543.150450" miny="687852.608335" maxx="5838396.725897" maxy="957639.652019"/>
+<BoundingBox CRS="EPSG:3044" minx="5588063.924974" miny="280374.000000" maxx="5818813.000000" maxy="531791.213278"/>
+<BoundingBox CRS="EPSG:3045" minx="5602712.417777" miny="-145522.384969" maxx="5854084.049607" maxy="124815.459960"/>
+<BoundingBox CRS="EPSG:3857" minx="641870.227592" miny="6516453.730492" maxx="1054030.957847" maxy="6894595.105199"/>
+<BoundingBox CRS="EPSG:102100" minx="641870.227592" miny="6516453.730492" maxx="1054030.957847" maxy="6894595.105199"/>
+<BoundingBox CRS="EPSG:4258" minx="50.403519" miny="5.766018" maxx="52.519428" maxy="9.468521"/>
+<BoundingBox CRS="EPSG:4647" minx="32280374.000000" miny="5588063.924974" maxx="32531791.213278" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:102362" minx="32280374.000000" miny="5588063.924974" maxx="32531791.213278" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:5649" minx="31687852.608335" miny="5587543.150450" maxx="31957639.652019" maxy="5838396.725897"/>
+<BoundingBox CRS="EPSG:5650" minx="32854477.615031" miny="5602712.417777" maxx="33124815.459960" maxy="5854084.049607"/>
+<BoundingBox CRS="EPSG:5651" minx="31687852.608335" miny="5587543.150450" maxx="31957639.652019" maxy="5838396.725897"/>
+<BoundingBox CRS="EPSG:5652" minx="32280374.000000" miny="5588063.924974" maxx="32531791.213278" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:5653" minx="32854477.615031" miny="5602712.417777" maxx="33124815.459960" maxy="5854084.049607"/>
+<BoundingBox CRS="EPSG:25831" minx="687852.608335" miny="5587543.150450" maxx="957639.652019" maxy="5838396.725897"/>
+<BoundingBox CRS="EPSG:25833" minx="-145522.384969" miny="5602712.417777" maxx="124815.459960" maxy="5854084.049607"/>
+<BoundingBox CRS="EPSG:28992" minx="180704.890833" miny="268169.075062" maxx="443306.096930" maxy="511119.105213"/>
+<BoundingBox CRS="EPSG:31466" minx="5585162.988896" miny="2484103.273579" maxx="5826095.602354" maxy="2744847.421750"/>
+<BoundingBox CRS="EPSG:31462" minx="5585162.988896" miny="2484103.273579" maxx="5826095.602354" maxy="2744847.421750"/>
+<BoundingBox CRS="EPSG:31467" minx="5589726.887478" miny="3280312.911067" maxx="5820541.950244" maxy="3531800.055828"/>
+<BoundingBox CRS="EPSG:31463" minx="5589726.887478" miny="3280312.911067" maxx="5820541.950244" maxy="3531800.055828"/>
+        <Style>
+          <Name>default</Name>
+          <Title><![CDATA[Tiefen_Ueberflutungsgebiet_nw]]></Title>
+          <LegendURL width="354" height="108">
+            <Format>image/png</Format>
+            <OnlineResource xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?request=GetLegendGraphic%26version=1.3.0%26format=image/png%26layer=Tiefen_Ueberflutungsgebiet_nw" xlink:type="simple" xmlns:xlink="http://www.w3.org/1999/xlink" />
+          </LegendURL>
+        </Style>
+      </Layer>
+      <Layer queryable="1">
+        <Name>Grenze_der_ueberfluteten_Gebiete_nw</Name>
+        <Title><![CDATA[Grenze_der_ueberfluteten_Gebiete_nw]]></Title>
+        <Abstract><![CDATA[]]></Abstract>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>5.766033</westBoundLongitude><eastBoundLongitude>9.468521</eastBoundLongitude><southBoundLatitude>50.403520</southBoundLatitude><northBoundLatitude>52.519419</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="5.766033" miny="50.403520" maxx="9.468521" maxy="52.519419"/>
+<BoundingBox CRS="EPSG:4326" minx="50.403520" miny="5.766033" maxx="52.519419" maxy="9.468521"/>
+<BoundingBox CRS="EPSG:25832" minx="280374.968000" miny="5588063.987600" maxx="531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:3034" minx="2632945.525459" miny="3719306.543978" maxx="2859034.522861" maxy="3965147.738556"/>
+<BoundingBox CRS="EPSG:3035" minx="3037011.338685" miny="4030327.842765" maxx="3271243.688251" maxy="4284921.927535"/>
+<BoundingBox CRS="EPSG:3043" minx="5587543.290917" miny="687853.650754" maxx="5838395.787216" maxy="957639.638174"/>
+<BoundingBox CRS="EPSG:3044" minx="5588063.987600" miny="280374.968000" maxx="5818812.061000" maxy="531791.204500"/>
+<BoundingBox CRS="EPSG:3045" minx="5602712.481027" miny="-145521.410686" maxx="5854083.028893" maxy="124815.373039"/>
+<BoundingBox CRS="EPSG:3857" minx="641871.880422" miny="6516453.891886" maxx="1054030.933451" maxy="6894593.560834"/>
+<BoundingBox CRS="EPSG:102100" minx="641871.880422" miny="6516453.891886" maxx="1054030.933451" maxy="6894593.560834"/>
+<BoundingBox CRS="EPSG:4258" minx="50.403520" miny="5.766033" maxx="52.519419" maxy="9.468521"/>
+<BoundingBox CRS="EPSG:4647" minx="32280374.968000" miny="5588063.987600" maxx="32531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:102362" minx="32280374.968000" miny="5588063.987600" maxx="32531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:5649" minx="31687853.650754" miny="5587543.290917" maxx="31957639.638174" maxy="5838395.787216"/>
+<BoundingBox CRS="EPSG:5650" minx="32854478.589314" miny="5602712.481027" maxx="33124815.373039" maxy="5854083.028893"/>
+<BoundingBox CRS="EPSG:5651" minx="31687853.650754" miny="5587543.290917" maxx="31957639.638174" maxy="5838395.787216"/>
+<BoundingBox CRS="EPSG:5652" minx="32280374.968000" miny="5588063.987600" maxx="32531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:5653" minx="32854478.589314" miny="5602712.481027" maxx="33124815.373039" maxy="5854083.028893"/>
+<BoundingBox CRS="EPSG:25831" minx="687853.650754" miny="5587543.290917" maxx="957639.638174" maxy="5838395.787216"/>
+<BoundingBox CRS="EPSG:25833" minx="-145521.410686" miny="5602712.481027" maxx="124815.373039" maxy="5854083.028893"/>
+<BoundingBox CRS="EPSG:28992" minx="180705.904161" miny="268169.184707" maxx="443306.085067" maxy="511118.166320"/>
+<BoundingBox CRS="EPSG:31466" minx="5585163.090501" miny="2484104.279429" maxx="5826094.662906" maxy="2744847.410439"/>
+<BoundingBox CRS="EPSG:31462" minx="5585163.090501" miny="2484104.279429" maxx="5826094.662906" maxy="2744847.410439"/>
+<BoundingBox CRS="EPSG:31467" minx="5589726.950122" miny="3280313.879336" maxx="5820541.010976" maxy="3531800.047047"/>
+<BoundingBox CRS="EPSG:31463" minx="5589726.950122" miny="3280313.879336" maxx="5820541.010976" maxy="3531800.047047"/>
+        <Style>
+          <Name>default</Name>
+          <Title><![CDATA[Grenze_der_ueberfluteten_Gebiete_nw]]></Title>
+          <LegendURL width="84" height="36">
+            <Format>image/png</Format>
+            <OnlineResource xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?request=GetLegendGraphic%26version=1.3.0%26format=image/png%26layer=Grenze_der_ueberfluteten_Gebiete_nw" xlink:type="simple" xmlns:xlink="http://www.w3.org/1999/xlink" />
+          </LegendURL>
+        </Style>
+      </Layer>
+      <Layer queryable="1">
+        <Name>Fliessgeschwindigkeiten_nw</Name>
+        <Title><![CDATA[Fliessgeschwindigkeiten_nw]]></Title>
+        <Abstract><![CDATA[Darstellung Geschwindigkeiten als Vektoren]]></Abstract>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>5.766133</westBoundLongitude><eastBoundLongitude>9.467784</eastBoundLongitude><southBoundLatitude>50.403545</southBoundLatitude><northBoundLatitude>52.519211</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="5.766133" miny="50.403545" maxx="9.467784" maxy="52.519211"/>
+<BoundingBox CRS="EPSG:4326" minx="50.403545" miny="5.766133" maxx="52.519211" maxy="9.467784"/>
+<BoundingBox CRS="EPSG:25832" minx="280380.734200" miny="5588066.555700" maxx="531741.333100" maxy="5818788.947200"/>
+<BoundingBox CRS="EPSG:3034" minx="2632948.656376" miny="3719312.144669" maxx="2859012.130812" maxy="3965099.240962"/>
+<BoundingBox CRS="EPSG:3035" minx="3037014.583940" miny="4030333.641395" maxx="3271220.498398" maxy="4284871.720953"/>
+<BoundingBox CRS="EPSG:3043" minx="5587546.315407" miny="687861.313955" maxx="5838368.542934" maxy="957589.594488"/>
+<BoundingBox CRS="EPSG:3044" minx="5588066.555700" miny="280380.734200" maxx="5818788.947200" maxy="531741.333100"/>
+<BoundingBox CRS="EPSG:3045" minx="5602719.080182" miny="-145515.428436" maxx="5854059.415487" maxy="124763.664887"/>
+<BoundingBox CRS="EPSG:3857" minx="641883.010706" miny="6516458.296078" maxx="1053948.873505" maxy="6894555.545256"/>
+<BoundingBox CRS="EPSG:102100" minx="641883.010706" miny="6516458.296078" maxx="1053948.873505" maxy="6894555.545256"/>
+<BoundingBox CRS="EPSG:4258" minx="50.403545" miny="5.766133" maxx="52.519211" maxy="9.467784"/>
+<BoundingBox CRS="EPSG:4647" minx="32280380.734200" miny="5588066.555700" maxx="32531741.333100" maxy="5818788.947200"/>
+<BoundingBox CRS="EPSG:102362" minx="32280380.734200" miny="5588066.555700" maxx="32531741.333100" maxy="5818788.947200"/>
+<BoundingBox CRS="EPSG:5649" minx="31687861.313955" miny="5587546.315407" maxx="31957589.594488" maxy="5838368.542934"/>
+<BoundingBox CRS="EPSG:5650" minx="32854484.571564" miny="5602719.080182" maxx="33124763.664887" maxy="5854059.415487"/>
+<BoundingBox CRS="EPSG:5651" minx="31687861.313955" miny="5587546.315407" maxx="31957589.594488" maxy="5838368.542934"/>
+<BoundingBox CRS="EPSG:5652" minx="32280380.734200" miny="5588066.555700" maxx="32531741.333100" maxy="5818788.947200"/>
+<BoundingBox CRS="EPSG:5653" minx="32854484.571564" miny="5602719.080182" maxx="33124763.664887" maxy="5854059.415487"/>
+<BoundingBox CRS="EPSG:25831" minx="687861.313955" miny="5587546.315407" maxx="957589.594488" maxy="5838368.542934"/>
+<BoundingBox CRS="EPSG:25833" minx="-145515.428436" miny="5602719.080182" maxx="124763.664887" maxy="5854059.415487"/>
+<BoundingBox CRS="EPSG:28992" minx="180712.815839" miny="268172.029945" maxx="443256.103342" maxy="511092.576588"/>
+<BoundingBox CRS="EPSG:31466" minx="5585165.888329" miny="2484110.998520" maxx="5826069.472457" maxy="2744797.425981"/>
+<BoundingBox CRS="EPSG:31462" minx="5585165.888329" miny="2484110.998520" maxx="5826069.472457" maxy="2744797.425981"/>
+<BoundingBox CRS="EPSG:31467" minx="5589729.518960" miny="3280319.647141" maxx="5820517.890581" maxy="3531750.161776"/>
+<BoundingBox CRS="EPSG:31463" minx="5589729.518960" miny="3280319.647141" maxx="5820517.890581" maxy="3531750.161776"/>
+        <Style>
+          <Name>default</Name>
+          <Title><![CDATA[Fliessgeschwindigkeiten_nw]]></Title>
+          <LegendURL width="108" height="72">
+            <Format>image/png</Format>
+            <OnlineResource xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?request=GetLegendGraphic%26version=1.3.0%26format=image/png%26layer=Fliessgeschwindigkeiten_nw" xlink:type="simple" xmlns:xlink="http://www.w3.org/1999/xlink" />
+          </LegendURL>
+        </Style>
+        <MaxScaleDenominator>18898.809524</MaxScaleDenominator>
+      </Layer>
+      </Layer>
+      <Layer queryable="1">
+        <Title><![CDATA[Mittlere Wahrscheinlichkeit (HQ100)]]></Title>
+        <Abstract><![CDATA[]]></Abstract>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>5.766018</westBoundLongitude><eastBoundLongitude>9.468521</eastBoundLongitude><southBoundLatitude>50.403520</southBoundLatitude><northBoundLatitude>52.519428</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="5.766018" miny="50.403520" maxx="9.468521" maxy="52.519428"/>
+<BoundingBox CRS="EPSG:4326" minx="50.403520" miny="5.766018" maxx="52.519428" maxy="9.468521"/>
+<BoundingBox CRS="EPSG:25832" minx="280374.000000" miny="5588063.987600" maxx="531791.204500" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:3034" minx="2632945.525459" miny="3719305.609497" maxx="2859035.441409" maxy="3965147.750971"/>
+<BoundingBox CRS="EPSG:3035" minx="3037011.338685" miny="4030326.875235" maxx="3271244.640167" maxy="4284921.940527"/>
+<BoundingBox CRS="EPSG:3043" minx="5587543.212868" miny="687852.608335" maxx="5838396.725165" maxy="957639.638174"/>
+<BoundingBox CRS="EPSG:3044" minx="5588063.987600" miny="280374.000000" maxx="5818813.000000" maxy="531791.204500"/>
+<BoundingBox CRS="EPSG:3045" minx="5602712.481027" miny="-145522.379873" maxx="5854084.049607" maxy="124815.451197"/>
+<BoundingBox CRS="EPSG:3857" minx="641870.227592" miny="6516453.828717" maxx="1054030.943447" maxy="6894595.105199"/>
+<BoundingBox CRS="EPSG:102100" minx="641870.227592" miny="6516453.828717" maxx="1054030.943447" maxy="6894595.105199"/>
+<BoundingBox CRS="EPSG:4258" minx="50.403520" miny="5.766018" maxx="52.519428" maxy="9.468521"/>
+<BoundingBox CRS="EPSG:4647" minx="32280374.000000" miny="5588063.987600" maxx="32531791.204500" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:102362" minx="32280374.000000" miny="5588063.987600" maxx="32531791.204500" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:5649" minx="31687852.608335" miny="5587543.212868" maxx="31957639.638174" maxy="5838396.725165"/>
+<BoundingBox CRS="EPSG:5650" minx="32854477.620127" miny="5602712.481027" maxx="33124815.451197" maxy="5854084.049607"/>
+<BoundingBox CRS="EPSG:5651" minx="31687852.608335" miny="5587543.212868" maxx="31957639.638174" maxy="5838396.725165"/>
+<BoundingBox CRS="EPSG:5652" minx="32280374.000000" miny="5588063.987600" maxx="32531791.204500" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:5653" minx="32854477.620127" miny="5602712.481027" maxx="33124815.451197" maxy="5854084.049607"/>
+<BoundingBox CRS="EPSG:25831" minx="687852.608335" miny="5587543.212868" maxx="957639.638174" maxy="5838396.725165"/>
+<BoundingBox CRS="EPSG:25833" minx="-145522.379873" miny="5602712.481027" maxx="124815.451197" maxy="5854084.049607"/>
+<BoundingBox CRS="EPSG:28992" minx="180704.890833" miny="268169.137605" maxx="443306.085067" maxy="511119.104775"/>
+<BoundingBox CRS="EPSG:31466" minx="5585163.051452" miny="2484103.273579" maxx="5826095.601988" maxy="2744847.410439"/>
+<BoundingBox CRS="EPSG:31462" minx="5585163.051452" miny="2484103.273579" maxx="5826095.601988" maxy="2744847.410439"/>
+<BoundingBox CRS="EPSG:31467" minx="5589726.950122" miny="3280312.911067" maxx="5820541.950244" maxy="3531800.047047"/>
+<BoundingBox CRS="EPSG:31463" minx="5589726.950122" miny="3280312.911067" maxx="5820541.950244" maxy="3531800.047047"/>
+        <MaxScaleDenominator>708705.357143</MaxScaleDenominator>
+      <Layer queryable="1">
+        <Name>Grenzen_ueberflutete_Gebiete_ohne_technischen_Hochwasserschutz_mw</Name>
+        <Title><![CDATA[Grenzen_ueberflutete_Gebiete_ohne_technischen_Hochwasserschutz_mw]]></Title>
+        <Abstract><![CDATA[]]></Abstract>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>5.766033</westBoundLongitude><eastBoundLongitude>9.468521</eastBoundLongitude><southBoundLatitude>50.403520</southBoundLatitude><northBoundLatitude>52.519419</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="5.766033" miny="50.403520" maxx="9.468521" maxy="52.519419"/>
+<BoundingBox CRS="EPSG:4326" minx="50.403520" miny="5.766033" maxx="52.519419" maxy="9.468521"/>
+<BoundingBox CRS="EPSG:25832" minx="280374.968000" miny="5588063.987600" maxx="531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:3034" minx="2632945.525459" miny="3719306.543978" maxx="2859034.522861" maxy="3965147.738556"/>
+<BoundingBox CRS="EPSG:3035" minx="3037011.338685" miny="4030327.842765" maxx="3271243.688251" maxy="4284921.927535"/>
+<BoundingBox CRS="EPSG:3043" minx="5587543.290917" miny="687853.650754" maxx="5838395.787216" maxy="957639.638174"/>
+<BoundingBox CRS="EPSG:3044" minx="5588063.987600" miny="280374.968000" maxx="5818812.061000" maxy="531791.204500"/>
+<BoundingBox CRS="EPSG:3045" minx="5602712.481027" miny="-145521.410686" maxx="5854083.028893" maxy="124815.373039"/>
+<BoundingBox CRS="EPSG:3857" minx="641871.880422" miny="6516453.891886" maxx="1054030.933451" maxy="6894593.560834"/>
+<BoundingBox CRS="EPSG:102100" minx="641871.880422" miny="6516453.891886" maxx="1054030.933451" maxy="6894593.560834"/>
+<BoundingBox CRS="EPSG:4258" minx="50.403520" miny="5.766033" maxx="52.519419" maxy="9.468521"/>
+<BoundingBox CRS="EPSG:4647" minx="32280374.968000" miny="5588063.987600" maxx="32531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:102362" minx="32280374.968000" miny="5588063.987600" maxx="32531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:5649" minx="31687853.650754" miny="5587543.290917" maxx="31957639.638174" maxy="5838395.787216"/>
+<BoundingBox CRS="EPSG:5650" minx="32854478.589314" miny="5602712.481027" maxx="33124815.373039" maxy="5854083.028893"/>
+<BoundingBox CRS="EPSG:5651" minx="31687853.650754" miny="5587543.290917" maxx="31957639.638174" maxy="5838395.787216"/>
+<BoundingBox CRS="EPSG:5652" minx="32280374.968000" miny="5588063.987600" maxx="32531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:5653" minx="32854478.589314" miny="5602712.481027" maxx="33124815.373039" maxy="5854083.028893"/>
+<BoundingBox CRS="EPSG:25831" minx="687853.650754" miny="5587543.290917" maxx="957639.638174" maxy="5838395.787216"/>
+<BoundingBox CRS="EPSG:25833" minx="-145521.410686" miny="5602712.481027" maxx="124815.373039" maxy="5854083.028893"/>
+<BoundingBox CRS="EPSG:28992" minx="180705.904161" miny="268169.184707" maxx="443306.085067" maxy="511118.166320"/>
+<BoundingBox CRS="EPSG:31466" minx="5585163.090501" miny="2484104.279429" maxx="5826094.662906" maxy="2744847.410439"/>
+<BoundingBox CRS="EPSG:31462" minx="5585163.090501" miny="2484104.279429" maxx="5826094.662906" maxy="2744847.410439"/>
+<BoundingBox CRS="EPSG:31467" minx="5589726.950122" miny="3280313.879336" maxx="5820541.010976" maxy="3531800.047047"/>
+<BoundingBox CRS="EPSG:31463" minx="5589726.950122" miny="3280313.879336" maxx="5820541.010976" maxy="3531800.047047"/>
+        <Style>
+          <Name>default</Name>
+          <Title><![CDATA[Grenzen_ueberflutete_Gebiete_ohne_technischen_Hochwasserschutz_mw]]></Title>
+          <LegendURL width="84" height="36">
+            <Format>image/png</Format>
+            <OnlineResource xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?request=GetLegendGraphic%26version=1.3.0%26format=image/png%26layer=Grenzen_ueberflutete_Gebiete_ohne_technischen_Hochwasserschutz_mw" xlink:type="simple" xmlns:xlink="http://www.w3.org/1999/xlink" />
+          </LegendURL>
+        </Style>
+      </Layer>
+      <Layer queryable="1">
+        <Name>Tiefen_ueberflutungsgefaehrdete_Gebiete_mw</Name>
+        <Title><![CDATA[Tiefen_ueberflutungsgefaehrdete_Gebiete_mw]]></Title>
+        <Abstract><![CDATA[]]></Abstract>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>5.772162</westBoundLongitude><eastBoundLongitude>9.391805</eastBoundLongitude><southBoundLatitude>50.479402</southBoundLatitude><northBoundLatitude>52.500346</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="5.772162" miny="50.479402" maxx="9.391805" maxy="52.500346"/>
+<BoundingBox CRS="EPSG:4326" minx="50.479402" miny="5.772162" maxx="52.500346" maxy="9.391805"/>
+<BoundingBox CRS="EPSG:25832" minx="280697.000000" miny="5596500.460526" maxx="526597.078947" maxy="5816690.500000"/>
+<BoundingBox CRS="EPSG:3034" minx="2641162.321136" miny="3719729.449612" maxx="2856981.720747" maxy="3960100.513532"/>
+<BoundingBox CRS="EPSG:3035" minx="3045520.388972" miny="4030765.449166" maxx="3269117.918307" maxy="4279696.848185"/>
+<BoundingBox CRS="EPSG:3043" minx="5595977.673609" miny="688350.530866" maxx="5835843.841915" maxy="951765.665632"/>
+<BoundingBox CRS="EPSG:3044" minx="5596500.460526" miny="280697.000000" maxx="5816690.500000" maxy="526597.078947"/>
+<BoundingBox CRS="EPSG:3045" minx="5611557.973883" miny="-144512.111791" maxx="5851932.958487" maxy="119453.606153"/>
+<BoundingBox CRS="EPSG:3857" minx="642554.091868" miny="6529717.538956" maxx="1045490.989342" maxy="6891105.006429"/>
+<BoundingBox CRS="EPSG:102100" minx="642554.091868" miny="6529717.538956" maxx="1045490.989342" maxy="6891105.006429"/>
+<BoundingBox CRS="EPSG:4258" minx="50.479402" miny="5.772162" maxx="52.500346" maxy="9.391805"/>
+<BoundingBox CRS="EPSG:4647" minx="32280697.000000" miny="5596500.460526" maxx="32526597.078947" maxy="5816690.500000"/>
+<BoundingBox CRS="EPSG:102362" minx="32280697.000000" miny="5596500.460526" maxx="32526597.078947" maxy="5816690.500000"/>
+<BoundingBox CRS="EPSG:5649" minx="31688350.530866" miny="5595977.673609" maxx="31951765.665632" maxy="5835843.841915"/>
+<BoundingBox CRS="EPSG:5650" minx="32855487.888209" miny="5611557.973883" maxx="33119453.606153" maxy="5851932.958487"/>
+<BoundingBox CRS="EPSG:5651" minx="31688350.530866" miny="5595977.673609" maxx="31951765.665632" maxy="5835843.841915"/>
+<BoundingBox CRS="EPSG:5652" minx="32280697.000000" miny="5596500.460526" maxx="32526597.078947" maxy="5816690.500000"/>
+<BoundingBox CRS="EPSG:5653" minx="32855487.888209" miny="5611557.973883" maxx="33119453.606153" maxy="5851932.958487"/>
+<BoundingBox CRS="EPSG:25831" minx="688350.530866" miny="5595977.673609" maxx="951765.665632" maxy="5835843.841915"/>
+<BoundingBox CRS="EPSG:25833" minx="-144512.111791" miny="5611557.973883" maxx="119453.606153" maxy="5851932.958487"/>
+<BoundingBox CRS="EPSG:28992" minx="181133.405058" miny="276609.930623" maxx="437697.647883" maxy="508738.596387"/>
+<BoundingBox CRS="EPSG:31466" minx="5593603.113716" miny="2484514.007545" maxx="5823756.902674" maxy="2739311.205038"/>
+<BoundingBox CRS="EPSG:31462" minx="5593603.113716" miny="2484514.007545" maxx="5823756.902674" maxy="2739311.205038"/>
+<BoundingBox CRS="EPSG:31467" minx="5598165.838778" miny="3280636.003784" maxx="5818418.845452" maxy="3526604.476428"/>
+<BoundingBox CRS="EPSG:31463" minx="5598165.838778" miny="3280636.003784" maxx="5818418.845452" maxy="3526604.476428"/>
+        <Style>
+          <Name>default</Name>
+          <Title><![CDATA[Tiefen_ueberflutungsgefaehrdete_Gebiete_mw]]></Title>
+          <LegendURL width="216" height="108">
+            <Format>image/png</Format>
+            <OnlineResource xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?request=GetLegendGraphic%26version=1.3.0%26format=image/png%26layer=Tiefen_ueberflutungsgefaehrdete_Gebiete_mw" xlink:type="simple" xmlns:xlink="http://www.w3.org/1999/xlink" />
+          </LegendURL>
+        </Style>
+      </Layer>
+      <Layer queryable="1">
+        <Name>Tiefen_Ueberflutungsgebiet_mw</Name>
+        <Title><![CDATA[Tiefen_Ueberflutungsgebiet_mw]]></Title>
+        <Abstract><![CDATA[]]></Abstract>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>5.766018</westBoundLongitude><eastBoundLongitude>9.468514</eastBoundLongitude><southBoundLatitude>50.403522</southBoundLatitude><northBoundLatitude>52.519428</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="5.766018" miny="50.403522" maxx="9.468514" maxy="52.519428"/>
+<BoundingBox CRS="EPSG:4326" minx="50.403522" miny="5.766018" maxx="52.519428" maxy="9.468514"/>
+<BoundingBox CRS="EPSG:25832" minx="280374.000000" miny="5588064.206820" maxx="531790.734173" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:3034" minx="2632945.743343" miny="3719305.612413" maxx="2859035.441409" maxy="3965147.296482"/>
+<BoundingBox CRS="EPSG:3035" minx="3037011.564338" miny="4030326.878242" maxx="3271244.640167" maxy="4284921.470056"/>
+<BoundingBox CRS="EPSG:3043" minx="5587543.431360" miny="687852.608335" maxx="5838396.685967" maxy="957639.150426"/>
+<BoundingBox CRS="EPSG:3044" minx="5588064.206820" miny="280374.000000" maxx="5818813.000000" maxy="531790.734173"/>
+<BoundingBox CRS="EPSG:3045" minx="5602712.737996" miny="-145522.362034" maxx="5854084.049607" maxy="124814.981692"/>
+<BoundingBox CRS="EPSG:3857" minx="641870.227592" miny="6516454.172550" maxx="1054030.171873" maxy="6894595.105211"/>
+<BoundingBox CRS="EPSG:102100" minx="641870.227592" miny="6516454.172550" maxx="1054030.171873" maxy="6894595.105211"/>
+<BoundingBox CRS="EPSG:4258" minx="50.403522" miny="5.766018" maxx="52.519428" maxy="9.468514"/>
+<BoundingBox CRS="EPSG:4647" minx="32280374.000000" miny="5588064.206820" maxx="32531790.734173" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:102362" minx="32280374.000000" miny="5588064.206820" maxx="32531790.734173" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:5649" minx="31687852.608335" miny="5587543.431360" maxx="31957639.150426" maxy="5838396.685967"/>
+<BoundingBox CRS="EPSG:5650" minx="32854477.637966" miny="5602712.737996" maxx="33124814.981692" maxy="5854084.049607"/>
+<BoundingBox CRS="EPSG:5651" minx="31687852.608335" miny="5587543.431360" maxx="31957639.150426" maxy="5838396.685967"/>
+<BoundingBox CRS="EPSG:5652" minx="32280374.000000" miny="5588064.206820" maxx="32531790.734173" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:5653" minx="32854477.637966" miny="5602712.737996" maxx="33124814.981692" maxy="5854084.049607"/>
+<BoundingBox CRS="EPSG:25831" minx="687852.608335" miny="5587543.431360" maxx="957639.150426" maxy="5838396.685967"/>
+<BoundingBox CRS="EPSG:25833" minx="-145522.362034" miny="5602712.737996" maxx="124814.981692" maxy="5854084.049607"/>
+<BoundingBox CRS="EPSG:28992" minx="180704.890833" miny="268169.356531" maxx="443305.604083" maxy="511119.081298"/>
+<BoundingBox CRS="EPSG:31466" minx="5585163.270427" miny="2484103.273579" maxx="5826095.582423" maxy="2744846.931164"/>
+<BoundingBox CRS="EPSG:31462" minx="5585163.270427" miny="2484103.273579" maxx="5826095.582423" maxy="2744846.931164"/>
+<BoundingBox CRS="EPSG:31467" minx="5589727.169405" miny="3280312.911067" maxx="5820541.950244" maxy="3531799.576590"/>
+<BoundingBox CRS="EPSG:31463" minx="5589727.169405" miny="3280312.911067" maxx="5820541.950244" maxy="3531799.576590"/>
+        <Style>
+          <Name>default</Name>
+          <Title><![CDATA[Tiefen_Ueberflutungsgebiet_mw]]></Title>
+          <LegendURL width="354" height="108">
+            <Format>image/png</Format>
+            <OnlineResource xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?request=GetLegendGraphic%26version=1.3.0%26format=image/png%26layer=Tiefen_Ueberflutungsgebiet_mw" xlink:type="simple" xmlns:xlink="http://www.w3.org/1999/xlink" />
+          </LegendURL>
+        </Style>
+      </Layer>
+      <Layer queryable="1">
+        <Name>Grenze_der_ueberfluteten_Gebiete_mw</Name>
+        <Title><![CDATA[Grenze_der_ueberfluteten_Gebiete_mw]]></Title>
+        <Abstract><![CDATA[]]></Abstract>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>5.766033</westBoundLongitude><eastBoundLongitude>9.468521</eastBoundLongitude><southBoundLatitude>50.403520</southBoundLatitude><northBoundLatitude>52.519419</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="5.766033" miny="50.403520" maxx="9.468521" maxy="52.519419"/>
+<BoundingBox CRS="EPSG:4326" minx="50.403520" miny="5.766033" maxx="52.519419" maxy="9.468521"/>
+<BoundingBox CRS="EPSG:25832" minx="280374.968000" miny="5588063.987600" maxx="531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:3034" minx="2632945.525459" miny="3719306.543978" maxx="2859034.522861" maxy="3965147.738556"/>
+<BoundingBox CRS="EPSG:3035" minx="3037011.338685" miny="4030327.842765" maxx="3271243.688251" maxy="4284921.927535"/>
+<BoundingBox CRS="EPSG:3043" minx="5587543.290917" miny="687853.650754" maxx="5838395.787216" maxy="957639.638174"/>
+<BoundingBox CRS="EPSG:3044" minx="5588063.987600" miny="280374.968000" maxx="5818812.061000" maxy="531791.204500"/>
+<BoundingBox CRS="EPSG:3045" minx="5602712.481027" miny="-145521.410686" maxx="5854083.028893" maxy="124815.373039"/>
+<BoundingBox CRS="EPSG:3857" minx="641871.880422" miny="6516453.891886" maxx="1054030.933451" maxy="6894593.560834"/>
+<BoundingBox CRS="EPSG:102100" minx="641871.880422" miny="6516453.891886" maxx="1054030.933451" maxy="6894593.560834"/>
+<BoundingBox CRS="EPSG:4258" minx="50.403520" miny="5.766033" maxx="52.519419" maxy="9.468521"/>
+<BoundingBox CRS="EPSG:4647" minx="32280374.968000" miny="5588063.987600" maxx="32531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:102362" minx="32280374.968000" miny="5588063.987600" maxx="32531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:5649" minx="31687853.650754" miny="5587543.290917" maxx="31957639.638174" maxy="5838395.787216"/>
+<BoundingBox CRS="EPSG:5650" minx="32854478.589314" miny="5602712.481027" maxx="33124815.373039" maxy="5854083.028893"/>
+<BoundingBox CRS="EPSG:5651" minx="31687853.650754" miny="5587543.290917" maxx="31957639.638174" maxy="5838395.787216"/>
+<BoundingBox CRS="EPSG:5652" minx="32280374.968000" miny="5588063.987600" maxx="32531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:5653" minx="32854478.589314" miny="5602712.481027" maxx="33124815.373039" maxy="5854083.028893"/>
+<BoundingBox CRS="EPSG:25831" minx="687853.650754" miny="5587543.290917" maxx="957639.638174" maxy="5838395.787216"/>
+<BoundingBox CRS="EPSG:25833" minx="-145521.410686" miny="5602712.481027" maxx="124815.373039" maxy="5854083.028893"/>
+<BoundingBox CRS="EPSG:28992" minx="180705.904161" miny="268169.184707" maxx="443306.085067" maxy="511118.166320"/>
+<BoundingBox CRS="EPSG:31466" minx="5585163.090501" miny="2484104.279429" maxx="5826094.662906" maxy="2744847.410439"/>
+<BoundingBox CRS="EPSG:31462" minx="5585163.090501" miny="2484104.279429" maxx="5826094.662906" maxy="2744847.410439"/>
+<BoundingBox CRS="EPSG:31467" minx="5589726.950122" miny="3280313.879336" maxx="5820541.010976" maxy="3531800.047047"/>
+<BoundingBox CRS="EPSG:31463" minx="5589726.950122" miny="3280313.879336" maxx="5820541.010976" maxy="3531800.047047"/>
+        <Style>
+          <Name>default</Name>
+          <Title><![CDATA[Grenze_der_ueberfluteten_Gebiete_mw]]></Title>
+          <LegendURL width="84" height="36">
+            <Format>image/png</Format>
+            <OnlineResource xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?request=GetLegendGraphic%26version=1.3.0%26format=image/png%26layer=Grenze_der_ueberfluteten_Gebiete_mw" xlink:type="simple" xmlns:xlink="http://www.w3.org/1999/xlink" />
+          </LegendURL>
+        </Style>
+      </Layer>
+      <Layer queryable="1">
+        <Name>Fliessgeschwindigkeiten_mw</Name>
+        <Title><![CDATA[Fliessgeschwindigkeiten_mw]]></Title>
+        <Abstract><![CDATA[Darstellung Geschwindigkeiten als Vektoren]]></Abstract>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>5.766133</westBoundLongitude><eastBoundLongitude>9.467784</eastBoundLongitude><southBoundLatitude>50.403545</southBoundLatitude><northBoundLatitude>52.519211</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="5.766133" miny="50.403545" maxx="9.467784" maxy="52.519211"/>
+<BoundingBox CRS="EPSG:4326" minx="50.403545" miny="5.766133" maxx="52.519211" maxy="9.467784"/>
+<BoundingBox CRS="EPSG:25832" minx="280380.734200" miny="5588066.555700" maxx="531741.333100" maxy="5818788.947200"/>
+<BoundingBox CRS="EPSG:3034" minx="2632948.656376" miny="3719312.144669" maxx="2859012.130812" maxy="3965099.240962"/>
+<BoundingBox CRS="EPSG:3035" minx="3037014.583940" miny="4030333.641395" maxx="3271220.498398" maxy="4284871.720953"/>
+<BoundingBox CRS="EPSG:3043" minx="5587546.315407" miny="687861.313955" maxx="5838368.542934" maxy="957589.594488"/>
+<BoundingBox CRS="EPSG:3044" minx="5588066.555700" miny="280380.734200" maxx="5818788.947200" maxy="531741.333100"/>
+<BoundingBox CRS="EPSG:3045" minx="5602719.080182" miny="-145515.428436" maxx="5854059.415487" maxy="124763.664887"/>
+<BoundingBox CRS="EPSG:3857" minx="641883.010706" miny="6516458.296078" maxx="1053948.873505" maxy="6894555.545256"/>
+<BoundingBox CRS="EPSG:102100" minx="641883.010706" miny="6516458.296078" maxx="1053948.873505" maxy="6894555.545256"/>
+<BoundingBox CRS="EPSG:4258" minx="50.403545" miny="5.766133" maxx="52.519211" maxy="9.467784"/>
+<BoundingBox CRS="EPSG:4647" minx="32280380.734200" miny="5588066.555700" maxx="32531741.333100" maxy="5818788.947200"/>
+<BoundingBox CRS="EPSG:102362" minx="32280380.734200" miny="5588066.555700" maxx="32531741.333100" maxy="5818788.947200"/>
+<BoundingBox CRS="EPSG:5649" minx="31687861.313955" miny="5587546.315407" maxx="31957589.594488" maxy="5838368.542934"/>
+<BoundingBox CRS="EPSG:5650" minx="32854484.571564" miny="5602719.080182" maxx="33124763.664887" maxy="5854059.415487"/>
+<BoundingBox CRS="EPSG:5651" minx="31687861.313955" miny="5587546.315407" maxx="31957589.594488" maxy="5838368.542934"/>
+<BoundingBox CRS="EPSG:5652" minx="32280380.734200" miny="5588066.555700" maxx="32531741.333100" maxy="5818788.947200"/>
+<BoundingBox CRS="EPSG:5653" minx="32854484.571564" miny="5602719.080182" maxx="33124763.664887" maxy="5854059.415487"/>
+<BoundingBox CRS="EPSG:25831" minx="687861.313955" miny="5587546.315407" maxx="957589.594488" maxy="5838368.542934"/>
+<BoundingBox CRS="EPSG:25833" minx="-145515.428436" miny="5602719.080182" maxx="124763.664887" maxy="5854059.415487"/>
+<BoundingBox CRS="EPSG:28992" minx="180712.815839" miny="268172.029945" maxx="443256.103342" maxy="511092.576588"/>
+<BoundingBox CRS="EPSG:31466" minx="5585165.888329" miny="2484110.998520" maxx="5826069.472457" maxy="2744797.425981"/>
+<BoundingBox CRS="EPSG:31462" minx="5585165.888329" miny="2484110.998520" maxx="5826069.472457" maxy="2744797.425981"/>
+<BoundingBox CRS="EPSG:31467" minx="5589729.518960" miny="3280319.647141" maxx="5820517.890581" maxy="3531750.161776"/>
+<BoundingBox CRS="EPSG:31463" minx="5589729.518960" miny="3280319.647141" maxx="5820517.890581" maxy="3531750.161776"/>
+        <Style>
+          <Name>default</Name>
+          <Title><![CDATA[Fliessgeschwindigkeiten_mw]]></Title>
+          <LegendURL width="108" height="72">
+            <Format>image/png</Format>
+            <OnlineResource xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?request=GetLegendGraphic%26version=1.3.0%26format=image/png%26layer=Fliessgeschwindigkeiten_mw" xlink:type="simple" xmlns:xlink="http://www.w3.org/1999/xlink" />
+          </LegendURL>
+        </Style>
+        <MaxScaleDenominator>18898.809524</MaxScaleDenominator>
+      </Layer>
+      </Layer>
+      <Layer queryable="1">
+        <Title><![CDATA[Hohe Wahrscheinlichkeit (HQ10 - HQ50)]]></Title>
+        <Abstract><![CDATA[]]></Abstract>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>5.766018</westBoundLongitude><eastBoundLongitude>9.468521</eastBoundLongitude><southBoundLatitude>50.403520</southBoundLatitude><northBoundLatitude>52.519428</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="5.766018" miny="50.403520" maxx="9.468521" maxy="52.519428"/>
+<BoundingBox CRS="EPSG:4326" minx="50.403520" miny="5.766018" maxx="52.519428" maxy="9.468521"/>
+<BoundingBox CRS="EPSG:25832" minx="280374.000000" miny="5588063.987600" maxx="531791.204500" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:3034" minx="2632945.525459" miny="3719305.609497" maxx="2859035.441409" maxy="3965147.750971"/>
+<BoundingBox CRS="EPSG:3035" minx="3037011.338685" miny="4030326.875235" maxx="3271244.640167" maxy="4284921.940527"/>
+<BoundingBox CRS="EPSG:3043" minx="5587543.212868" miny="687852.608335" maxx="5838396.725165" maxy="957639.638174"/>
+<BoundingBox CRS="EPSG:3044" minx="5588063.987600" miny="280374.000000" maxx="5818813.000000" maxy="531791.204500"/>
+<BoundingBox CRS="EPSG:3045" minx="5602712.481027" miny="-145522.379873" maxx="5854084.049607" maxy="124815.451197"/>
+<BoundingBox CRS="EPSG:3857" minx="641870.227592" miny="6516453.828717" maxx="1054030.943447" maxy="6894595.105199"/>
+<BoundingBox CRS="EPSG:102100" minx="641870.227592" miny="6516453.828717" maxx="1054030.943447" maxy="6894595.105199"/>
+<BoundingBox CRS="EPSG:4258" minx="50.403520" miny="5.766018" maxx="52.519428" maxy="9.468521"/>
+<BoundingBox CRS="EPSG:4647" minx="32280374.000000" miny="5588063.987600" maxx="32531791.204500" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:102362" minx="32280374.000000" miny="5588063.987600" maxx="32531791.204500" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:5649" minx="31687852.608335" miny="5587543.212868" maxx="31957639.638174" maxy="5838396.725165"/>
+<BoundingBox CRS="EPSG:5650" minx="32854477.620127" miny="5602712.481027" maxx="33124815.451197" maxy="5854084.049607"/>
+<BoundingBox CRS="EPSG:5651" minx="31687852.608335" miny="5587543.212868" maxx="31957639.638174" maxy="5838396.725165"/>
+<BoundingBox CRS="EPSG:5652" minx="32280374.000000" miny="5588063.987600" maxx="32531791.204500" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:5653" minx="32854477.620127" miny="5602712.481027" maxx="33124815.451197" maxy="5854084.049607"/>
+<BoundingBox CRS="EPSG:25831" minx="687852.608335" miny="5587543.212868" maxx="957639.638174" maxy="5838396.725165"/>
+<BoundingBox CRS="EPSG:25833" minx="-145522.379873" miny="5602712.481027" maxx="124815.451197" maxy="5854084.049607"/>
+<BoundingBox CRS="EPSG:28992" minx="180704.890833" miny="268169.137605" maxx="443306.085067" maxy="511119.104775"/>
+<BoundingBox CRS="EPSG:31466" minx="5585163.051452" miny="2484103.273579" maxx="5826095.601988" maxy="2744847.410439"/>
+<BoundingBox CRS="EPSG:31462" minx="5585163.051452" miny="2484103.273579" maxx="5826095.601988" maxy="2744847.410439"/>
+<BoundingBox CRS="EPSG:31467" minx="5589726.950122" miny="3280312.911067" maxx="5820541.950244" maxy="3531800.047047"/>
+<BoundingBox CRS="EPSG:31463" minx="5589726.950122" miny="3280312.911067" maxx="5820541.950244" maxy="3531800.047047"/>
+        <MaxScaleDenominator>708705.357143</MaxScaleDenominator>
+      <Layer queryable="1">
+        <Name>Grenzen_ueberflutete_Gebiete_ohne_technischen_Hochwasserschutz_hw</Name>
+        <Title><![CDATA[Grenzen_ueberflutete_Gebiete_ohne_technischen_Hochwasserschutz_hw]]></Title>
+        <Abstract><![CDATA[]]></Abstract>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>5.766033</westBoundLongitude><eastBoundLongitude>9.468521</eastBoundLongitude><southBoundLatitude>50.403520</southBoundLatitude><northBoundLatitude>52.519419</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="5.766033" miny="50.403520" maxx="9.468521" maxy="52.519419"/>
+<BoundingBox CRS="EPSG:4326" minx="50.403520" miny="5.766033" maxx="52.519419" maxy="9.468521"/>
+<BoundingBox CRS="EPSG:25832" minx="280374.968000" miny="5588063.987600" maxx="531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:3034" minx="2632945.525459" miny="3719306.543978" maxx="2859034.522861" maxy="3965147.738556"/>
+<BoundingBox CRS="EPSG:3035" minx="3037011.338685" miny="4030327.842765" maxx="3271243.688251" maxy="4284921.927535"/>
+<BoundingBox CRS="EPSG:3043" minx="5587543.290917" miny="687853.650754" maxx="5838395.787216" maxy="957639.638174"/>
+<BoundingBox CRS="EPSG:3044" minx="5588063.987600" miny="280374.968000" maxx="5818812.061000" maxy="531791.204500"/>
+<BoundingBox CRS="EPSG:3045" minx="5602712.481027" miny="-145521.410686" maxx="5854083.028893" maxy="124815.373039"/>
+<BoundingBox CRS="EPSG:3857" minx="641871.880422" miny="6516453.891886" maxx="1054030.933451" maxy="6894593.560834"/>
+<BoundingBox CRS="EPSG:102100" minx="641871.880422" miny="6516453.891886" maxx="1054030.933451" maxy="6894593.560834"/>
+<BoundingBox CRS="EPSG:4258" minx="50.403520" miny="5.766033" maxx="52.519419" maxy="9.468521"/>
+<BoundingBox CRS="EPSG:4647" minx="32280374.968000" miny="5588063.987600" maxx="32531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:102362" minx="32280374.968000" miny="5588063.987600" maxx="32531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:5649" minx="31687853.650754" miny="5587543.290917" maxx="31957639.638174" maxy="5838395.787216"/>
+<BoundingBox CRS="EPSG:5650" minx="32854478.589314" miny="5602712.481027" maxx="33124815.373039" maxy="5854083.028893"/>
+<BoundingBox CRS="EPSG:5651" minx="31687853.650754" miny="5587543.290917" maxx="31957639.638174" maxy="5838395.787216"/>
+<BoundingBox CRS="EPSG:5652" minx="32280374.968000" miny="5588063.987600" maxx="32531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:5653" minx="32854478.589314" miny="5602712.481027" maxx="33124815.373039" maxy="5854083.028893"/>
+<BoundingBox CRS="EPSG:25831" minx="687853.650754" miny="5587543.290917" maxx="957639.638174" maxy="5838395.787216"/>
+<BoundingBox CRS="EPSG:25833" minx="-145521.410686" miny="5602712.481027" maxx="124815.373039" maxy="5854083.028893"/>
+<BoundingBox CRS="EPSG:28992" minx="180705.904161" miny="268169.184707" maxx="443306.085067" maxy="511118.166320"/>
+<BoundingBox CRS="EPSG:31466" minx="5585163.090501" miny="2484104.279429" maxx="5826094.662906" maxy="2744847.410439"/>
+<BoundingBox CRS="EPSG:31462" minx="5585163.090501" miny="2484104.279429" maxx="5826094.662906" maxy="2744847.410439"/>
+<BoundingBox CRS="EPSG:31467" minx="5589726.950122" miny="3280313.879336" maxx="5820541.010976" maxy="3531800.047047"/>
+<BoundingBox CRS="EPSG:31463" minx="5589726.950122" miny="3280313.879336" maxx="5820541.010976" maxy="3531800.047047"/>
+        <Style>
+          <Name>default</Name>
+          <Title><![CDATA[Grenzen_ueberflutete_Gebiete_ohne_technischen_Hochwasserschutz_hw]]></Title>
+          <LegendURL width="84" height="36">
+            <Format>image/png</Format>
+            <OnlineResource xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?request=GetLegendGraphic%26version=1.3.0%26format=image/png%26layer=Grenzen_ueberflutete_Gebiete_ohne_technischen_Hochwasserschutz_hw" xlink:type="simple" xmlns:xlink="http://www.w3.org/1999/xlink" />
+          </LegendURL>
+        </Style>
+      </Layer>
+      <Layer queryable="1">
+        <Name>Tiefen_ueberflutungsgefaehrdete_Gebiete_hw</Name>
+        <Title><![CDATA[Tiefen_ueberflutungsgefaehrdete_Gebiete_hw]]></Title>
+        <Abstract><![CDATA[]]></Abstract>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>5.901130</westBoundLongitude><eastBoundLongitude>9.391766</eastBoundLongitude><southBoundLatitude>50.598160</southBoundLatitude><northBoundLatitude>52.500336</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="5.901130" miny="50.598160" maxx="9.391766" maxy="52.500336"/>
+<BoundingBox CRS="EPSG:4326" minx="50.598160" miny="5.901130" maxx="52.500336" maxy="9.391766"/>
+<BoundingBox CRS="EPSG:25832" minx="289473.425000" miny="5609365.282696" maxx="526594.392742" maxy="5816689.355276"/>
+<BoundingBox CRS="EPSG:3034" minx="2653588.776728" miny="3728372.147863" maxx="2856874.246149" maxy="3960097.902692"/>
+<BoundingBox CRS="EPSG:3035" minx="3058388.529935" miny="4039714.228798" maxx="3268999.099704" maxy="4279694.145315"/>
+<BoundingBox CRS="EPSG:3043" minx="5609509.168956" miny="697095.821724" maxx="5835842.474735" maxy="950718.974758"/>
+<BoundingBox CRS="EPSG:3044" minx="5609365.282696" miny="289473.425000" maxx="5816689.355276" maxy="526594.392742"/>
+<BoundingBox CRS="EPSG:3045" minx="5624405.702215" miny="-134676.919352" maxx="5851197.463547" maxy="119450.829227"/>
+<BoundingBox CRS="EPSG:3857" minx="656910.758267" miny="6550518.397698" maxx="1045486.574261" maxy="6891103.124163"/>
+<BoundingBox CRS="EPSG:102100" minx="656910.758267" miny="6550518.397698" maxx="1045486.574261" maxy="6891103.124163"/>
+<BoundingBox CRS="EPSG:4258" minx="50.598160" miny="5.901130" maxx="52.500336" maxy="9.391766"/>
+<BoundingBox CRS="EPSG:4647" minx="32289473.425000" miny="5609365.282696" maxx="32526594.392742" maxy="5816689.355276"/>
+<BoundingBox CRS="EPSG:102362" minx="32289473.425000" miny="5609365.282696" maxx="32526594.392742" maxy="5816689.355276"/>
+<BoundingBox CRS="EPSG:5649" minx="31697095.821724" miny="5609509.168956" maxx="31950718.974758" maxy="5835842.474735"/>
+<BoundingBox CRS="EPSG:5650" minx="32865323.080648" miny="5624405.702215" maxx="33119450.829227" maxy="5851197.463547"/>
+<BoundingBox CRS="EPSG:5651" minx="31697095.821724" miny="5609509.168956" maxx="31950718.974758" maxy="5835842.474735"/>
+<BoundingBox CRS="EPSG:5652" minx="32289473.425000" miny="5609365.282696" maxx="32526594.392742" maxy="5816689.355276"/>
+<BoundingBox CRS="EPSG:5653" minx="32865323.080648" miny="5624405.702215" maxx="33119450.829227" maxy="5851197.463547"/>
+<BoundingBox CRS="EPSG:25831" minx="697095.821724" miny="5609509.168956" maxx="950718.974758" maxy="5835842.474735"/>
+<BoundingBox CRS="EPSG:25833" minx="-134676.919352" miny="5624405.702215" maxx="119450.829227" maxy="5851197.463547"/>
+<BoundingBox CRS="EPSG:28992" minx="189895.689357" miny="289885.230288" maxx="437060.176497" maxy="508737.318273"/>
+<BoundingBox CRS="EPSG:31466" minx="5606808.530659" miny="2493280.388259" maxx="5823755.646168" maxy="2738787.527907"/>
+<BoundingBox CRS="EPSG:31462" minx="5606808.530659" miny="2493280.388259" maxx="5823755.646168" maxy="2738787.527907"/>
+<BoundingBox CRS="EPSG:31467" minx="5611034.346831" miny="3289414.874121" maxx="5818417.700407" maxy="3526601.788944"/>
+<BoundingBox CRS="EPSG:31463" minx="5611034.346831" miny="3289414.874121" maxx="5818417.700407" maxy="3526601.788944"/>
+        <Style>
+          <Name>default</Name>
+          <Title><![CDATA[Tiefen_ueberflutungsgefaehrdete_Gebiete_hw]]></Title>
+          <LegendURL width="216" height="108">
+            <Format>image/png</Format>
+            <OnlineResource xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?request=GetLegendGraphic%26version=1.3.0%26format=image/png%26layer=Tiefen_ueberflutungsgefaehrdete_Gebiete_hw" xlink:type="simple" xmlns:xlink="http://www.w3.org/1999/xlink" />
+          </LegendURL>
+        </Style>
+      </Layer>
+      <Layer queryable="1">
+        <Name>Tiefen_Ueberflutungsgebiet_hw</Name>
+        <Title><![CDATA[Tiefen_Ueberflutungsgebiet_hw]]></Title>
+        <Abstract><![CDATA[]]></Abstract>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>5.766018</westBoundLongitude><eastBoundLongitude>9.468510</eastBoundLongitude><southBoundLatitude>50.403524</southBoundLatitude><northBoundLatitude>52.519428</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="5.766018" miny="50.403524" maxx="9.468510" maxy="52.519428"/>
+<BoundingBox CRS="EPSG:4326" minx="50.403524" miny="5.766018" maxx="52.519428" maxy="9.468510"/>
+<BoundingBox CRS="EPSG:25832" minx="280374.000000" miny="5588064.439607" maxx="531790.432584" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:3034" minx="2632945.972132" miny="3719305.615509" maxx="2859035.441409" maxy="3965147.005049"/>
+<BoundingBox CRS="EPSG:3035" minx="3037011.801271" miny="4030326.881435" maxx="3271244.640167" maxy="4284921.168374"/>
+<BoundingBox CRS="EPSG:3043" minx="5587543.663373" miny="687852.608335" maxx="5838396.660832" maxy="957638.830195"/>
+<BoundingBox CRS="EPSG:3044" minx="5588064.439607" miny="280374.000000" maxx="5818813.000000" maxy="531790.432584"/>
+<BoundingBox CRS="EPSG:3045" minx="5602712.994860" miny="-145522.343091" maxx="5854084.049607" maxy="124814.680630"/>
+<BoundingBox CRS="EPSG:3857" minx="641870.227592" miny="6516454.537661" maxx="1054029.677115" maxy="6894595.105218"/>
+<BoundingBox CRS="EPSG:102100" minx="641870.227592" miny="6516454.537661" maxx="1054029.677115" maxy="6894595.105218"/>
+<BoundingBox CRS="EPSG:4258" minx="50.403524" miny="5.766018" maxx="52.519428" maxy="9.468510"/>
+<BoundingBox CRS="EPSG:4647" minx="32280374.000000" miny="5588064.439607" maxx="32531790.432584" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:102362" minx="32280374.000000" miny="5588064.439607" maxx="32531790.432584" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:5649" minx="31687852.608335" miny="5587543.663373" maxx="31957638.830195" maxy="5838396.660832"/>
+<BoundingBox CRS="EPSG:5650" minx="32854477.656909" miny="5602712.994860" maxx="33124814.680630" maxy="5854084.049607"/>
+<BoundingBox CRS="EPSG:5651" minx="31687852.608335" miny="5587543.663373" maxx="31957638.830195" maxy="5838396.660832"/>
+<BoundingBox CRS="EPSG:5652" minx="32280374.000000" miny="5588064.439607" maxx="32531790.432584" maxy="5818813.000000"/>
+<BoundingBox CRS="EPSG:5653" minx="32854477.656909" miny="5602712.994860" maxx="33124814.680630" maxy="5854084.049607"/>
+<BoundingBox CRS="EPSG:25831" minx="687852.608335" miny="5587543.663373" maxx="957638.830195" maxy="5838396.660832"/>
+<BoundingBox CRS="EPSG:25833" minx="-145522.343091" miny="5602712.994860" maxx="124814.680630" maxy="5854084.049607"/>
+<BoundingBox CRS="EPSG:28992" minx="180704.890833" miny="268169.589005" maxx="443305.291112" maxy="511119.066244"/>
+<BoundingBox CRS="EPSG:31466" minx="5585163.502953" miny="2484103.273579" maxx="5826095.569877" maxy="2744846.620109"/>
+<BoundingBox CRS="EPSG:31462" minx="5585163.502953" miny="2484103.273579" maxx="5826095.569877" maxy="2744846.620109"/>
+<BoundingBox CRS="EPSG:31467" minx="5589727.402258" miny="3280312.911067" maxx="5820541.950244" maxy="3531799.274917"/>
+<BoundingBox CRS="EPSG:31463" minx="5589727.402258" miny="3280312.911067" maxx="5820541.950244" maxy="3531799.274917"/>
+        <Style>
+          <Name>default</Name>
+          <Title><![CDATA[Tiefen_Ueberflutungsgebiet_hw]]></Title>
+          <LegendURL width="354" height="108">
+            <Format>image/png</Format>
+            <OnlineResource xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?request=GetLegendGraphic%26version=1.3.0%26format=image/png%26layer=Tiefen_Ueberflutungsgebiet_hw" xlink:type="simple" xmlns:xlink="http://www.w3.org/1999/xlink" />
+          </LegendURL>
+        </Style>
+      </Layer>
+      <Layer queryable="1">
+        <Name>Grenze_der_ueberfluteten_Gebiete_hw</Name>
+        <Title><![CDATA[Grenze_der_ueberfluteten_Gebiete_hw]]></Title>
+        <Abstract><![CDATA[]]></Abstract>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>5.766033</westBoundLongitude><eastBoundLongitude>9.468521</eastBoundLongitude><southBoundLatitude>50.403520</southBoundLatitude><northBoundLatitude>52.519419</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="5.766033" miny="50.403520" maxx="9.468521" maxy="52.519419"/>
+<BoundingBox CRS="EPSG:4326" minx="50.403520" miny="5.766033" maxx="52.519419" maxy="9.468521"/>
+<BoundingBox CRS="EPSG:25832" minx="280374.968000" miny="5588063.987600" maxx="531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:3034" minx="2632945.525459" miny="3719306.543978" maxx="2859034.522861" maxy="3965147.738556"/>
+<BoundingBox CRS="EPSG:3035" minx="3037011.338685" miny="4030327.842765" maxx="3271243.688251" maxy="4284921.927535"/>
+<BoundingBox CRS="EPSG:3043" minx="5587543.290917" miny="687853.650754" maxx="5838395.787216" maxy="957639.638174"/>
+<BoundingBox CRS="EPSG:3044" minx="5588063.987600" miny="280374.968000" maxx="5818812.061000" maxy="531791.204500"/>
+<BoundingBox CRS="EPSG:3045" minx="5602712.481027" miny="-145521.410686" maxx="5854083.028893" maxy="124815.373039"/>
+<BoundingBox CRS="EPSG:3857" minx="641871.880422" miny="6516453.891886" maxx="1054030.933451" maxy="6894593.560834"/>
+<BoundingBox CRS="EPSG:102100" minx="641871.880422" miny="6516453.891886" maxx="1054030.933451" maxy="6894593.560834"/>
+<BoundingBox CRS="EPSG:4258" minx="50.403520" miny="5.766033" maxx="52.519419" maxy="9.468521"/>
+<BoundingBox CRS="EPSG:4647" minx="32280374.968000" miny="5588063.987600" maxx="32531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:102362" minx="32280374.968000" miny="5588063.987600" maxx="32531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:5649" minx="31687853.650754" miny="5587543.290917" maxx="31957639.638174" maxy="5838395.787216"/>
+<BoundingBox CRS="EPSG:5650" minx="32854478.589314" miny="5602712.481027" maxx="33124815.373039" maxy="5854083.028893"/>
+<BoundingBox CRS="EPSG:5651" minx="31687853.650754" miny="5587543.290917" maxx="31957639.638174" maxy="5838395.787216"/>
+<BoundingBox CRS="EPSG:5652" minx="32280374.968000" miny="5588063.987600" maxx="32531791.204500" maxy="5818812.061000"/>
+<BoundingBox CRS="EPSG:5653" minx="32854478.589314" miny="5602712.481027" maxx="33124815.373039" maxy="5854083.028893"/>
+<BoundingBox CRS="EPSG:25831" minx="687853.650754" miny="5587543.290917" maxx="957639.638174" maxy="5838395.787216"/>
+<BoundingBox CRS="EPSG:25833" minx="-145521.410686" miny="5602712.481027" maxx="124815.373039" maxy="5854083.028893"/>
+<BoundingBox CRS="EPSG:28992" minx="180705.904161" miny="268169.184707" maxx="443306.085067" maxy="511118.166320"/>
+<BoundingBox CRS="EPSG:31466" minx="5585163.090501" miny="2484104.279429" maxx="5826094.662906" maxy="2744847.410439"/>
+<BoundingBox CRS="EPSG:31462" minx="5585163.090501" miny="2484104.279429" maxx="5826094.662906" maxy="2744847.410439"/>
+<BoundingBox CRS="EPSG:31467" minx="5589726.950122" miny="3280313.879336" maxx="5820541.010976" maxy="3531800.047047"/>
+<BoundingBox CRS="EPSG:31463" minx="5589726.950122" miny="3280313.879336" maxx="5820541.010976" maxy="3531800.047047"/>
+        <Style>
+          <Name>default</Name>
+          <Title><![CDATA[Grenze_der_ueberfluteten_Gebiete_hw]]></Title>
+          <LegendURL width="84" height="36">
+            <Format>image/png</Format>
+            <OnlineResource xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?request=GetLegendGraphic%26version=1.3.0%26format=image/png%26layer=Grenze_der_ueberfluteten_Gebiete_hw" xlink:type="simple" xmlns:xlink="http://www.w3.org/1999/xlink" />
+          </LegendURL>
+        </Style>
+      </Layer>
+      <Layer queryable="1">
+        <Name>Fliessgeschwindigkeiten_hw</Name>
+        <Title><![CDATA[Fliessgeschwindigkeiten_hw]]></Title>
+        <Abstract><![CDATA[Darstellung Geschwindigkeiten als Vektoren]]></Abstract>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>5.766133</westBoundLongitude><eastBoundLongitude>9.467784</eastBoundLongitude><southBoundLatitude>50.403545</southBoundLatitude><northBoundLatitude>52.519211</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="5.766133" miny="50.403545" maxx="9.467784" maxy="52.519211"/>
+<BoundingBox CRS="EPSG:4326" minx="50.403545" miny="5.766133" maxx="52.519211" maxy="9.467784"/>
+<BoundingBox CRS="EPSG:25832" minx="280380.734200" miny="5588066.555700" maxx="531741.333100" maxy="5818788.947200"/>
+<BoundingBox CRS="EPSG:3034" minx="2632948.656376" miny="3719312.144669" maxx="2859012.130812" maxy="3965099.240962"/>
+<BoundingBox CRS="EPSG:3035" minx="3037014.583940" miny="4030333.641395" maxx="3271220.498398" maxy="4284871.720953"/>
+<BoundingBox CRS="EPSG:3043" minx="5587546.315407" miny="687861.313955" maxx="5838368.542934" maxy="957589.594488"/>
+<BoundingBox CRS="EPSG:3044" minx="5588066.555700" miny="280380.734200" maxx="5818788.947200" maxy="531741.333100"/>
+<BoundingBox CRS="EPSG:3045" minx="5602719.080182" miny="-145515.428436" maxx="5854059.415487" maxy="124763.664887"/>
+<BoundingBox CRS="EPSG:3857" minx="641883.010706" miny="6516458.296078" maxx="1053948.873505" maxy="6894555.545256"/>
+<BoundingBox CRS="EPSG:102100" minx="641883.010706" miny="6516458.296078" maxx="1053948.873505" maxy="6894555.545256"/>
+<BoundingBox CRS="EPSG:4258" minx="50.403545" miny="5.766133" maxx="52.519211" maxy="9.467784"/>
+<BoundingBox CRS="EPSG:4647" minx="32280380.734200" miny="5588066.555700" maxx="32531741.333100" maxy="5818788.947200"/>
+<BoundingBox CRS="EPSG:102362" minx="32280380.734200" miny="5588066.555700" maxx="32531741.333100" maxy="5818788.947200"/>
+<BoundingBox CRS="EPSG:5649" minx="31687861.313955" miny="5587546.315407" maxx="31957589.594488" maxy="5838368.542934"/>
+<BoundingBox CRS="EPSG:5650" minx="32854484.571564" miny="5602719.080182" maxx="33124763.664887" maxy="5854059.415487"/>
+<BoundingBox CRS="EPSG:5651" minx="31687861.313955" miny="5587546.315407" maxx="31957589.594488" maxy="5838368.542934"/>
+<BoundingBox CRS="EPSG:5652" minx="32280380.734200" miny="5588066.555700" maxx="32531741.333100" maxy="5818788.947200"/>
+<BoundingBox CRS="EPSG:5653" minx="32854484.571564" miny="5602719.080182" maxx="33124763.664887" maxy="5854059.415487"/>
+<BoundingBox CRS="EPSG:25831" minx="687861.313955" miny="5587546.315407" maxx="957589.594488" maxy="5838368.542934"/>
+<BoundingBox CRS="EPSG:25833" minx="-145515.428436" miny="5602719.080182" maxx="124763.664887" maxy="5854059.415487"/>
+<BoundingBox CRS="EPSG:28992" minx="180712.815839" miny="268172.029945" maxx="443256.103342" maxy="511092.576588"/>
+<BoundingBox CRS="EPSG:31466" minx="5585165.888329" miny="2484110.998520" maxx="5826069.472457" maxy="2744797.425981"/>
+<BoundingBox CRS="EPSG:31462" minx="5585165.888329" miny="2484110.998520" maxx="5826069.472457" maxy="2744797.425981"/>
+<BoundingBox CRS="EPSG:31467" minx="5589729.518960" miny="3280319.647141" maxx="5820517.890581" maxy="3531750.161776"/>
+<BoundingBox CRS="EPSG:31463" minx="5589729.518960" miny="3280319.647141" maxx="5820517.890581" maxy="3531750.161776"/>
+        <Style>
+          <Name>default</Name>
+          <Title><![CDATA[Fliessgeschwindigkeiten_hw]]></Title>
+          <LegendURL width="108" height="72">
+            <Format>image/png</Format>
+            <OnlineResource xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?request=GetLegendGraphic%26version=1.3.0%26format=image/png%26layer=Fliessgeschwindigkeiten_hw" xlink:type="simple" xmlns:xlink="http://www.w3.org/1999/xlink" />
+          </LegendURL>
+        </Style>
+        <MaxScaleDenominator>18898.809524</MaxScaleDenominator>
+      </Layer>
+      </Layer>
+      <Layer queryable="1">
+        <Title><![CDATA[Hochwasser-Schutzeinrichtungen]]></Title>
+        <Abstract><![CDATA[]]></Abstract>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>5.960711</westBoundLongitude><eastBoundLongitude>9.426848</eastBoundLongitude><southBoundLatitude>50.482988</southBoundLatitude><northBoundLatitude>52.494437</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="5.960711" miny="50.482988" maxx="9.426848" maxy="52.494437"/>
+<BoundingBox CRS="EPSG:4326" minx="50.482988" miny="5.960711" maxx="52.494437" maxy="9.426848"/>
+<BoundingBox CRS="EPSG:25832" minx="293499.824500" miny="5596381.946500" maxx="528979.860700" maxy="5816033.221100"/>
+<BoundingBox CRS="EPSG:3034" minx="2641016.751755" miny="3732087.711294" maxx="2856191.628347" maxy="3962394.359960"/>
+<BoundingBox CRS="EPSG:3035" minx="3045369.477184" miny="4043560.952025" maxx="3268288.940282" maxy="4282071.275608"/>
+<BoundingBox CRS="EPSG:3043" minx="5596893.050277" miny="701162.585417" maxx="5835385.832961" maxy="954156.216212"/>
+<BoundingBox CRS="EPSG:3044" minx="5596381.946500" miny="293499.824500" maxx="5816033.221100" maxy="528979.860700"/>
+<BoundingBox CRS="EPSG:3045" minx="5611246.630944" miny="-131704.354677" maxx="5850204.083262" maxy="121777.629803"/>
+<BoundingBox CRS="EPSG:3857" minx="663543.347936" miny="6530344.824140" maxx="1049391.942378" maxy="6890024.525254"/>
+<BoundingBox CRS="EPSG:102100" minx="663543.347936" miny="6530344.824140" maxx="1049391.942378" maxy="6890024.525254"/>
+<BoundingBox CRS="EPSG:4258" minx="50.482988" miny="5.960711" maxx="52.494437" maxy="9.426848"/>
+<BoundingBox CRS="EPSG:4647" minx="32293499.824500" miny="5596381.946500" maxx="32528979.860700" maxy="5816033.221100"/>
+<BoundingBox CRS="EPSG:102362" minx="32293499.824500" miny="5596381.946500" maxx="32528979.860700" maxy="5816033.221100"/>
+<BoundingBox CRS="EPSG:5649" minx="31701162.585417" miny="5596893.050277" maxx="31954156.216212" maxy="5835385.832961"/>
+<BoundingBox CRS="EPSG:5650" minx="32868295.645323" miny="5611246.630944" maxx="33121777.629803" maxy="5850204.083262"/>
+<BoundingBox CRS="EPSG:5651" minx="31701162.585417" miny="5596893.050277" maxx="31954156.216212" maxy="5835385.832961"/>
+<BoundingBox CRS="EPSG:5652" minx="32293499.824500" miny="5596381.946500" maxx="32528979.860700" maxy="5816033.221100"/>
+<BoundingBox CRS="EPSG:5653" minx="32868295.645323" miny="5611246.630944" maxx="33121777.629803" maxy="5850204.083262"/>
+<BoundingBox CRS="EPSG:25831" minx="701162.585417" miny="5596893.050277" maxx="954156.216212" maxy="5835385.832961"/>
+<BoundingBox CRS="EPSG:25833" minx="-131704.354677" miny="5611246.630944" maxx="121777.629803" maxy="5850204.083262"/>
+<BoundingBox CRS="EPSG:28992" minx="193948.496639" miny="277115.381081" maxx="440085.421747" maxy="508200.630554"/>
+<BoundingBox CRS="EPSG:31466" minx="5594001.763226" miny="2497329.522405" maxx="5823198.666805" maxy="2741699.165791"/>
+<BoundingBox CRS="EPSG:31462" minx="5594001.763226" miny="2497329.522405" maxx="5823198.666805" maxy="2741699.165791"/>
+<BoundingBox CRS="EPSG:31467" minx="5598047.295059" miny="3293442.389310" maxx="5817761.379049" maxy="3528987.920912"/>
+<BoundingBox CRS="EPSG:31463" minx="5598047.295059" miny="3293442.389310" maxx="5817761.379049" maxy="3528987.920912"/>
+        <MaxScaleDenominator>708705.357143</MaxScaleDenominator>
+      <Layer queryable="1">
+        <Name>Beckenstandort</Name>
+        <Title><![CDATA[Beckenstandort]]></Title>
+        <Abstract><![CDATA[]]></Abstract>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>5.978048</westBoundLongitude><eastBoundLongitude>9.193054</eastBoundLongitude><southBoundLatitude>50.482988</southBoundLatitude><northBoundLatitude>52.240627</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="5.978048" miny="50.482988" maxx="9.193054" maxy="52.240627"/>
+<BoundingBox CRS="EPSG:4326" minx="50.482988" miny="5.978048" maxx="52.240627" maxy="9.193054"/>
+<BoundingBox CRS="EPSG:25832" minx="293499.824500" miny="5596381.946500" maxx="513182.124300" maxy="5787801.942800"/>
+<BoundingBox CRS="EPSG:3034" minx="2641222.990057" miny="3732087.711294" maxx="2828927.118174" maxy="3946757.973960"/>
+<BoundingBox CRS="EPSG:3035" minx="3045584.345529" miny="4043560.952025" maxx="3240057.579986" maxy="4265878.920605"/>
+<BoundingBox CRS="EPSG:3043" minx="5596893.050277" miny="703500.713566" maxx="5805874.651594" maxy="938371.780195"/>
+<BoundingBox CRS="EPSG:3044" minx="5596381.946500" miny="293499.824500" maxx="5787801.942800" maxy="513182.124300"/>
+<BoundingBox CRS="EPSG:3045" minx="5612526.301491" miny="-131704.354677" maxx="5821954.747409" maxy="103659.776935"/>
+<BoundingBox CRS="EPSG:3857" minx="665473.234392" miny="6530344.824140" maxx="1023366.089178" maxy="6843751.325858"/>
+<BoundingBox CRS="EPSG:102100" minx="665473.234392" miny="6530344.824140" maxx="1023366.089178" maxy="6843751.325858"/>
+<BoundingBox CRS="EPSG:4258" minx="50.482988" miny="5.978048" maxx="52.240627" maxy="9.193054"/>
+<BoundingBox CRS="EPSG:4647" minx="32293499.824500" miny="5596381.946500" maxx="32513182.124300" maxy="5787801.942800"/>
+<BoundingBox CRS="EPSG:102362" minx="32293499.824500" miny="5596381.946500" maxx="32513182.124300" maxy="5787801.942800"/>
+<BoundingBox CRS="EPSG:5649" minx="31703500.713566" miny="5596893.050277" maxx="31938371.780195" maxy="5805874.651594"/>
+<BoundingBox CRS="EPSG:5650" minx="32868295.645323" miny="5612526.301491" maxx="33103659.776935" maxy="5821954.747409"/>
+<BoundingBox CRS="EPSG:5651" minx="31703500.713566" miny="5596893.050277" maxx="31938371.780195" maxy="5805874.651594"/>
+<BoundingBox CRS="EPSG:5652" minx="32293499.824500" miny="5596381.946500" maxx="32513182.124300" maxy="5787801.942800"/>
+<BoundingBox CRS="EPSG:5653" minx="32868295.645323" miny="5612526.301491" maxx="33103659.776935" maxy="5821954.747409"/>
+<BoundingBox CRS="EPSG:25831" minx="703500.713566" miny="5596893.050277" maxx="938371.780195" maxy="5805874.651594"/>
+<BoundingBox CRS="EPSG:25833" minx="-131704.354677" miny="5612526.301491" maxx="103659.776935" maxy="5821954.747409"/>
+<BoundingBox CRS="EPSG:28992" minx="195356.461091" miny="277115.381081" maxx="424293.624904" maxy="479198.786331"/>
+<BoundingBox CRS="EPSG:31466" minx="5594001.763226" miny="2498499.341110" maxx="5794310.427153" maxy="2725899.439080"/>
+<BoundingBox CRS="EPSG:31462" minx="5594001.763226" miny="2498499.341110" maxx="5794310.427153" maxy="2725899.439080"/>
+<BoundingBox CRS="EPSG:31467" minx="5598047.295059" miny="3293442.389310" maxx="5789522.044739" maxy="3513185.790663"/>
+<BoundingBox CRS="EPSG:31463" minx="5598047.295059" miny="3293442.389310" maxx="5789522.044739" maxy="3513185.790663"/>
+        <Style>
+          <Name>default</Name>
+          <Title><![CDATA[Beckenstandort]]></Title>
+          <LegendURL width="318" height="18">
+            <Format>image/png</Format>
+            <OnlineResource xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?request=GetLegendGraphic%26version=1.3.0%26format=image/png%26layer=Beckenstandort" xlink:type="simple" xmlns:xlink="http://www.w3.org/1999/xlink" />
+          </LegendURL>
+        </Style>
+        <MaxScaleDenominator>283482.142857</MaxScaleDenominator>
+      </Layer>
+      <Layer queryable="1">
+        <Name>Schutzeinrichtung</Name>
+        <Title><![CDATA[Schutzeinrichtung]]></Title>
+        <Abstract><![CDATA[]]></Abstract>
+<CRS>CRS:84</CRS>
+<CRS>EPSG:4326</CRS>
+<CRS>EPSG:25832</CRS>
+<CRS>EPSG:3034</CRS>
+<CRS>EPSG:3035</CRS>
+<CRS>EPSG:3043</CRS>
+<CRS>EPSG:3044</CRS>
+<CRS>EPSG:3045</CRS>
+<CRS>EPSG:3857</CRS>
+ <!-- alias 3857 -->
+<CRS>EPSG:102100</CRS>
+<CRS>EPSG:4258</CRS>
+<CRS>EPSG:4647</CRS>
+ <!-- alias 4647 -->
+<CRS>EPSG:102362</CRS>
+<CRS>EPSG:5649</CRS>
+<CRS>EPSG:5650</CRS>
+<CRS>EPSG:5651</CRS>
+<CRS>EPSG:5652</CRS>
+<CRS>EPSG:5653</CRS>
+<CRS>EPSG:25831</CRS>
+<CRS>EPSG:25833</CRS>
+<CRS>EPSG:28992</CRS>
+<CRS>EPSG:31466</CRS>
+ <!-- alias 31466 -->
+<CRS>EPSG:31462</CRS>
+<CRS>EPSG:31467</CRS>
+ <!-- alias 31467 -->
+<CRS>EPSG:31463</CRS>
+<EX_GeographicBoundingBox><westBoundLongitude>5.988769</westBoundLongitude><eastBoundLongitude>9.426848</eastBoundLongitude><southBoundLatitude>50.562567</southBoundLatitude><northBoundLatitude>52.494437</northBoundLatitude></EX_GeographicBoundingBox>
+<BoundingBox CRS="CRS:84" minx="5.988769" miny="50.562567" maxx="9.426848" maxy="52.494437"/>
+<BoundingBox CRS="EPSG:4326" minx="50.562567" miny="5.988769" maxx="52.494437" maxy="9.426848"/>
+<BoundingBox CRS="EPSG:25832" minx="295409.029900" miny="5605167.474000" maxx="528979.860700" maxy="5816033.221100"/>
+<BoundingBox CRS="EPSG:3034" minx="2649502.889415" miny="3734047.099813" maxx="2856168.403849" maxy="3962394.359960"/>
+<BoundingBox CRS="EPSG:3035" minx="3054157.211980" miny="4045589.818951" maxx="3268263.308532" maxy="4282071.275608"/>
+<BoundingBox CRS="EPSG:3043" minx="5605804.743962" miny="703065.176336" maxx="5835385.832961" maxy="953443.411638"/>
+<BoundingBox CRS="EPSG:3044" minx="5605167.474000" miny="295409.029900" maxx="5816033.221100" maxy="528979.860700"/>
+<BoundingBox CRS="EPSG:3045" minx="5620020.150775" miny="-129077.332784" maxx="5850044.384460" maxy="121777.629803"/>
+<BoundingBox CRS="EPSG:3857" minx="666666.695990" miny="6544278.697247" maxx="1049391.942378" maxy="6890024.525293"/>
+<BoundingBox CRS="EPSG:102100" minx="666666.695990" miny="6544278.697247" maxx="1049391.942378" maxy="6890024.525293"/>
+<BoundingBox CRS="EPSG:4258" minx="50.562567" miny="5.988769" maxx="52.494437" maxy="9.426848"/>
+<BoundingBox CRS="EPSG:4647" minx="32295409.029900" miny="5605167.474000" maxx="32528979.860700" maxy="5816033.221100"/>
+<BoundingBox CRS="EPSG:102362" minx="32295409.029900" miny="5605167.474000" maxx="32528979.860700" maxy="5816033.221100"/>
+<BoundingBox CRS="EPSG:5649" minx="31703065.176336" miny="5605804.743962" maxx="31953443.411638" maxy="5835385.832961"/>
+<BoundingBox CRS="EPSG:5650" minx="32870922.667216" miny="5620020.150775" maxx="33121777.629803" maxy="5850044.384460"/>
+<BoundingBox CRS="EPSG:5651" minx="31703065.176336" miny="5605804.743962" maxx="31953443.411638" maxy="5835385.832961"/>
+<BoundingBox CRS="EPSG:5652" minx="32295409.029900" miny="5605167.474000" maxx="32528979.860700" maxy="5816033.221100"/>
+<BoundingBox CRS="EPSG:5653" minx="32870922.667216" miny="5620020.150775" maxx="33121777.629803" maxy="5850044.384460"/>
+<BoundingBox CRS="EPSG:25831" minx="703065.176336" miny="5605804.743962" maxx="953443.411638" maxy="5835385.832961"/>
+<BoundingBox CRS="EPSG:25833" minx="-129077.332784" miny="5620020.150775" maxx="121777.629803" maxy="5850044.384460"/>
+<BoundingBox CRS="EPSG:28992" minx="195854.713992" miny="285982.620460" maxx="439651.918486" maxy="508200.630554"/>
+<BoundingBox CRS="EPSG:31466" minx="5602855.223235" miny="2499236.622121" maxx="5823198.666805" maxy="2741343.464879"/>
+<BoundingBox CRS="EPSG:31462" minx="5602855.223235" miny="2499236.622121" maxx="5823198.666805" maxy="2741343.464879"/>
+<BoundingBox CRS="EPSG:31467" minx="5606835.338383" miny="3295352.128536" maxx="5817761.379049" maxy="3528987.920517"/>
+<BoundingBox CRS="EPSG:31463" minx="5606835.338383" miny="3295352.128536" maxx="5817761.379049" maxy="3528987.920517"/>
+        <Style>
+          <Name>default</Name>
+          <Title><![CDATA[Schutzeinrichtung]]></Title>
+          <LegendURL width="324" height="18">
+            <Format>image/png</Format>
+            <OnlineResource xlink:href="https://www.wms.nrw.de/umwelt/wasser/HW_Gefahrenkarte?request=GetLegendGraphic%26version=1.3.0%26format=image/png%26layer=Schutzeinrichtung" xlink:type="simple" xmlns:xlink="http://www.w3.org/1999/xlink" />
+          </LegendURL>
+        </Style>
+        <MaxScaleDenominator>47247.023810</MaxScaleDenominator>
+      </Layer>
+      </Layer>
+    </Layer>
+  </Capability>
+</WMS_Capabilities>

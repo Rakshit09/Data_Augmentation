@@ -14,6 +14,25 @@ _readme_path = "README.md"
 _readme_datas = [(_readme_path, ".")] if os.path.isfile(_readme_path) else []
 
 
+def _gdal_datas():
+    candidates = []
+    env_dir = os.environ.get("DATA_AUGMENTATION_GDAL_DIR", "").strip()
+    if env_dir:
+        candidates.append(env_dir)
+
+    candidates.extend([
+        "gdal",
+        os.path.join("vendor", "gdal"),
+        r"C:\OSGeo4W",
+    ])
+
+    for candidate in candidates:
+        if candidate and os.path.isdir(candidate):
+            return [(candidate, "gdal")]
+
+    return []
+
+
 def _filter_packaged_datas(entries):
     filtered = []
     blocked_suffixes = (".parquet", ".duckdb")
@@ -29,7 +48,7 @@ _packaged_datas = _filter_packaged_datas([
     ('templates', 'templates'),
     ('static', 'static'),
     ('favicon.ico', '.'),
-] + _extra_datas + _boundary_datas + _readme_datas)
+] + _extra_datas + _boundary_datas + _readme_datas + _gdal_datas())
 
 
 a = Analysis(
@@ -48,6 +67,7 @@ a = Analysis(
         'tkinter',
         'building_lookup_app',
         'enrichment_worker',
+        'layer_upload_routes',
     ],
     hookspath=[],
     hooksconfig={},

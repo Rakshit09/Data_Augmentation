@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.22.0/dist/maplibre-gl.css">
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='add_layer.css') }}">
 </head>
 <body>
   <main class="shell">
@@ -139,6 +140,49 @@
             <button id="applyViewFilter" type="button">Apply</button>
           </div>
           <p id="filterViewMessage" class="filter-view-message">Choose a column and value to color polygons in the current view.</p>
+        </details>
+
+        <details id="addLayerPanel" class="lookup-field-picker add-layer-panel">
+          <summary>
+            <span class="field-label-row">
+              <span>Add Layer</span>
+              <span class="field-tip" tabindex="0" data-tooltip="Upload a hazard or context layer to render over the map. Vector files are streamed by viewport for smooth panning. GeoTIFF rasters require GDAL to be installed locally.">i</span>
+            </span>
+          </summary>
+          <div class="add-layer-form">
+            <label class="add-layer-dropzone" for="addLayerFile">
+              <span id="addLayerFileTitle">Choose Layer File</span>
+              <span id="addLayerFileSubtitle">GeoPackage, zipped shapefile, shapefile, GeoJSON, or GeoTIFF</span>
+            </label>
+            <input id="addLayerFile" class="file-input" type="file" accept=".gpkg,.zip,.shp,.geojson,.json,.tif,.tiff" tabindex="-1" aria-hidden="true">
+            <button id="uploadMapLayer" type="button">Add layer</button>
+
+            <div id="addLayerControls" class="add-layer-controls hidden">
+              <label for="addLayerField">
+                <span>Displayed field</span>
+                <select id="addLayerField"></select>
+              </label>
+              <label for="addLayerColormap">
+                <span>Colourmap</span>
+                <select id="addLayerColormap">
+                  <option value="hazard">Hazard</option>
+                  <option value="viridis">Viridis</option>
+                  <option value="plasma">Plasma</option>
+                  <option value="magma">Magma</option>
+                  <option value="cividis">Cividis</option>
+                  <option value="reds">Reds</option>
+                  <option value="blues">Blues</option>
+                  <option value="categorical">Categorical</option>
+                </select>
+              </label>
+              <label for="addLayerOpacity">
+                <span>Transparency</span>
+                <input id="addLayerOpacity" type="range" min="5" max="95" step="1" value="55">
+              </label>
+              <button id="clearMapLayer" type="button">Clear layer</button>
+            </div>
+            <p id="addLayerMessage" class="add-layer-message">Upload a layer to display it over buildings and exposure points.</p>
+          </div>
         </details>
 
         <details class="lookup-field-picker">
@@ -472,5 +516,6 @@
   <script src="{{ url_for('static', filename='building_lookup_fields.js') }}"></script>
   <script src="{{ url_for('static', filename='exposure_enrichment_fields.js') }}"></script>
   <script src="{{ url_for('static', filename='custom_parquet_database.js') }}"></script>
+  <script src="{{ url_for('static', filename='add_layer.js') }}"></script>
 </body>
 </html>
