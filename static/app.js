@@ -199,29 +199,145 @@ function updateStatsDownload(summary) {
 }
 
 const selectedSource = emptyFeatureCollection;
+const BASEMAPS = {
+  osm: {
+    label: "OpenStreetMap",
+    tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+    attribution: "© OpenStreetMap contributors",
+    maxzoom: 19
+  },
+  cartoLight: {
+    label: "Light",
+    tiles: ["https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"],
+    attribution: "© OpenStreetMap contributors © CARTO",
+    maxzoom: 20
+  },
+  cartoDark: {
+    label: "Dark",
+    tiles: ["https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"],
+    attribution: "© OpenStreetMap contributors © CARTO",
+    maxzoom: 20
+  },
+  voyager: {
+    label: "Voyager",
+    tiles: ["https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png"],
+    attribution: "© OpenStreetMap contributors © CARTO",
+    maxzoom: 20
+  },
+  satellite: {
+    label: "Satellite",
+    tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+    attribution: "Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community",
+    maxzoom: 19
+  }
+};
+const BASEMAP_STORAGE_KEY = "dataAugmentationBasemap";
+const defaultBasemapId = getStoredBasemapId();
+
+function basemapSourceId(id) {
+  return `basemap-source-${id}`;
+}
+
+function basemapLayerId(id) {
+  return `basemap-layer-${id}`;
+}
+
+function getStoredBasemapId() {
+  try {
+    const stored = window.localStorage?.getItem(BASEMAP_STORAGE_KEY);
+    return stored && BASEMAPS[stored] ? stored : "osm";
+  } catch (_error) {
+    return "osm";
+  }
+}
+
+function setBasemap(id) {
+  if (!BASEMAPS[id]) return;
+
+  for (const basemapId of Object.keys(BASEMAPS)) {
+    const layerId = basemapLayerId(basemapId);
+    if (map.getLayer(layerId)) {
+      map.setLayoutProperty(layerId, "visibility", basemapId === id ? "visible" : "none");
+    }
+  }
+
+  try {
+    window.localStorage?.setItem(BASEMAP_STORAGE_KEY, id);
+  } catch (_error) {
+    // Ignore private browsing/storage restrictions.
+  }
+}
+
+class BasemapControl {
+  onAdd(mapInstance) {
+    this.map = mapInstance;
+    this.container = document.createElement("div");
+    this.container.className = "maplibregl-ctrl maplibregl-ctrl-group basemap-control";
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "basemap-control-button";
+    button.setAttribute("aria-label", "Choose basemap");
+    button.setAttribute("title", "Choose basemap");
+    button.innerHTML = '<span aria-hidden="true"></span>';
+
+    const select = document.createElement("select");
+    select.className = "basemap-control-select";
+    select.setAttribute("aria-label", "Basemap type");
+
+    for (const [id, basemap] of Object.entries(BASEMAPS)) {
+      const option = document.createElement("option");
+      option.value = id;
+      option.textContent = basemap.label;
+      select.appendChild(option);
+    }
+
+    select.value = defaultBasemapId;
+    select.addEventListener("change", () => setBasemap(select.value));
+
+    button.addEventListener("click", () => {
+      this.container.classList.toggle("open");
+      select.focus();
+    });
+    select.addEventListener("blur", () => {
+      window.setTimeout(() => this.container.classList.remove("open"), 120);
+    });
+
+    this.container.addEventListener("mousedown", (event) => event.stopPropagation());
+    this.container.addEventListener("dblclick", (event) => event.stopPropagation());
+    this.container.append(button, select);
+    return this.container;
+  }
+
+  onRemove() {
+    this.container?.parentNode?.removeChild(this.container);
+    this.map = undefined;
+  }
+}
 
 const map = new maplibregl.Map({
   container: "map",
   style: {
     version: 8,
-    sources: {
-      osm: {
-        type: "raster",
-        tiles: [
-          "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-        ],
-        tileSize: 256,
-        maxzoom: 19,
-        attribution: "© OpenStreetMap contributors"
-      }
-    },
-    layers: [
+    sources: Object.fromEntries(Object.entries(BASEMAPS).map(([id, basemap]) => [
+      basemapSourceId(id),
       {
-        id: "osm",
         type: "raster",
-        source: "osm"
+        tiles: basemap.tiles,
+        tileSize: 256,
+        maxzoom: basemap.maxzoom || 19,
+        attribution: basemap.attribution
       }
-    ]
+    ])),
+    layers: Object.keys(BASEMAPS).map((id) => ({
+        id: basemapLayerId(id),
+        type: "raster",
+        source: basemapSourceId(id),
+        layout: {
+          visibility: id === defaultBasemapId ? "visible" : "none"
+        }
+      }
+    ))
   },
   center: [10.45, 51.16],
   zoom: 5.4,
@@ -229,6 +345,7 @@ const map = new maplibregl.Map({
 });
 
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-left");
+map.addControl(new BasemapControl(), "top-left");
 
 lookupTab.addEventListener("click", () => switchMode("lookup"));
 exposureTab.addEventListener("click", () => switchMode("exposure"));

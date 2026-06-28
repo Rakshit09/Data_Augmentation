@@ -1442,6 +1442,65 @@ button:focus-visible,
   left: 12px;
 }
 
+.basemap-control {
+  position: relative;
+  overflow: visible;
+}
+
+.basemap-control .basemap-control-button {
+  width: 29px;
+  height: 29px;
+  padding: 0;
+}
+
+.basemap-control-button span {
+  display: block;
+  width: 17px;
+  height: 17px;
+  margin: 6px;
+  border: 1.5px solid #333;
+  border-radius: 3px;
+  background:
+    linear-gradient(135deg, rgba(51, 51, 51, 0.18) 0 32%, transparent 32% 100%),
+    linear-gradient(45deg, transparent 0 44%, #333 44% 56%, transparent 56% 100%),
+    linear-gradient(135deg, transparent 0 44%, #333 44% 56%, transparent 56% 100%);
+}
+
+.basemap-control .basemap-control-select {
+  position: absolute;
+  top: 0;
+  left: 34px;
+  width: 122px;
+  min-width: 122px;
+  height: 29px;
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  box-shadow: 0 1px 5px rgba(0, 31, 63, 0.22);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-4px);
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+.basemap-control.open .basemap-control-select,
+.basemap-control .basemap-control-select:focus {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0);
+}
+
+.basemap-control-select:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--focus);
+}
+
 .hidden {
   display: none;
 }
