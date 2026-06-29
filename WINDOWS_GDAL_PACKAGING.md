@@ -26,6 +26,8 @@ The folder should contain GDAL executables in one of these layouts:
 
 ```text
 vendor/gdal/bin/gdalinfo.exe
+vendor/gdal/bin/gdal_translate.exe
+vendor/gdal/bin/gdallocationinfo.exe
 vendor/gdal/bin/gdal2tiles.py
 vendor/gdal/share/gdal/
 vendor/gdal/share/proj/
@@ -35,6 +37,8 @@ or OSGeo4W-style:
 
 ```text
 vendor/gdal/bin/gdalinfo.exe
+vendor/gdal/bin/gdal_translate.exe
+vendor/gdal/bin/gdallocationinfo.exe
 vendor/gdal/bin/gdal2tiles.bat
 vendor/gdal/share/gdal/
 vendor/gdal/share/proj/
@@ -56,4 +60,4 @@ pyinstaller DataAugmentation.spec --clean --noconfirm
 
 ## User Experience
 
-Users do not need to know about GDAL. They only upload a GeoTIFF in **Building Lookup > Add Layer**. If GDAL was bundled correctly, the app tiles and renders the raster automatically.
+Users do not need to know about GDAL. They only upload a GeoTIFF in **Building Lookup > Add Layer**. If GDAL was bundled correctly, the app tiles and renders the raster automatically, and raster intersections can sample exposure points or building centroids without extra user setup.

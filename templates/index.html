@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.22.0/dist/maplibre-gl.css">
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='add_layer.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='raster_intersections.css') }}">
 </head>
 <body>
   <main class="shell">
@@ -179,6 +180,45 @@
                 <span>Transparency</span>
                 <input id="addLayerOpacity" type="range" min="5" max="95" step="1" value="55">
               </label>
+              <section id="rasterIntersectionControls" class="raster-intersection-controls hidden">
+                <div class="raster-intersection-current">
+                  <span>Layer intersection</span>
+                  <strong id="rasterIntersectionLayerName">No raster selected</strong>
+                </div>
+                <label for="rasterIntersectionBand">
+                  <span>Band (GeoTIFF)</span>
+                  <select id="rasterIntersectionBand"></select>
+                </label>
+                <label for="rasterIntersectionArea">
+                  <span>Area</span>
+                  <select id="rasterIntersectionArea">
+                    <option value="visible">Visible map area</option>
+                    <option value="raster">Full raster footprint</option>
+                  </select>
+                </label>
+                <div class="raster-threshold-row">
+                  <label for="rasterThresholdOperator">
+                    <span>Filter</span>
+                    <select id="rasterThresholdOperator">
+                      <option value=">">&gt;</option>
+                      <option value=">=">&gt;=</option>
+                      <option value="<">&lt;</option>
+                      <option value="<=">&lt;=</option>
+                      <option value="==">=</option>
+                      <option value="!=">!=</option>
+                    </select>
+                  </label>
+                  <label for="rasterThresholdValue">
+                    <span>Value</span>
+                    <input id="rasterThresholdValue" type="number" step="any" placeholder="Optional">
+                  </label>
+                </div>
+                <div class="raster-intersection-actions">
+                  <button id="intersectExposureRaster" type="button" disabled>Intersect Exposure</button>
+                  <button id="intersectDatabaseRaster" type="button" disabled>Intersect Database</button>
+                </div>
+                <p id="rasterIntersectionMessage" class="raster-intersection-message">Upload a raster to sample exposure or building locations.</p>
+              </section>
               <button id="clearMapLayer" type="button">Clear layer</button>
             </div>
             <p id="addLayerMessage" class="add-layer-message">Upload a layer to display it over buildings and exposure points.</p>
@@ -517,5 +557,9 @@
   <script src="{{ url_for('static', filename='exposure_enrichment_fields.js') }}"></script>
   <script src="{{ url_for('static', filename='custom_parquet_database.js') }}"></script>
   <script src="{{ url_for('static', filename='add_layer.js') }}"></script>
+  <script src="{{ url_for('static', filename='raster_intersection_api.js') }}"></script>
+  <script src="{{ url_for('static', filename='raster_intersection_layers.js') }}"></script>
+  <script src="{{ url_for('static', filename='raster_intersection_preview.js') }}"></script>
+  <script src="{{ url_for('static', filename='raster_intersections.js') }}"></script>
 </body>
 </html>

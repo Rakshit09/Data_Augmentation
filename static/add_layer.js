@@ -19,6 +19,7 @@
     point: "user-added-vector-point"
   };
   const rasterLayerId = "user-added-raster-layer";
+  const buildingOverlayLayerId = "view-filter-buildings-fill";
   const emptyCollection = { type: "FeatureCollection", features: [] };
 
   const state = {
@@ -29,6 +30,7 @@
     requestId: 0,
     popup: null
   };
+  publishLayerChange();
 
   if (!layerFile || !uploadButton || !fieldSelect || !colormapSelect || !transparencyInput) {
     return;
@@ -59,6 +61,7 @@
   fieldSelect.addEventListener("change", () => {
     if (!state.layer) return;
     state.layer.field = fieldSelect.value;
+    publishLayerChange();
     scheduleVectorRefresh({ immediate: true });
   });
   colormapSelect.addEventListener("change", () => {
@@ -108,8 +111,13 @@
       }
 
       controls.classList.remove("hidden");
+      publishLayerChange();
       fitToExtent(payload.extent);
-      setMessage(`Layer ready: ${payload.name || "uploaded layer"}.`, "success");
+      if (payload.kind === "raster") {
+        setMessage(`Raster ready: ${payload.name || "uploaded layer"}. Click buildings normally; Alt/Option-click the layer for its popup.`, "success");
+      } else {
+        setMessage(`Vector layer ready: ${payload.name || "uploaded layer"}. Click buildings normally; Alt/Option-click the layer for its popup.`, "success");
+      }
       if (typeof statusEl !== "undefined") statusEl.textContent = "Ready";
     } catch (error) {
       clearLayer({ silent: true });
@@ -138,7 +146,7 @@
           "fill-color": ["coalesce", ["get", "__color"], "#2563eb"],
           "fill-opacity": activeOpacity(0.78)
         }
-      });
+      }, layerBeforeId());
     }
 
     if (!map.getLayer(vectorLayerIds.outline)) {
@@ -152,7 +160,7 @@
           "line-width": 1.2,
           "line-opacity": activeOpacity(0.92)
         }
-      });
+      }, layerBeforeId());
     }
 
     if (!map.getLayer(vectorLayerIds.line)) {
@@ -166,7 +174,7 @@
           "line-width": 2.2,
           "line-opacity": activeOpacity(0.95)
         }
-      });
+      }, layerBeforeId());
     }
 
     if (!map.getLayer(vectorLayerIds.point)) {
@@ -189,7 +197,7 @@
           "circle-stroke-color": "#ffffff",
           "circle-stroke-width": 1
         }
-      });
+      }, layerBeforeId());
     }
 
     for (const layerId of Object.values(vectorLayerIds)) {
@@ -214,6 +222,23 @@
     colormapSelect.disabled = true;
     removeRasterLayer();
 
+    if (layer.render_mode === "image" && layer.image_url && layer.image_coordinates) {
+      map.addSource(rasterSourceId, {
+        type: "image",
+        url: layer.image_url,
+        coordinates: layer.image_coordinates
+      });
+      map.addLayer({
+        id: rasterLayerId,
+        type: "raster",
+        source: rasterSourceId,
+        paint: {
+          "raster-opacity": activeOpacity(1)
+        }
+      }, layerBeforeId());
+      return;
+    }
+
     map.addSource(rasterSourceId, {
       type: "raster",
       tiles: [layer.tile_url],
@@ -226,7 +251,7 @@
       paint: {
         "raster-opacity": activeOpacity(1)
       }
-    });
+    }, layerBeforeId());
   }
 
   function populateFieldOptions(fields, selectedField) {
@@ -353,8 +378,11 @@
   }
 
   function showFeaturePopup(event) {
+    const original = event.originalEvent || {};
+    if (!original.altKey) return;
     const feature = event.features && event.features[0];
     if (!feature || !state.layer) return;
+    event.preventDefault();
 
     const field = feature.properties.display_field || "Value";
     const value = feature.properties.display_value || "n/a";
@@ -368,6 +396,12 @@
       .setLngLat(event.lngLat)
       .setHTML(`<div class="add-layer-popup">${html}</div>`)
       .addTo(map);
+  }
+
+  function layerBeforeId() {
+    return typeof map !== "undefined" && map.getLayer(buildingOverlayLayerId)
+      ? buildingOverlayLayerId
+      : undefined;
   }
 
   function clearLayer({ silent = false } = {}) {
@@ -385,7 +419,15 @@
     clearVectorSource();
     removeRasterLayer();
     controls.classList.add("hidden");
+    publishLayerChange();
     if (!silent) setMessage("Layer cleared.");
+  }
+
+  function publishLayerChange() {
+    window.currentAddedMapLayer = state.layer ? { ...state.layer } : null;
+    window.dispatchEvent(new CustomEvent("added-map-layer-change", {
+      detail: window.currentAddedMapLayer
+    }));
   }
 
   function clearVectorSource() {

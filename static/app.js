@@ -70,6 +70,27 @@ let exposureMapRefreshRunning = false;
 let exposureMapRefreshQueued = false;
 let exposureMapRequestId = 0;
 
+function exposureUploadState() {
+  return {
+    upload_id: currentUploadId,
+    filename: currentUploadFilename,
+    lat_col: latColumn?.value || "",
+    lon_col: lonColumn?.value || ""
+  };
+}
+
+function publishExposureUploadState() {
+  window.rasterIntersectionExposureState = exposureUploadState();
+  window.dispatchEvent(new CustomEvent("exposure-upload-state-change", {
+    detail: window.rasterIntersectionExposureState
+  }));
+}
+
+window.getExposureUploadState = exposureUploadState;
+publishExposureUploadState();
+latColumn?.addEventListener("change", publishExposureUploadState);
+lonColumn?.addEventListener("change", publishExposureUploadState);
+
 const statsDownloadLink = ensureStatsDownloadLink();
 const emptyFeatureCollection = {
   type: "FeatureCollection",
@@ -631,6 +652,8 @@ map.on("move", () => {
 });
 
 map.on("click", async (event) => {
+  if (event.defaultPrevented) return;
+
   if (activeExposureMap && map.isStyleLoaded()) {
     const pointFeatures = map.queryRenderedFeatures(event.point, {
       layers: ["exposure-points-circle"]
@@ -989,6 +1012,7 @@ async function uploadSelectedCsv() {
     currentUploadFilename = payload.filename;
     setUploadedCsvName(payload.filename);
     populateColumnSelectors(payload.columns);
+    publishExposureUploadState();
     renderPreview(payload.columns, payload.rows);
     mappingControls.classList.remove("hidden");
     exposureMapControls?.classList.remove("hidden");

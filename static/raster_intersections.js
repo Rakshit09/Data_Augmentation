@@ -1,0 +1,164 @@
+(function () {
+  const controls = document.getElementById("rasterIntersectionControls");
+  const layerName = document.getElementById("rasterIntersectionLayerName");
+  const bandSelect = document.getElementById("rasterIntersectionBand");
+  const bandLabel = bandSelect?.closest("label");
+  const areaSelect = document.getElementById("rasterIntersectionArea");
+  const thresholdOperator = document.getElementById("rasterThresholdOperator");
+  const thresholdValue = document.getElementById("rasterThresholdValue");
+  const thresholdRow = document.querySelector(".raster-threshold-row");
+  const exposureButton = document.getElementById("intersectExposureRaster");
+  const databaseButton = document.getElementById("intersectDatabaseRaster");
+  const message = document.getElementById("rasterIntersectionMessage");
+
+  let activeLayer = window.currentAddedMapLayer || null;
+  let running = false;
+
+  if (!controls || !bandSelect || !exposureButton || !databaseButton) return;
+
+  exposureButton.addEventListener("click", () => runIntersection("exposure"));
+  databaseButton.addEventListener("click", () => runIntersection("database"));
+  window.addEventListener("added-map-layer-change", (event) => {
+    activeLayer = event.detail || null;
+    syncLayerState();
+  });
+  window.addEventListener("exposure-upload-state-change", syncLayerState);
+  syncLayerState();
+
+  function syncLayerState({ updateMessage = true } = {}) {
+    const isRaster = activeLayer && activeLayer.kind === "raster";
+    const isVector = activeLayer && activeLayer.kind === "vector";
+    const isIntersectable = isRaster || isVector;
+    controls.classList.toggle("hidden", !isIntersectable);
+    exposureButton.disabled = running || !isIntersectable || !hasExposureUpload();
+    databaseButton.disabled = running || !isIntersectable;
+    bandLabel?.classList.toggle("hidden", !isRaster);
+    thresholdRow?.classList.toggle("hidden", !isRaster);
+
+    if (!isIntersectable) {
+      layerName.textContent = "No layer selected";
+      bandSelect.innerHTML = "";
+      if (updateMessage) setMessage("Upload a GeoTIFF or vector layer to intersect exposure or building locations.");
+      return;
+    }
+
+    layerName.textContent = activeLayer.name || "Layer";
+    if (isVector) {
+      const field = activeLayer.field || activeLayer.default_field || "";
+      const fieldCopy = field ? `Using field: ${field}.` : "No field selected; feature id will be appended.";
+      if (updateMessage) setMessage(hasExposureUpload()
+        ? `${fieldCopy} Exposure and database intersections are ready.`
+        : `${fieldCopy} Upload an exposure CSV to enable exposure intersection.`, hasExposureUpload() ? "success" : "");
+      return;
+    }
+
+    const bands = activeLayer.bands && activeLayer.bands.length
+      ? activeLayer.bands
+      : [{ index: 1, name: "Band 1" }];
+    const previous = bandSelect.value || String(activeLayer.default_band || 1);
+    bandSelect.innerHTML = bands
+      .map((band) => `<option value="${escapeHtml(band.index)}">${escapeHtml(band.name || `Band ${band.index}`)}</option>`)
+      .join("");
+    bandSelect.value = bands.some((band) => String(band.index) === previous) ? previous : String(bands[0].index);
+    const exposureCopy = hasExposureUpload() ? "Exposure and database intersections are ready." : "Upload an exposure CSV to enable exposure intersection.";
+    if (updateMessage) setMessage(exposureCopy, hasExposureUpload() ? "success" : "");
+  }
+
+  async function runIntersection(sourceType) {
+    if (!activeLayer || !["raster", "vector"].includes(activeLayer.kind)) {
+      setMessage("Upload a GeoTIFF, GeoPackage, shapefile, or GeoJSON layer first.", "error");
+      return;
+    }
+
+    const exposureState = window.getExposureUploadState ? window.getExposureUploadState() : {};
+    if (sourceType === "exposure" && (!exposureState.upload_id || !exposureState.lat_col || !exposureState.lon_col)) {
+      setMessage("Upload an exposure CSV and choose latitude/longitude columns first.", "error");
+      return;
+    }
+
+    const isRaster = activeLayer.kind === "raster";
+    const threshold = thresholdValue.value.trim();
+    running = true;
+    syncLayerState({ updateMessage: false });
+    setMessage(sourceType === "exposure" ? "Intersecting exposure points..." : "Intersecting building centroids...");
+    if (typeof statusEl !== "undefined") statusEl.textContent = isRaster ? "Intersecting raster" : "Intersecting vector";
+
+    try {
+      const payload = {
+        layer_id: activeLayer.id,
+        area_mode: areaSelect.value || "visible",
+        bounds: currentBounds()
+      };
+      if (isRaster) {
+        payload.band_index = Number(bandSelect.value || 1);
+        payload.threshold = threshold === "" ? null : Number(threshold);
+        payload.threshold_operator = thresholdOperator.value || ">";
+      } else {
+        payload.field = activeLayer.field || activeLayer.default_field || "";
+      }
+      if (sourceType === "exposure") {
+        payload.upload_id = exposureState.upload_id;
+        payload.lat_col = exposureState.lat_col;
+        payload.lon_col = exposureState.lon_col;
+      }
+
+      let result;
+      if (isRaster) {
+        result = sourceType === "exposure"
+          ? await window.rasterIntersectionApi.intersectExposure(payload)
+          : await window.rasterIntersectionApi.intersectDatabase(payload);
+      } else {
+        result = sourceType === "exposure"
+          ? await window.rasterIntersectionApi.intersectVectorExposure(payload)
+          : await window.rasterIntersectionApi.intersectVectorDatabase(payload);
+      }
+
+      window.rasterIntersectionPreview.render(result);
+      window.rasterIntersectionLayers.render(result.map_features);
+      setMessage(`Done: ${formatInteger(result.summary?.matched_count)} matched locations.`, "success");
+      if (typeof statusEl !== "undefined") statusEl.textContent = "Done";
+    } catch (error) {
+      setMessage(error.message, "error");
+      if (typeof statusEl !== "undefined") statusEl.textContent = "Error";
+    } finally {
+      running = false;
+      syncLayerState({ updateMessage: false });
+    }
+  }
+
+  function currentBounds() {
+    if (typeof map === "undefined") return activeLayer.extent || {};
+    const bounds = map.getBounds();
+    return {
+      min_lon: bounds.getWest(),
+      min_lat: bounds.getSouth(),
+      max_lon: bounds.getEast(),
+      max_lat: bounds.getNorth()
+    };
+  }
+
+  function hasExposureUpload() {
+    const state = window.getExposureUploadState ? window.getExposureUploadState() : window.rasterIntersectionExposureState;
+    return Boolean(state && state.upload_id && state.lat_col && state.lon_col);
+  }
+
+  function setMessage(text, type = "") {
+    if (!message) return;
+    message.textContent = text || "";
+    message.classList.toggle("error", type === "error");
+    message.classList.toggle("success", type === "success");
+  }
+
+  function formatInteger(value) {
+    return Number(value || 0).toLocaleString();
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+})();

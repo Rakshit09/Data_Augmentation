@@ -20,6 +20,7 @@ from werkzeug.utils import secure_filename
 
 VECTOR_EXTENSIONS = {".gpkg", ".shp", ".zip", ".geojson", ".json"}
 RASTER_EXTENSIONS = {".tif", ".tiff"}
+RASTER_PREVIEW_MAX_SIZE = int(os.environ.get("ADD_LAYER_RASTER_PREVIEW_MAX_SIZE", "4096"))
 MAX_VECTOR_FEATURES = int(os.environ.get("ADD_LAYER_MAX_VECTOR_FEATURES", "7000"))
 MAX_LAYER_UPLOAD_BYTES = int(os.environ.get("ADD_LAYER_MAX_UPLOAD_BYTES", str(2 * 1024 ** 3)))
 MAX_EXTRACTED_FILES = 48
@@ -58,11 +59,19 @@ COLOR_MAPS = {
     "categorical": ["#2563eb", "#16a34a", "#dc2626", "#9333ea", "#ea580c", "#0891b2", "#be123c", "#4d7c0f"],
 }
 
+LAYER_REGISTRY: Dict[str, Dict[str, Any]] = {}
+LAYER_REGISTRY_LOCK = Lock()
+
+
+def get_uploaded_layer(layer_id: str) -> Optional[Dict[str, Any]]:
+    if not layer_id:
+        return None
+    with LAYER_REGISTRY_LOCK:
+        layer = LAYER_REGISTRY.get(layer_id)
+        return dict(layer) if layer else None
+
 
 def register_layer_upload_routes(app: Flask) -> None:
-    layers: Dict[str, Dict[str, Any]] = {}
-    layers_lock = Lock()
-
     @app.route("/api/layers/upload", methods=["POST"])
     def upload_layer():
         uploaded_file = request.files.get("file")
@@ -98,15 +107,15 @@ def register_layer_upload_routes(app: Flask) -> None:
             shutil.rmtree(work_dir, ignore_errors=True)
             return jsonify({"error": f"Could not prepare map layer: {exc}"}), 500
 
-        with layers_lock:
-            layers[layer_id] = layer
+        with LAYER_REGISTRY_LOCK:
+            LAYER_REGISTRY[layer_id] = layer
 
         return jsonify(_public_layer_metadata(layer))
 
     @app.route("/api/layers/<layer_id>/features")
     def layer_features(layer_id: str):
-        with layers_lock:
-            layer = layers.get(layer_id)
+        with LAYER_REGISTRY_LOCK:
+            layer = LAYER_REGISTRY.get(layer_id)
 
         if layer is None:
             return jsonify({"error": "Layer was not found. Upload it again."}), 404
@@ -150,8 +159,8 @@ def register_layer_upload_routes(app: Flask) -> None:
 
     @app.route("/api/layers/<layer_id>/tiles/<int:z>/<int:x>/<int:y>.png")
     def raster_tile(layer_id: str, z: int, x: int, y: int):
-        with layers_lock:
-            layer = layers.get(layer_id)
+        with LAYER_REGISTRY_LOCK:
+            layer = LAYER_REGISTRY.get(layer_id)
 
         if layer is None:
             return jsonify({"error": "Layer was not found. Upload it again."}), 404
@@ -163,6 +172,21 @@ def register_layer_upload_routes(app: Flask) -> None:
         if not tile_path.is_file():
             return ("", 204)
         return send_from_directory(tile_path.parent, tile_path.name)
+
+    @app.route("/api/layers/<layer_id>/preview.png")
+    def raster_preview(layer_id: str):
+        with LAYER_REGISTRY_LOCK:
+            layer = LAYER_REGISTRY.get(layer_id)
+
+        if layer is None:
+            return jsonify({"error": "Layer was not found. Upload it again."}), 404
+        if layer.get("kind") != "raster":
+            return jsonify({"error": "Preview is only available for raster layers."}), 400
+
+        preview_path = Path(str(layer.get("preview_path") or ""))
+        if not preview_path.is_file():
+            return jsonify({"error": "Raster preview was not found. Upload it again."}), 404
+        return send_from_directory(preview_path.parent, preview_path.name)
 
 
 def _runtime_dir(name: str) -> Path:
@@ -618,28 +642,24 @@ def _prepare_raster_layer(layer_id: str, original_name: str, upload_path: Path, 
     normalized_path = _normalize_raster_for_tiling(upload_path, work_dir, gdal_tools)
     info = _run_json_command([gdal_tools["gdalinfo"], "-json", str(normalized_path)], env=gdal_tools["env"])
     extent = _raster_extent(info)
-    tile_dir = work_dir / "tiles"
-    tile_dir.mkdir(parents=True, exist_ok=True)
-    _run_command([
-        gdal_tools["gdal2tiles"],
-        "--xyz",
-        "-w",
-        "none",
-        "-r",
-        "bilinear",
-        "-z",
-        "0-14",
-        str(normalized_path),
-        str(tile_dir),
-    ], env=gdal_tools["env"], label="gdal2tiles")
+    if not extent:
+        raise ValueError("This raster does not expose a usable WGS84 extent.")
+    preview_path = _prepare_raster_preview_image(normalized_path, info, work_dir, gdal_tools)
 
     return {
         "id": layer_id,
         "kind": "raster",
         "name": Path(original_name or upload_path.name).name,
-        "tile_url": f"/api/layers/{layer_id}/tiles/{{z}}/{{x}}/{{y}}.png",
-        "tile_dir": str(tile_dir),
+        "render_mode": "image",
+        "image_url": f"/api/layers/{layer_id}/preview.png",
+        "image_coordinates": _image_coordinates(extent),
+        "raster_path": str(normalized_path),
+        "preview_path": str(preview_path),
+        "source_upload_path": str(upload_path),
         "extent": extent,
+        "crs": _raster_crs_label(info),
+        "bands": _raster_bands(info),
+        "default_band": 1,
         "fields": [],
         "default_field": "",
         "created_at": time.time(),
@@ -673,6 +693,68 @@ def _normalize_raster_for_tiling(upload_path: Path, work_dir: Path, gdal_tools: 
         str(normalized_path),
     ], env=gdal_tools["env"], label="gdal_translate")
     return normalized_path
+
+
+def _prepare_raster_preview_image(
+    raster_path: Path,
+    info: Dict[str, Any],
+    work_dir: Path,
+    gdal_tools: Dict[str, Any],
+) -> Path:
+    display_tif = work_dir / f"{raster_path.stem}_display_byte.tif"
+    preview_png = work_dir / "preview.png"
+    size = info.get("size") or []
+    width = int(size[0] or RASTER_PREVIEW_MAX_SIZE) if len(size) >= 1 else RASTER_PREVIEW_MAX_SIZE
+    height = int(size[1] or RASTER_PREVIEW_MAX_SIZE) if len(size) >= 2 else RASTER_PREVIEW_MAX_SIZE
+    scale = min(1.0, RASTER_PREVIEW_MAX_SIZE / max(1, width), RASTER_PREVIEW_MAX_SIZE / max(1, height))
+    out_width = max(1, int(width * scale))
+    out_height = max(1, int(height * scale))
+
+    command = [
+        gdal_tools["gdal_translate"],
+        "-of",
+        "GTiff",
+        "-ot",
+        "Byte",
+        "-scale",
+        "-outsize",
+        str(out_width),
+        str(out_height),
+        "-co",
+        "TILED=YES",
+        "-co",
+        "COMPRESS=DEFLATE",
+    ]
+    nodata = _first_band_nodata(info)
+    if nodata is not None:
+        command.extend(["-a_nodata", "0"])
+    command.extend([str(raster_path), str(display_tif)])
+    _run_command(command, env=gdal_tools["env"], label="gdal_translate display raster")
+
+    _run_command([
+        gdal_tools["gdal_translate"],
+        "-of",
+        "PNG",
+        str(display_tif),
+        str(preview_png),
+    ], env=gdal_tools["env"], label="gdal_translate raster preview")
+    return preview_png
+
+
+def _image_coordinates(extent: Dict[str, float]) -> List[List[float]]:
+    return [
+        [float(extent["min_lon"]), float(extent["max_lat"])],
+        [float(extent["max_lon"]), float(extent["max_lat"])],
+        [float(extent["max_lon"]), float(extent["min_lat"])],
+        [float(extent["min_lon"]), float(extent["min_lat"])],
+    ]
+
+
+def _first_band_nodata(info: Dict[str, Any]) -> Optional[Any]:
+    for band in info.get("bands") or []:
+        if band.get("noDataValue") is not None:
+            return band.get("noDataValue")
+    return None
 
 
 def _has_real_georeference(info: Dict[str, Any]) -> bool:
@@ -864,9 +946,37 @@ def _raster_extent(info: Dict[str, Any]) -> Optional[Dict[str, float]]:
     }
 
 
+def _raster_crs_label(info: Dict[str, Any]) -> str:
+    coordinate_system = info.get("coordinateSystem") or {}
+    wkt = str(coordinate_system.get("wkt") or "")
+    authority = coordinate_system.get("dataAxisToSRSAxisMapping")
+    if "EPSG" in wkt:
+        for token in wkt.replace("[", ",").replace("]", ",").replace('"', "").split(","):
+            cleaned = token.strip()
+            if cleaned.isdigit():
+                return f"EPSG:{cleaned}"
+    if authority:
+        return "projected"
+    return "unknown"
+
+
+def _raster_bands(info: Dict[str, Any]) -> List[Dict[str, Any]]:
+    bands = []
+    for band in info.get("bands") or []:
+        band_number = int(band.get("band") or len(bands) + 1)
+        description = str(band.get("description") or "").strip()
+        bands.append({
+            "index": band_number,
+            "name": description or f"Band {band_number}",
+            "type": str(band.get("type") or ""),
+            "nodata": band.get("noDataValue"),
+        })
+    return bands or [{"index": 1, "name": "Band 1", "type": "", "nodata": None}]
+
+
 def _public_layer_metadata(layer: Dict[str, Any]) -> Dict[str, Any]:
     return {
         key: value
         for key, value in layer.items()
-        if key not in {"cache_path", "tile_dir"}
+        if key not in {"cache_path", "tile_dir", "raster_path", "preview_path", "source_upload_path"}
     }

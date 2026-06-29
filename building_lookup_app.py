@@ -35,6 +35,7 @@ from country_boundary_catalog import DEFAULT_COUNTRY_BOUNDARY_CATALOG, list_cata
 from custom_parquet_database import register_custom_parquet_routes
 from layer_upload_routes import register_layer_upload_routes
 from obm_country_to_parquet import ETLConfig, OpenBuildingMapCountryETL
+from raster_intersections import register_raster_intersection_routes
 
 
 DEFAULT_PARQUET = "etl_output/buildings_de_cleaned.parquet"
@@ -1187,6 +1188,13 @@ def create_app(
                 _f.unlink(missing_ok=True)
     register_custom_parquet_routes(app)
     register_layer_upload_routes(app)
+    register_raster_intersection_routes(
+        app,
+        find_upload=find_upload,
+        prepare_exposure_map_cache=prepare_exposure_map_cache,
+        open_db=open_db,
+        convert_excel_to_csv=convert_excel_to_csv,
+    )
 
     def set_job(job_id: str, **updates: Any) -> None:
         with jobs_lock:
