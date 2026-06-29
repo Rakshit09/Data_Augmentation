@@ -4,6 +4,7 @@
   const bandSelect = document.getElementById("rasterIntersectionBand");
   const bandLabel = bandSelect?.closest("label");
   const areaSelect = document.getElementById("rasterIntersectionArea");
+  const siFieldSelect = document.getElementById("rasterIntersectionSiField");
   const thresholdOperator = document.getElementById("rasterThresholdOperator");
   const thresholdValue = document.getElementById("rasterThresholdValue");
   const thresholdRow = document.querySelector(".raster-threshold-row");
@@ -14,7 +15,7 @@
   let activeLayer = window.currentAddedMapLayer || null;
   let running = false;
 
-  if (!controls || !bandSelect || !exposureButton || !databaseButton) return;
+  if (!controls || !bandSelect || !siFieldSelect || !exposureButton || !databaseButton) return;
 
   exposureButton.addEventListener("click", () => runIntersection("exposure"));
   databaseButton.addEventListener("click", () => runIntersection("database"));
@@ -29,11 +30,13 @@
     const isRaster = activeLayer && activeLayer.kind === "raster";
     const isVector = activeLayer && activeLayer.kind === "vector";
     const isIntersectable = isRaster || isVector;
+    const exposureState = window.getExposureUploadState ? window.getExposureUploadState() : {};
     controls.classList.toggle("hidden", !isIntersectable);
     exposureButton.disabled = running || !isIntersectable || !hasExposureUpload();
     databaseButton.disabled = running || !isIntersectable;
     bandLabel?.classList.toggle("hidden", !isRaster);
     thresholdRow?.classList.toggle("hidden", !isRaster);
+    syncSiFieldOptions(Array.isArray(exposureState.columns) ? exposureState.columns : []);
 
     if (!isIntersectable) {
       layerName.textContent = "No layer selected";
@@ -100,6 +103,7 @@
         payload.upload_id = exposureState.upload_id;
         payload.lat_col = exposureState.lat_col;
         payload.lon_col = exposureState.lon_col;
+        payload.si_field = siFieldSelect.value || "";
       }
 
       let result;
@@ -140,6 +144,17 @@
   function hasExposureUpload() {
     const state = window.getExposureUploadState ? window.getExposureUploadState() : window.rasterIntersectionExposureState;
     return Boolean(state && state.upload_id && state.lat_col && state.lon_col);
+  }
+
+  function syncSiFieldOptions(columns) {
+    const previous = siFieldSelect.value || "";
+    const options = [
+      '<option value="">Auto-detect</option>',
+      ...columns.map((column) => `<option value="${escapeHtml(column)}">${escapeHtml(column)}</option>`)
+    ];
+    siFieldSelect.innerHTML = options.join("");
+    siFieldSelect.value = columns.includes(previous) ? previous : "";
+    siFieldSelect.disabled = !columns.length;
   }
 
   function setMessage(text, type = "") {

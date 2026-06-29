@@ -60,13 +60,14 @@ def build_summary(
     candidate_count: int,
     threshold: Optional[float],
     threshold_operator: str,
+    si_field: Optional[str],
     elapsed_seconds: float,
     raster_band: int,
     bounds: Dict[str, float],
 ) -> Dict[str, Any]:
     values = [_float_or_none(row.get("raster_value")) for row in rows]
     values = [value for value in values if value is not None]
-    si_field = _find_si_field(rows, source_type)
+    si_field = _find_si_field(rows, source_type, si_field)
 
     total_si = None
     si_matching_threshold = None
@@ -115,12 +116,13 @@ def build_vector_summary(
     source_type: str,
     candidate_count: int,
     field: str,
+    si_field: Optional[str],
     elapsed_seconds: float,
     bounds: Dict[str, float],
 ) -> Dict[str, Any]:
     numeric_values = [_float_or_none(row.get("raster_value")) for row in rows]
     numeric_values = [value for value in numeric_values if value is not None]
-    si_field = _find_si_field(rows, source_type)
+    si_field = _find_si_field(rows, source_type, si_field)
     total_si = None
     if si_field:
         si_values = [_float_or_none(row.get(si_field)) for row in rows]
@@ -232,10 +234,15 @@ def _hex_to_rgb(value: str) -> List[int]:
     return [int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)]
 
 
-def _find_si_field(rows: List[Dict[str, Any]], source_type: str) -> Optional[str]:
+def _find_si_field(rows: List[Dict[str, Any]], source_type: str, requested_field: Optional[str] = None) -> Optional[str]:
     if not rows:
         return None
     fields = set(rows[0].keys())
+    if requested_field:
+        normalized_requested = requested_field.casefold()
+        for field in fields:
+            if field.casefold() == normalized_requested:
+                return field
     candidates = EXPOSURE_SI_CANDIDATES if "exposure" in source_type else DATABASE_SI_CANDIDATES
     normalized = {field.casefold(): field for field in fields}
     for candidate in candidates:

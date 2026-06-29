@@ -59,6 +59,7 @@ const criticalNoteClose = document.getElementById("criticalNoteClose");
 
 let currentUploadId = null;
 let currentUploadFilename = null;
+let currentUploadColumns = [];
 let currentStatsDownloadUrl = null;
 let availableDbFiles = [];
 let selectedBuilding = null;
@@ -74,6 +75,7 @@ function exposureUploadState() {
   return {
     upload_id: currentUploadId,
     filename: currentUploadFilename,
+    columns: [...currentUploadColumns],
     lat_col: latColumn?.value || "",
     lon_col: lonColumn?.value || ""
   };
@@ -1010,6 +1012,7 @@ async function uploadSelectedCsv() {
 
     currentUploadId = payload.upload_id;
     currentUploadFilename = payload.filename;
+    currentUploadColumns = Array.isArray(payload.columns) ? [...payload.columns] : [];
     setUploadedCsvName(payload.filename);
     populateColumnSelectors(payload.columns);
     publishExposureUploadState();
@@ -1022,6 +1025,7 @@ async function uploadSelectedCsv() {
     statusEl.textContent = "Ready";
   } catch (error) {
     statusEl.textContent = "Error";
+    currentUploadColumns = [];
     setUploadSummary(error.message);
     previewTable.classList.add("hidden");
     exposureMapControls?.classList.add("hidden");

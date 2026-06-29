@@ -40,6 +40,7 @@ def register_raster_intersection_routes(
             upload_id = str(payload.get("upload_id") or "").strip()
             lat_col = str(payload.get("lat_col") or "").strip()
             lon_col = str(payload.get("lon_col") or "").strip()
+            si_field = str(payload.get("si_field") or "").strip()
             if not upload_id or not lat_col or not lon_col:
                 raise ValueError("Upload an exposure CSV and choose latitude/longitude columns first.")
 
@@ -65,6 +66,7 @@ def register_raster_intersection_routes(
                 candidate_count=candidate_count,
                 threshold=threshold,
                 threshold_operator=threshold_operator,
+                si_field=si_field or None,
                 elapsed_seconds=time.perf_counter() - started_at,
                 raster_band=band_index,
                 bounds=bounds,
@@ -132,6 +134,7 @@ def register_raster_intersection_routes(
             upload_id = str(payload.get("upload_id") or "").strip()
             lat_col = str(payload.get("lat_col") or "").strip()
             lon_col = str(payload.get("lon_col") or "").strip()
+            si_field = str(payload.get("si_field") or "").strip()
             if not upload_id or not lat_col or not lon_col:
                 raise ValueError("Upload an exposure CSV and choose latitude/longitude columns first.")
 
@@ -155,6 +158,7 @@ def register_raster_intersection_routes(
                 source_type="vector_exposure",
                 candidate_count=candidate_count,
                 field=field,
+                si_field=si_field or None,
                 elapsed_seconds=time.perf_counter() - started_at,
                 bounds=bounds,
             )
