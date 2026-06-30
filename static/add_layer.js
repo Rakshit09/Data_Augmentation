@@ -239,10 +239,16 @@
       return;
     }
 
+    const bounds = layer.extent
+      ? [layer.extent.min_lon, layer.extent.min_lat, layer.extent.max_lon, layer.extent.max_lat]
+      : undefined;
     map.addSource(rasterSourceId, {
       type: "raster",
       tiles: [layer.tile_url],
-      tileSize: 256
+      tileSize: 256,
+      minzoom: layer.min_zoom || 0,
+      maxzoom: layer.max_zoom || 18,
+      bounds: bounds
     });
     map.addLayer({
       id: rasterLayerId,

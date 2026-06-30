@@ -481,41 +481,48 @@ def _query_vector_features(
     selected_field = field if field in fields else ""
     selected_field_sql = _sql_identifier(selected_field) if selected_field else "NULL"
     tolerance = _simplify_tolerance(min_lon, min_lat, max_lon, max_lat, width, height, zoom)
+    min_feature_size = tolerance * 3
     con = duckdb.connect(str(layer["cache_path"]), read_only=True)
     try:
         con.execute("LOAD spatial;")
+        count_row = con.execute("""
+            SELECT COUNT(*) FROM features
+            WHERE bbox_xmax >= ?
+                AND bbox_xmin <= ?
+                AND bbox_ymax >= ?
+                AND bbox_ymin <= ?
+                AND (bbox_xmax - bbox_xmin) + (bbox_ymax - bbox_ymin) >= ?
+        """, [min_lon, max_lon, min_lat, max_lat, min_feature_size]).fetchone()
+        visible_count = int(count_row[0]) if count_row else 0
+
         rows = con.execute(f"""
-            WITH bounded AS (
+            SELECT
+                feature_id,
+                geometry_type,
+                display_value,
+                numeric_value,
+                ST_AsGeoJSON(
+                    CASE
+                        WHEN ? > 0 THEN ST_Simplify(geom, ?)
+                        ELSE geom
+                    END
+                ) AS geometry
+            FROM (
                 SELECT
                     feature_id,
                     geometry_type,
                     CAST({selected_field_sql} AS VARCHAR) AS display_value,
                     TRY_CAST({selected_field_sql} AS DOUBLE) AS numeric_value,
-                    CASE
-                        WHEN ? > 0 THEN ST_Simplify(geom, ?)
-                        ELSE geom
-                    END AS draw_geom
+                    geom
                 FROM features
                 WHERE bbox_xmax >= ?
                     AND bbox_xmin <= ?
                     AND bbox_ymax >= ?
                     AND bbox_ymin <= ?
-            ),
-            ranked AS (
-                SELECT
-                    feature_id,
-                    geometry_type,
-                    display_value,
-                    numeric_value,
-                    ST_AsGeoJSON(draw_geom) AS geometry,
-                    COUNT(*) OVER () AS visible_count
-                FROM bounded
-                WHERE draw_geom IS NOT NULL
-            )
-            SELECT feature_id, geometry_type, display_value, numeric_value, geometry, visible_count
-            FROM ranked
-            ORDER BY feature_id
-            LIMIT ?;
+                    AND (bbox_xmax - bbox_xmin) + (bbox_ymax - bbox_ymin) >= ?
+                ORDER BY feature_id
+                LIMIT ?
+            ) sub
         """, [
             tolerance,
             tolerance,
@@ -523,15 +530,15 @@ def _query_vector_features(
             max_lon,
             min_lat,
             max_lat,
+            min_feature_size,
             MAX_VECTOR_FEATURES,
         ]).fetchall()
     finally:
         con.close()
 
-    visible_count = int(rows[0][5]) if rows else 0
     summary = fields.get(selected_field, {}).get("summary", {}) if selected_field else {}
     features = []
-    for feature_id, geometry_type, display_value, numeric_value, geometry_json, _visible_count in rows:
+    for feature_id, geometry_type, display_value, numeric_value, geometry_json in rows:
         geometry = json.loads(str(geometry_json)) if geometry_json else None
         if not geometry:
             continue
@@ -584,7 +591,7 @@ def _simplify_tolerance(
     tolerance = max(lon_per_pixel, lat_per_pixel) * 0.65
     if zoom >= 16:
         return 0.0
-    return max(0.0, min(tolerance, 0.01))
+    return max(0.0, tolerance)
 
 
 def _feature_color(display_value: Any, numeric_value: Any, summary: Dict[str, Any], colormap: str) -> str:
@@ -644,15 +651,17 @@ def _prepare_raster_layer(layer_id: str, original_name: str, upload_path: Path, 
     extent = _raster_extent(info)
     if not extent:
         raise ValueError("This raster does not expose a usable WGS84 extent.")
+    tile_dir, min_zoom, max_zoom = _generate_raster_tiles(normalized_path, info, work_dir, gdal_tools)
     preview_path = _prepare_raster_preview_image(normalized_path, info, work_dir, gdal_tools)
 
     return {
         "id": layer_id,
         "kind": "raster",
         "name": Path(original_name or upload_path.name).name,
-        "render_mode": "image",
-        "image_url": f"/api/layers/{layer_id}/preview.png",
-        "image_coordinates": _image_coordinates(extent),
+        "tile_url": f"/api/layers/{layer_id}/tiles/{{z}}/{{x}}/{{y}}.png",
+        "tile_dir": str(tile_dir),
+        "min_zoom": min_zoom,
+        "max_zoom": max_zoom,
         "raster_path": str(normalized_path),
         "preview_path": str(preview_path),
         "source_upload_path": str(upload_path),
@@ -664,6 +673,45 @@ def _prepare_raster_layer(layer_id: str, original_name: str, upload_path: Path, 
         "default_field": "",
         "created_at": time.time(),
     }
+
+
+def _generate_raster_tiles(
+    raster_path: Path, info: Dict[str, Any], work_dir: Path, gdal_tools: Dict[str, Any]
+) -> Tuple[Path, int, int]:
+    """Create a Byte-scaled TIF and generate XYZ map tiles via gdal2tiles."""
+    display_tif = work_dir / "display_tiles.tif"
+    tile_dir = work_dir / "tiles"
+
+    command = [
+        gdal_tools["gdal_translate"],
+        "-of", "GTiff",
+        "-ot", "Byte",
+        "-scale",
+        "-co", "TILED=YES",
+        "-co", "COMPRESS=DEFLATE",
+    ]
+    nodata = _first_band_nodata(info)
+    if nodata is not None:
+        command.extend(["-a_nodata", "0"])
+    command.extend([str(raster_path), str(display_tif)])
+    _run_command(command, env=gdal_tools["env"], label="gdal_translate tile source")
+
+    _run_command([
+        gdal_tools["gdal2tiles"],
+        "--xyz",
+        "-w", "none",
+        "-r", "average",
+        str(display_tif),
+        str(tile_dir),
+    ], env=gdal_tools["env"], label="gdal2tiles")
+
+    zoom_levels = sorted(
+        int(d.name) for d in tile_dir.iterdir()
+        if d.is_dir() and d.name.isdigit()
+    )
+    min_zoom = zoom_levels[0] if zoom_levels else 0
+    max_zoom = zoom_levels[-1] if zoom_levels else 18
+    return tile_dir, min_zoom, max_zoom
 
 
 def _normalize_raster_for_tiling(upload_path: Path, work_dir: Path, gdal_tools: Dict[str, Any]) -> Path:
