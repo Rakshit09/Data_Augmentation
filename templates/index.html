@@ -92,16 +92,17 @@
         <form id="searchForm" class="search">
           <label class="search-field" for="searchInput">
             <span class="field-label-row">
-              <span>Search address</span>
-              <span class="field-tip" tabindex="0" data-tooltip="Search by address, place name, or landmark. Choose a result to zoom the map, then click a building footprint to inspect it.">i</span>
+              <span>Search address or lat/lon</span>
+              <span class="field-tip" tabindex="0" data-tooltip="Search by address, place name, landmark, or coordinates. Examples: 52.5200, 13.4050 or lon 13.4050 lat 52.5200. Choose a result to zoom the map, then click a building footprint to inspect it.">i</span>
             </span>
             <input
               id="searchInput"
               type="search"
               autocomplete="off"
-              placeholder="Search address"
-              aria-label="Search address"
+              placeholder="Address or 52.5200, 13.4050"
+              aria-label="Search address or latitude longitude"
             >
+            <span class="search-hint">Coordinates: lat, lon or lon 13.4050 lat 52.5200</span>
           </label>
           <button type="submit">Search</button>
         </form>
@@ -558,6 +559,7 @@
   </main>
 
   <script src="https://unpkg.com/maplibre-gl@5.22.0/dist/maplibre-gl.js"></script>
+  <script src="{{ url_for('static', filename='filter_view_all.js') }}"></script>
   <script src="{{ url_for('static', filename='app.js') }}"></script>
   <script src="{{ url_for('static', filename='building_lookup_fields.js') }}"></script>
   <script src="{{ url_for('static', filename='exposure_enrichment_fields.js') }}"></script>

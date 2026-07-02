@@ -731,8 +731,15 @@ searchForm.addEventListener("submit", async (event) => {
   dismissCriticalNote();
 
   const query = searchInput.value.trim();
+  const coordinateResult = parseCoordinateSearch(query);
+  if (coordinateResult) {
+    hideSearchResults();
+    await goToSearchResult(coordinateResult, { lookupBuilding: true });
+    return;
+  }
+
   if (query.length < 3) {
-    renderSearchMessage("Enter at least 3 characters.");
+    renderSearchMessage("Enter at least 3 characters, or coordinates like 52.5200, 13.4050.");
     return;
   }
 
@@ -773,13 +780,91 @@ function renderSearchResults(results) {
     button.addEventListener("click", () => {
       const result = results[Number(button.dataset.index)];
       hideSearchResults();
-      map.flyTo({
-        center: [result.lon, result.lat],
-        zoom: 18,
-        speed: 1.4
-      });
+      goToSearchResult(result);
     });
   });
+}
+
+async function goToSearchResult(result, { lookupBuilding = false } = {}) {
+  const lon = Number(result.lon);
+  const lat = Number(result.lat);
+  if (!Number.isFinite(lon) || !Number.isFinite(lat)) {
+    renderSearchMessage("Search result does not contain valid coordinates.");
+    return;
+  }
+
+  map.flyTo({
+    center: [lon, lat],
+    zoom: Math.max(map.getZoom(), 18),
+    speed: 1.4
+  });
+
+  if (!lookupBuilding) return;
+  statusEl.textContent = "Searching";
+  try {
+    const response = await fetch(`api/building-at?lon=${encodeURIComponent(lon)}&lat=${encodeURIComponent(lat)}`);
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.hint || payload.error || "Lookup failed");
+    }
+    if (!payload.building) {
+      clearSelection();
+      emptyEl.innerHTML = `<p>No building found at ${escapeHtml(formatCoordinateLabel(lat, lon))}.</p>`;
+      statusEl.textContent = "No match";
+      return;
+    }
+    renderBuilding(payload);
+    statusEl.textContent = "Match found";
+  } catch (error) {
+    renderSearchMessage(error.message);
+    statusEl.textContent = "Error";
+  }
+}
+
+function parseCoordinateSearch(query) {
+  if (!query) return null;
+  const lower = query.toLowerCase();
+  const numbers = [...query.matchAll(/[+-]?\d+(?:\.\d+)?/g)].map((match) => Number(match[0]));
+  if (numbers.length < 2 || !numbers.slice(0, 2).every(Number.isFinite)) return null;
+
+  let lat;
+  let lon;
+  const hasLatLabel = /\b(lat|latitude|y)\b/.test(lower);
+  const hasLonLabel = /\b(lon|lng|long|longitude|x)\b/.test(lower);
+  if (hasLatLabel && hasLonLabel) {
+    lat = labelledCoordinate(lower, /\b(?:lat|latitude|y)\b\s*[:=]?\s*([+-]?\d+(?:\.\d+)?)/);
+    lon = labelledCoordinate(lower, /\b(?:lon|lng|long|longitude|x)\b\s*[:=]?\s*([+-]?\d+(?:\.\d+)?)/);
+  }
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    const first = numbers[0];
+    const second = numbers[1];
+    if (Math.abs(first) <= 90 && Math.abs(second) <= 180) {
+      lat = first;
+      lon = second;
+    }
+    if ((Math.abs(first) > 90 || /\b(lon|lng|long|longitude|x)\b/.test(lower.split(/[,\s]+/)[0] || "")) && Math.abs(first) <= 180 && Math.abs(second) <= 90) {
+      lon = first;
+      lat = second;
+    }
+  }
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+  return {
+    label: formatCoordinateLabel(lat, lon),
+    lat,
+    lon
+  };
+}
+
+function labelledCoordinate(text, pattern) {
+  const match = text.match(pattern);
+  return match ? Number(match[1]) : NaN;
+}
+
+function formatCoordinateLabel(lat, lon) {
+  return `${Number(lat).toFixed(6)}, ${Number(lon).toFixed(6)}`;
 }
 
 function renderSearchMessage(message) {
@@ -797,6 +882,10 @@ filterViewColumn?.addEventListener("change", async () => {
   await loadViewFilterValues(filterViewColumn.value);
 });
 
+filterViewValue?.addEventListener("change", () => {
+  updateFilterViewColorAvailability();
+});
+
 applyViewFilter?.addEventListener("click", async () => {
   dismissCriticalNote();
 
@@ -809,7 +898,12 @@ applyViewFilter?.addEventListener("click", async () => {
     return;
   }
 
-  activeViewFilter = { column, value, color };
+  activeViewFilter = {
+    column,
+    value,
+    color,
+    all: window.filterViewAll?.isAll(value) || false
+  };
   await refreshViewFilter();
 });
 
@@ -870,7 +964,7 @@ async function loadViewFilterValues(column) {
     }
 
     renderViewFilterValueOptions(payload.values || []);
-    setFilterViewMessage("Choose a value and color, then apply the filter.");
+    setFilterViewMessage("Choose one value, or ALL for a discrete colour legend.");
   } catch (error) {
     renderViewFilterValueOptions([]);
     setFilterViewMessage(error.message, "error");
@@ -882,9 +976,11 @@ function renderViewFilterValueOptions(values) {
 
   filterViewValue.innerHTML = [
     '<option value="">Select value</option>',
+    values.length ? `<option value="${window.filterViewAll?.allValue?.() || "__ALL__"}">ALL</option>` : "",
     ...values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`)
   ].join("");
   filterViewValue.disabled = values.length === 0;
+  updateFilterViewColorAvailability();
 }
 
 async function refreshViewFilter({ silent = false } = {}) {
@@ -916,11 +1012,22 @@ async function refreshViewFilter({ silent = false } = {}) {
       throw new Error(payload.error || "Could not load building footprints");
     }
 
-    setViewFilterLayerColor(activeViewFilter.color);
+    if (activeViewFilter.all) {
+      setViewFilterLayerColor(null);
+    } else {
+      setViewFilterLayerColor(activeViewFilter.color);
+    }
     map.getSource("view-filter-buildings")?.setData(payload);
 
     const matched = Number(payload.count || (payload.features || []).length || 0);
-    setFilterViewMessage(`${formatInteger(matched)} polygons matched in the current view.`, matched ? "success" : "");
+    if (activeViewFilter.all) {
+      window.filterViewAll?.renderLegend(payload, formatFieldLabel(activeViewFilter.column));
+      const clipped = payload.truncated ? " · zoom in for more" : "";
+      setFilterViewMessage(`${formatInteger(matched)} polygons drawn across all visible values${clipped}.`, matched ? "success" : "");
+    } else {
+      window.filterViewAll?.clearLegend();
+      setFilterViewMessage(`${formatInteger(matched)} polygons matched in the current view.`, matched ? "success" : "");
+    }
     if (!silent) {
       statusEl.textContent = "Ready";
     }
@@ -939,18 +1046,30 @@ function clearViewFilter(message = "", type = "") {
   activeViewFilter = null;
   viewFilterRequestId += 1;
   clearViewFilterLayer();
+  window.filterViewAll?.clearLegend();
   if (filterViewColumn) filterViewColumn.value = "";
   renderViewFilterValueOptions([]);
+  updateFilterViewColorAvailability();
   setFilterViewMessage(message, type);
 }
 
 function clearViewFilterLayer() {
   map.getSource("view-filter-buildings")?.setData(emptyFeatureCollection);
+  window.filterViewAll?.clearLegend();
 }
 
 function setViewFilterLayerColor(color) {
-  map.setPaintProperty("view-filter-buildings-fill", "fill-color", color);
-  map.setPaintProperty("view-filter-buildings-outline", "line-color", color);
+  const paintColor = color || ["coalesce", ["get", "__color"], "#64748b"];
+  map.setPaintProperty("view-filter-buildings-fill", "fill-color", paintColor);
+  map.setPaintProperty("view-filter-buildings-outline", "line-color", paintColor);
+}
+
+function updateFilterViewColorAvailability() {
+  if (!filterViewColor) return;
+  const disabled = window.filterViewAll?.isAll(filterViewValue?.value || "") || false;
+  filterViewColor.disabled = disabled;
+  filterViewColor.title = disabled ? "ALL mode uses automatic discrete colours." : "";
+  filterViewColor.closest("label")?.classList.toggle("disabled", disabled);
 }
 
 function setFilterViewMessage(message, type = "") {

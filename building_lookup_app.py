@@ -58,6 +58,29 @@ EXPOSURE_MAP_MAX_FEATURES = int(os.environ.get("EXPOSURE_MAP_MAX_FEATURES", "120
 EXPOSURE_MAP_CACHE_MAX_FILES = int(os.environ.get("EXPOSURE_MAP_CACHE_MAX_FILES", "3"))
 MAX_BUILDING_FILTER_VALUES = 500
 MAX_VIEW_FILTER_FEATURES = 5000
+FILTER_VIEW_ALL_VALUE = "__ALL__"
+FILTER_VIEW_PALETTE = [
+    "#1f77b4",
+    "#ff7f0e",
+    "#2ca02c",
+    "#d62728",
+    "#9467bd",
+    "#8c564b",
+    "#e377c2",
+    "#7f7f7f",
+    "#bcbd22",
+    "#17becf",
+    "#393b79",
+    "#637939",
+    "#8c6d31",
+    "#843c39",
+    "#7b4173",
+    "#3182bd",
+    "#31a354",
+    "#756bb1",
+    "#e6550d",
+    "#969696",
+]
 BUILDING_COLUMNS = [
     "building_id",
     "source",
@@ -1544,15 +1567,25 @@ def create_app(
 
         con = open_db(db_path, read_only=True)
         try:
-            feature_collection = lookup_buildings_in_view(
-                con,
-                min_lon=min_lon,
-                min_lat=min_lat,
-                max_lon=max_lon,
-                max_lat=max_lat,
-                column=column,
-                value=value,
-            )
+            if value == FILTER_VIEW_ALL_VALUE:
+                feature_collection = lookup_buildings_by_all_values_in_view(
+                    con,
+                    min_lon=min_lon,
+                    min_lat=min_lat,
+                    max_lon=max_lon,
+                    max_lat=max_lat,
+                    column=column,
+                )
+            else:
+                feature_collection = lookup_buildings_in_view(
+                    con,
+                    min_lon=min_lon,
+                    min_lat=min_lat,
+                    max_lon=max_lon,
+                    max_lat=max_lat,
+                    column=column,
+                    value=value,
+                )
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         finally:
@@ -3916,6 +3949,117 @@ def lookup_buildings_in_view(
         "features": features,
         "count": len(features),
     }
+
+
+def lookup_buildings_by_all_values_in_view(
+    con: duckdb.DuckDBPyConnection,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    column: str,
+) -> Dict[str, Any]:
+    available_columns = set(lookup_display_columns(con))
+    if column not in available_columns:
+        raise ValueError(f"Unknown lookup filter column: {column}")
+
+    column_sql = sql_identifier(column)
+    rows = con.execute(f"""
+        WITH visible AS (
+            SELECT
+                b.building_id,
+                CAST({column_sql} AS VARCHAR) AS filter_value,
+                ST_AsGeoJSON(b.geom) AS geometry
+            FROM buildings AS b
+            WHERE
+                b.bbox_xmax >= ?
+                AND b.bbox_xmin <= ?
+                AND b.bbox_ymax >= ?
+                AND b.bbox_ymin <= ?
+                AND {column_sql} IS NOT NULL
+                AND CAST({column_sql} AS VARCHAR) <> ''
+        ),
+        ranked AS (
+            SELECT
+                building_id,
+                filter_value,
+                geometry,
+                COUNT(*) OVER () AS visible_count
+            FROM visible
+        )
+        SELECT building_id, filter_value, geometry, visible_count
+        FROM ranked
+        ORDER BY building_id
+        LIMIT ?;
+    """, [min_lon, max_lon, min_lat, max_lat, MAX_VIEW_FILTER_FEATURES]).fetchall()
+
+    legend_rows = con.execute(f"""
+        SELECT
+            CAST({column_sql} AS VARCHAR) AS filter_value,
+            COUNT(*) AS value_count
+        FROM buildings AS b
+        WHERE
+            b.bbox_xmax >= ?
+            AND b.bbox_xmin <= ?
+            AND b.bbox_ymax >= ?
+            AND b.bbox_ymin <= ?
+            AND {column_sql} IS NOT NULL
+            AND CAST({column_sql} AS VARCHAR) <> ''
+        GROUP BY filter_value
+        ORDER BY value_count DESC, filter_value
+        LIMIT ?;
+    """, [min_lon, max_lon, min_lat, max_lat, MAX_BUILDING_FILTER_VALUES]).fetchall()
+
+    color_by_value = {
+        str(value): filter_palette_color(index)
+        for index, (value, _count) in enumerate(legend_rows)
+    }
+
+    features = []
+    visible_count = int(rows[0][3]) if rows else 0
+    for building_id, filter_value, geometry, _visible_count in rows:
+        if not geometry:
+            continue
+        value = str(filter_value)
+        color = color_by_value.get(value) or filter_value_color(value)
+        features.append({
+            "type": "Feature",
+            "geometry": json.loads(str(geometry)),
+            "properties": {
+                "building_id": building_id,
+                "filter_column": column,
+                "filter_value": value,
+                "__color": color,
+            },
+        })
+
+    legend = [
+        {
+            "value": str(value),
+            "count": int(count or 0),
+            "color": color_by_value.get(str(value)) or filter_value_color(str(value)),
+        }
+        for value, count in legend_rows
+    ]
+
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+        "count": len(features),
+        "visible_count": visible_count,
+        "truncated": visible_count > len(features),
+        "mode": "all",
+        "legend": legend,
+    }
+
+
+def filter_value_color(value: str) -> str:
+    digest = hashlib.sha1(str(value).encode("utf-8")).hexdigest()
+    return FILTER_VIEW_PALETTE[int(digest[:8], 16) % len(FILTER_VIEW_PALETTE)]
+
+
+def filter_palette_color(index: int) -> str:
+    return FILTER_VIEW_PALETTE[index % len(FILTER_VIEW_PALETTE)]
 
 
 def default_enrichment_fields(
