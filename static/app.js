@@ -342,6 +342,7 @@ const map = new maplibregl.Map({
   container: "map",
   style: {
     version: 8,
+    glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
     sources: Object.fromEntries(Object.entries(BASEMAPS).map(([id, basemap]) => [
       basemapSourceId(id),
       {
@@ -364,7 +365,7 @@ const map = new maplibregl.Map({
   },
   center: [10.45, 51.16],
   zoom: 5.4,
-  maxZoom: 20
+  maxZoom: 22
 });
 
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-left");
@@ -434,7 +435,7 @@ async function loadDataSources() {
     await window.exposureEnrichmentFields?.load();
     await loadViewFilterFields();
     clearViewFilter("Choose a column and value to color polygons in the current view.");
-    setDataSourceMessage("Choose a local DuckDB lookup database.", "success");
+    setDataSourceMessage("Choose a building lookup database.", "success");
   } catch (error) {
     setDataSourceMessage(error.message, "error");
   } finally {
@@ -616,6 +617,33 @@ map.on("load", () => {
     }
   });
 
+  map.addLayer({
+    id: "exposure-points-count",
+    type: "symbol",
+    source: "exposure-points",
+    minzoom: 9,
+    filter: [">", ["coalesce", ["get", "csv_count"], 1], 1],
+    layout: {
+      "text-field": ["coalesce", ["get", "csv_label"], ["to-string", ["get", "csv_count"]]],
+      "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+      "text-size": [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        9, 10,
+        14, 12,
+        18, 13
+      ],
+      "text-allow-overlap": false,
+      "text-ignore-placement": false
+    },
+    paint: {
+      "text-color": "#063f35",
+      "text-halo-color": "rgba(255, 255, 255, 0.92)",
+      "text-halo-width": 1.2
+    }
+  });
+
   map.addSource("selected-building", {
     type: "geojson",
     data: selectedSource
@@ -661,6 +689,7 @@ map.on("click", async (event) => {
       layers: ["exposure-points-circle"]
     });
     if (pointFeatures.length) {
+      await renderExposurePointDetails(pointFeatures[0]);
       return;
     }
   }
@@ -693,6 +722,76 @@ map.on("click", async (event) => {
     emptyEl.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
   }
 });
+
+async function renderExposurePointDetails(feature) {
+  if (!activeExposureMap) return;
+
+  const rowId = Number(feature?.properties?.row_id);
+  if (!Number.isFinite(rowId) || rowId < 1) return;
+
+  dismissCriticalNote();
+  hideSearchResults();
+  statusEl.textContent = "Loading CSV row";
+
+  const csvCount = Number(feature?.properties?.csv_count || 1);
+  const params = new URLSearchParams({
+    upload_id: activeExposureMap.upload_id,
+    lat_col: activeExposureMap.lat_col,
+    lon_col: activeExposureMap.lon_col,
+    row_id: String(rowId)
+  });
+
+  try {
+    const response = await fetch(`api/exposure/row?${params.toString()}`);
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Could not load CSV row");
+    }
+
+    renderExposureRow(payload, { csvCount });
+    statusEl.textContent = "CSV row";
+  } catch (error) {
+    selectedBuilding = null;
+    map.getSource("selected-building")?.setData(selectedSource);
+    emptyEl.classList.add("hidden");
+    detailsEl.classList.remove("hidden");
+    matchTypeEl.textContent = "Exposure point";
+    distanceEl.textContent = "";
+    buildingIdEl.textContent = `CSV row ${formatInteger(rowId)}`;
+    attributesEl.innerHTML = `<tr><td colspan="2">${escapeHtml(error.message)}</td></tr>`;
+    statusEl.textContent = "Error";
+  }
+}
+
+function renderExposureRow(payload, { csvCount = 1 } = {}) {
+  const row = payload.row || {};
+  const values = row.values || {};
+  selectedBuilding = null;
+  map.getSource("selected-building")?.setData(selectedSource);
+
+  emptyEl.classList.add("hidden");
+  detailsEl.classList.remove("hidden");
+
+  matchTypeEl.textContent = csvCount > 1
+    ? `Exposure cluster (${formatInteger(csvCount)})`
+    : "Exposure point";
+  const lat = Number(row.lat);
+  const lon = Number(row.lon);
+  distanceEl.textContent = Number.isFinite(lat) && Number.isFinite(lon)
+    ? formatCoordinateLabel(lat, lon)
+    : "";
+  buildingIdEl.textContent = `CSV row ${formatInteger(Number(row.row_id || 0))}`;
+
+  const rows = Object.entries(values).map(([field, value]) => `
+    <tr>
+      <th scope="row">${escapeHtml(field)}</th>
+      <td>${escapeHtml(value == null ? "" : String(value))}</td>
+    </tr>
+  `);
+  attributesEl.innerHTML = rows.length
+    ? rows.join("")
+    : '<tr><td colspan="2">No CSV fields found for this row.</td></tr>';
+}
 
 function renderBuilding(payload) {
   const building = payload.building;
@@ -1273,7 +1372,7 @@ function requestExposurePointRefresh({ immediate = false } = {}) {
   exposureMapRefreshTimer = window.setTimeout(() => {
     exposureMapRefreshTimer = null;
     refreshExposurePoints({ silent: true });
-  }, 180);
+  }, 90);
 }
 
 async function refreshExposurePoints({ silent = false } = {}) {
@@ -1296,7 +1395,8 @@ async function refreshExposurePoints({ silent = false } = {}) {
     max_lon: String(bounds.getEast()),
     max_lat: String(bounds.getNorth()),
     width: String(canvas.clientWidth || 1200),
-    height: String(canvas.clientHeight || 800)
+    height: String(canvas.clientHeight || 800),
+    zoom: String(map.getZoom())
   });
 
   exposureMapRefreshRunning = true;
