@@ -65,6 +65,8 @@ let availableDbFiles = [];
 let selectedBuilding = null;
 let activeViewFilter = null;
 let viewFilterRequestId = 0;
+let viewFilterTileUrlActive = "";
+let viewFilterFetchController = null;
 let activeExposureMap = null;
 let exposureMapRefreshTimer = null;
 let exposureMapRefreshRunning = false;
@@ -101,6 +103,7 @@ const emptyFeatureCollection = {
 const viewFilterSourceId = "view-filter-buildings";
 const viewFilterFillLayerId = "view-filter-buildings-fill";
 const viewFilterOutlineLayerId = "view-filter-buildings-outline";
+const viewFilterSourceLayer = "buildings";
 
 function dismissCriticalNote() {
   criticalNote?.classList.add("hidden");
@@ -1071,18 +1074,52 @@ function removeViewFilterLayer() {
   }
 }
 
-function renderViewFilterLayer(featureCollection) {
+function viewFilterTileUrl(bounds) {
+  if (!activeViewFilter) return "";
+
+  const params = new URLSearchParams({
+    column: activeViewFilter.column,
+    value: activeViewFilter.value
+  });
+
+  if (activeViewFilter.all) {
+    params.set("view_min_lon", String(bounds.getWest()));
+    params.set("view_min_lat", String(bounds.getSouth()));
+    params.set("view_max_lon", String(bounds.getEast()));
+    params.set("view_max_lat", String(bounds.getNorth()));
+  }
+
+  if (activeViewFilter.color) {
+    params.set("color", activeViewFilter.color);
+  }
+
+  return `${window.location.origin}/api/tiles/{z}/{x}/{y}.mvt?${params.toString()}`;
+}
+
+// Before MVT, the filter overlay used the GeoJSON payload returned by
+// /api/building-footprints directly: renderViewFilterLayer(payload) with a
+// geojson source here, while refreshViewFilter kept the same fetch/error flow.
+function renderViewFilterLayer(tileUrl) {
+  if (!tileUrl) return;
+  if (map.getSource(viewFilterSourceId) && viewFilterTileUrlActive === tileUrl) {
+    return;
+  }
+
   removeViewFilterLayer();
+  viewFilterTileUrlActive = tileUrl;
 
   map.addSource(viewFilterSourceId, {
-    type: "geojson",
-    data: featureCollection || emptyFeatureCollection
+    type: "vector",
+    tiles: [tileUrl],
+    minzoom: 0,
+    maxzoom: 22
   });
 
   map.addLayer({
     id: viewFilterFillLayerId,
     type: "fill",
     source: viewFilterSourceId,
+    "source-layer": viewFilterSourceLayer,
     paint: {
       "fill-color": ["coalesce", ["get", "__color"], "#64748b"],
       "fill-opacity": 0.36
@@ -1093,6 +1130,7 @@ function renderViewFilterLayer(featureCollection) {
     id: viewFilterOutlineLayerId,
     type: "line",
     source: viewFilterSourceId,
+    "source-layer": viewFilterSourceLayer,
     paint: {
       "line-color": ["coalesce", ["get", "__color"], "#64748b"],
       "line-width": 1.2,
@@ -1107,6 +1145,14 @@ async function refreshViewFilter({ silent = false } = {}) {
 
   const requestId = ++viewFilterRequestId;
   const bounds = map.getBounds();
+  const tileUrl = viewFilterTileUrl(bounds);
+  renderViewFilterLayer(tileUrl);
+
+  if (viewFilterFetchController) {
+    viewFilterFetchController.abort();
+  }
+  viewFilterFetchController = new AbortController();
+
   const params = new URLSearchParams({
     min_lon: String(bounds.getWest()),
     min_lat: String(bounds.getSouth()),
@@ -1122,20 +1168,16 @@ async function refreshViewFilter({ silent = false } = {}) {
   }
 
   try {
-    const response = await fetch(`api/building-footprints?${params.toString()}`);
+    const response = await fetch(`api/building-footprints?${params.toString()}`, {
+      signal: viewFilterFetchController.signal
+    });
     const payload = await response.json();
 
     if (requestId !== viewFilterRequestId) return;
     if (!response.ok) {
       throw new Error(payload.error || "Could not load building footprints");
     }
-
-    renderViewFilterLayer(payload);
-    if (activeViewFilter.all) {
-      setViewFilterLayerColor(null);
-    } else {
-      setViewFilterLayerColor(activeViewFilter.color);
-    }
+    viewFilterFetchController = null;
 
     const matched = Number(payload.count || (payload.features || []).length || 0);
     if (activeViewFilter.all) {
@@ -1150,7 +1192,12 @@ async function refreshViewFilter({ silent = false } = {}) {
       statusEl.textContent = "Ready";
     }
   } catch (error) {
+    if (error.name === "AbortError") {
+      return;
+    }
     if (requestId !== viewFilterRequestId) return;
+
+    viewFilterFetchController = null;
 
     clearViewFilterLayer();
     setFilterViewMessage(error.message, "error");
@@ -1172,18 +1219,13 @@ function clearViewFilter(message = "", type = "") {
 }
 
 function clearViewFilterLayer() {
+  if (viewFilterFetchController) {
+    viewFilterFetchController.abort();
+    viewFilterFetchController = null;
+  }
+  viewFilterTileUrlActive = "";
   removeViewFilterLayer();
   window.filterViewAll?.clearLegend();
-}
-
-function setViewFilterLayerColor(color) {
-  const paintColor = color || ["coalesce", ["get", "__color"], "#64748b"];
-  if (map.getLayer(viewFilterFillLayerId)) {
-    map.setPaintProperty(viewFilterFillLayerId, "fill-color", paintColor);
-  }
-  if (map.getLayer(viewFilterOutlineLayerId)) {
-    map.setPaintProperty(viewFilterOutlineLayerId, "line-color", paintColor);
-  }
 }
 
 function updateFilterViewColorAvailability() {
