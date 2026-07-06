@@ -101,7 +101,6 @@ const emptyFeatureCollection = {
 const viewFilterSourceId = "view-filter-buildings";
 const viewFilterFillLayerId = "view-filter-buildings-fill";
 const viewFilterOutlineLayerId = "view-filter-buildings-outline";
-const viewFilterSourceLayer = "buildings";
 
 function dismissCriticalNote() {
   criticalNote?.classList.add("hidden");
@@ -1060,25 +1059,6 @@ function renderViewFilterValueOptions(values) {
   updateFilterViewColorAvailability();
 }
 
-function viewFilterTileUrl(bounds) {
-  if (!activeViewFilter) return "";
-
-  const params = new URLSearchParams({
-    column: activeViewFilter.column,
-    value: activeViewFilter.value,
-    view_min_lon: String(bounds.getWest()),
-    view_min_lat: String(bounds.getSouth()),
-    view_max_lon: String(bounds.getEast()),
-    view_max_lat: String(bounds.getNorth())
-  });
-
-  if (activeViewFilter.color) {
-    params.set("color", activeViewFilter.color);
-  }
-
-  return `${window.location.origin}/api/tiles/{z}/{x}/{y}.mvt?${params.toString()}`;
-}
-
 function removeViewFilterLayer() {
   if (map.getLayer(viewFilterFillLayerId)) {
     map.removeLayer(viewFilterFillLayerId);
@@ -1091,21 +1071,18 @@ function removeViewFilterLayer() {
   }
 }
 
-function renderViewFilterLayer(tileUrl) {
+function renderViewFilterLayer(featureCollection) {
   removeViewFilterLayer();
 
   map.addSource(viewFilterSourceId, {
-    type: "vector",
-    tiles: [tileUrl],
-    minzoom: 0,
-    maxzoom: 22
+    type: "geojson",
+    data: featureCollection || emptyFeatureCollection
   });
 
   map.addLayer({
     id: viewFilterFillLayerId,
     type: "fill",
     source: viewFilterSourceId,
-    "source-layer": viewFilterSourceLayer,
     paint: {
       "fill-color": ["coalesce", ["get", "__color"], "#64748b"],
       "fill-opacity": 0.36
@@ -1116,7 +1093,6 @@ function renderViewFilterLayer(tileUrl) {
     id: viewFilterOutlineLayerId,
     type: "line",
     source: viewFilterSourceId,
-    "source-layer": viewFilterSourceLayer,
     paint: {
       "line-color": ["coalesce", ["get", "__color"], "#64748b"],
       "line-width": 1.2,
@@ -1131,7 +1107,6 @@ async function refreshViewFilter({ silent = false } = {}) {
 
   const requestId = ++viewFilterRequestId;
   const bounds = map.getBounds();
-  const tileUrl = viewFilterTileUrl(bounds);
   const params = new URLSearchParams({
     min_lon: String(bounds.getWest()),
     min_lat: String(bounds.getSouth()),
@@ -1155,7 +1130,7 @@ async function refreshViewFilter({ silent = false } = {}) {
       throw new Error(payload.error || "Could not load building footprints");
     }
 
-    renderViewFilterLayer(tileUrl);
+    renderViewFilterLayer(payload);
     if (activeViewFilter.all) {
       setViewFilterLayerColor(null);
     } else {
