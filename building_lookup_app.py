@@ -1198,6 +1198,8 @@ def create_app(
 ) -> Flask:
     app = Flask(__name__)
     app.config["DB_PATH"] = db_path
+    app.config["DB_CONN"] = None
+    app.config["DB_CONN_PATH"] = ""
     app.config["PARQUET_PATH"] = DEFAULT_PARQUET
     app.config["NEAREST_RADIUS_M"] = float(nearest_radius_m)
     app.config["GEOCODER_USER_AGENT"] = "OBMBuildingLookup/0.1 local-development"
@@ -1208,6 +1210,7 @@ def create_app(
     last_geocode_at = [0.0]
     jobs: Dict[str, Dict[str, Any]] = {}
     jobs_lock = Lock()
+    db_conn_lock = Lock()
     enrichment_lock = Lock()
     exposure_map_cache_lock = Lock()
     latest_upload_id: List[Optional[str]] = [None]
@@ -1230,6 +1233,33 @@ def create_app(
     def set_job(job_id: str, **updates: Any) -> None:
         with jobs_lock:
             jobs.setdefault(job_id, {}).update(updates)
+
+    def cached_readonly_db_connection(db_path: str) -> duckdb.DuckDBPyConnection:
+        resolved_db_path = str(Path(db_path).expanduser().resolve())
+        old_con: Optional[duckdb.DuckDBPyConnection] = None
+
+        with db_conn_lock:
+            cached_con = app.config.get("DB_CONN")
+            cached_path = app.config.get("DB_CONN_PATH") or ""
+
+            if cached_con is not None and cached_path == resolved_db_path:
+                return cached_con
+
+            old_con = cached_con
+            new_con = open_db(resolved_db_path, read_only=True)
+            app.config["DB_CONN"] = new_con
+            app.config["DB_CONN_PATH"] = resolved_db_path
+
+        if old_con is not None:
+            try:
+                old_con.close()
+            except Exception:
+                pass
+
+        return new_con
+
+    def cached_readonly_db_cursor(db_path: str) -> duckdb.DuckDBPyConnection:
+        return cached_readonly_db_connection(db_path).cursor()
     
     
 
@@ -1412,6 +1442,11 @@ def create_app(
                 "error": "The selected DuckDB file is not a lookup database. Choose a DuckDB file that already contains the buildings table."
             }), 400
 
+        try:
+            cached_readonly_db_connection(db_path)
+        except Exception as exc:
+            return jsonify({"error": f"Could not keep DuckDB lookup database open: {exc}"}), 400
+
         app.config["DB_PATH"] = db_path
         return jsonify({
             "db_path": db_path,
@@ -1475,7 +1510,7 @@ def create_app(
             }), 503
 
 
-        con = open_db(db_path, read_only=True)
+        con = cached_readonly_db_cursor(db_path)
         try:
             result = find_building(con, lon, lat, app.config["NEAREST_RADIUS_M"])
         finally:
@@ -1501,7 +1536,7 @@ def create_app(
                 "error": "Lookup database has not been selected or prepared."
             }), 200
 
-        con = open_db(db_path, read_only=True)
+        con = cached_readonly_db_cursor(db_path)
         try:
             fields = lookup_display_columns(con)
             preferred_fields = preferred_display_fields(con)
@@ -1529,7 +1564,7 @@ def create_app(
                 "error": "Lookup database has not been selected or prepared."
             }), 200
 
-        con = open_db(db_path, read_only=True)
+        con = cached_readonly_db_cursor(db_path)
         try:
             values = lookup_filter_values(con, column)
         except ValueError as exc:
@@ -1573,7 +1608,7 @@ def create_app(
                 "hint": "Create/select a lookup database from the app first."
             }), 503
 
-        con = open_db(db_path, read_only=True)
+        con = cached_readonly_db_cursor(db_path)
         try:
             if value == FILTER_VIEW_ALL_VALUE:
                 feature_collection = lookup_buildings_by_all_values_in_view(
@@ -3787,6 +3822,14 @@ def find_building(
     lat: float,
     nearest_radius_m: float,
 ) -> Optional[Dict[str, Any]]:
+    quadkey_prefix_column, quadkey_prefix_zoom, allow_null_quadkey_prefix = enrichment_quadkey_config(con)
+    qk_filter = _point_quadkey_filter(
+        lon,
+        lat,
+        quadkey_prefix_column,
+        quadkey_prefix_zoom,
+        allow_null_quadkey_prefix,
+    )
     display_columns = lookup_display_columns(con)
     display_select = ",\n            ".join(sql_identifier(column) for column in display_columns)
     inside = con.execute(f"""
@@ -3799,14 +3842,15 @@ def find_building(
             'high' AS confidence,
             {display_select},
             ST_AsGeoJSON(geom) AS geometry
-        FROM buildings, click
+        FROM buildings b, click
         WHERE
-            bbox_xmin <= ?
-            AND bbox_xmax >= ?
-            AND bbox_ymin <= ?
-            AND bbox_ymax >= ?
-            AND ST_Intersects(geom, pt)
-        ORDER BY footprint_area_m2 ASC NULLS LAST
+            {qk_filter}
+            AND b.bbox_xmin <= ?
+            AND b.bbox_xmax >= ?
+            AND b.bbox_ymin <= ?
+            AND b.bbox_ymax >= ?
+            AND ST_Intersects(b.geom, pt)
+        ORDER BY b.footprint_area_m2 ASC NULLS LAST
         LIMIT 1;
     """, [lon, lat, lon, lon, lat, lat]).fetchone()
 
@@ -3822,17 +3866,18 @@ def find_building(
         )
         SELECT
             'nearest' AS match_type,
-            ST_Distance_Sphere(ST_Point(centroid_lon, centroid_lat), pt) AS distance_m,
+            ST_Distance_Sphere(ST_Point(b.centroid_lon, b.centroid_lat), pt) AS distance_m,
             CASE
-                WHEN ST_Distance_Sphere(ST_Point(centroid_lon, centroid_lat), pt) <= 15 THEN 'medium'
+                WHEN ST_Distance_Sphere(ST_Point(b.centroid_lon, b.centroid_lat), pt) <= 15 THEN 'medium'
                 ELSE 'low'
             END AS confidence,
             {display_select},
-            ST_AsGeoJSON(geom) AS geometry
-        FROM buildings, click
+            ST_AsGeoJSON(b.geom) AS geometry
+        FROM buildings b, click
         WHERE
-            centroid_lon BETWEEN ? AND ?
-            AND centroid_lat BETWEEN ? AND ?
+            {qk_filter}
+            AND b.centroid_lon BETWEEN ? AND ?
+            AND b.centroid_lat BETWEEN ? AND ?
         ORDER BY distance_m ASC
         LIMIT 1;
     """, [

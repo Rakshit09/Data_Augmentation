@@ -98,6 +98,10 @@ const emptyFeatureCollection = {
   type: "FeatureCollection",
   features: []
 };
+const viewFilterSourceId = "view-filter-buildings";
+const viewFilterFillLayerId = "view-filter-buildings-fill";
+const viewFilterOutlineLayerId = "view-filter-buildings-outline";
+const viewFilterSourceLayer = "buildings";
 
 function dismissCriticalNote() {
   criticalNote?.classList.add("hidden");
@@ -546,32 +550,6 @@ function setDataSourceMessage(message, type = "") {
 loadDataSources();
 
 map.on("load", () => {
-  map.addSource("view-filter-buildings", {
-    type: "geojson",
-    data: emptyFeatureCollection
-  });
-
-  map.addLayer({
-    id: "view-filter-buildings-fill",
-    type: "fill",
-    source: "view-filter-buildings",
-    paint: {
-      "fill-color": filterViewColor?.value || "#ff6b6b",
-      "fill-opacity": 0.36
-    }
-  });
-
-  map.addLayer({
-    id: "view-filter-buildings-outline",
-    type: "line",
-    source: "view-filter-buildings",
-    paint: {
-      "line-color": filterViewColor?.value || "#ff6b6b",
-      "line-width": 1.2,
-      "line-opacity": 0.8
-    }
-  });
-
   map.addSource("exposure-points", {
     type: "geojson",
     data: emptyFeatureCollection
@@ -1082,12 +1060,78 @@ function renderViewFilterValueOptions(values) {
   updateFilterViewColorAvailability();
 }
 
+function viewFilterTileUrl(bounds) {
+  if (!activeViewFilter) return "";
+
+  const params = new URLSearchParams({
+    column: activeViewFilter.column,
+    value: activeViewFilter.value,
+    view_min_lon: String(bounds.getWest()),
+    view_min_lat: String(bounds.getSouth()),
+    view_max_lon: String(bounds.getEast()),
+    view_max_lat: String(bounds.getNorth())
+  });
+
+  if (activeViewFilter.color) {
+    params.set("color", activeViewFilter.color);
+  }
+
+  return `${window.location.origin}/api/tiles/{z}/{x}/{y}.mvt?${params.toString()}`;
+}
+
+function removeViewFilterLayer() {
+  if (map.getLayer(viewFilterFillLayerId)) {
+    map.removeLayer(viewFilterFillLayerId);
+  }
+  if (map.getLayer(viewFilterOutlineLayerId)) {
+    map.removeLayer(viewFilterOutlineLayerId);
+  }
+  if (map.getSource(viewFilterSourceId)) {
+    map.removeSource(viewFilterSourceId);
+  }
+}
+
+function renderViewFilterLayer(tileUrl) {
+  removeViewFilterLayer();
+
+  map.addSource(viewFilterSourceId, {
+    type: "vector",
+    tiles: [tileUrl],
+    minzoom: 0,
+    maxzoom: 22
+  });
+
+  map.addLayer({
+    id: viewFilterFillLayerId,
+    type: "fill",
+    source: viewFilterSourceId,
+    "source-layer": viewFilterSourceLayer,
+    paint: {
+      "fill-color": ["coalesce", ["get", "__color"], "#64748b"],
+      "fill-opacity": 0.36
+    }
+  });
+
+  map.addLayer({
+    id: viewFilterOutlineLayerId,
+    type: "line",
+    source: viewFilterSourceId,
+    "source-layer": viewFilterSourceLayer,
+    paint: {
+      "line-color": ["coalesce", ["get", "__color"], "#64748b"],
+      "line-width": 1.2,
+      "line-opacity": 0.8
+    }
+  });
+}
+
 async function refreshViewFilter({ silent = false } = {}) {
   if (!activeViewFilter) return;
   if (!map.isStyleLoaded()) return;
 
   const requestId = ++viewFilterRequestId;
   const bounds = map.getBounds();
+  const tileUrl = viewFilterTileUrl(bounds);
   const params = new URLSearchParams({
     min_lon: String(bounds.getWest()),
     min_lat: String(bounds.getSouth()),
@@ -1111,12 +1155,12 @@ async function refreshViewFilter({ silent = false } = {}) {
       throw new Error(payload.error || "Could not load building footprints");
     }
 
+    renderViewFilterLayer(tileUrl);
     if (activeViewFilter.all) {
       setViewFilterLayerColor(null);
     } else {
       setViewFilterLayerColor(activeViewFilter.color);
     }
-    map.getSource("view-filter-buildings")?.setData(payload);
 
     const matched = Number(payload.count || (payload.features || []).length || 0);
     if (activeViewFilter.all) {
@@ -1153,14 +1197,18 @@ function clearViewFilter(message = "", type = "") {
 }
 
 function clearViewFilterLayer() {
-  map.getSource("view-filter-buildings")?.setData(emptyFeatureCollection);
+  removeViewFilterLayer();
   window.filterViewAll?.clearLegend();
 }
 
 function setViewFilterLayerColor(color) {
   const paintColor = color || ["coalesce", ["get", "__color"], "#64748b"];
-  map.setPaintProperty("view-filter-buildings-fill", "fill-color", paintColor);
-  map.setPaintProperty("view-filter-buildings-outline", "line-color", paintColor);
+  if (map.getLayer(viewFilterFillLayerId)) {
+    map.setPaintProperty(viewFilterFillLayerId, "fill-color", paintColor);
+  }
+  if (map.getLayer(viewFilterOutlineLayerId)) {
+    map.setPaintProperty(viewFilterOutlineLayerId, "line-color", paintColor);
+  }
 }
 
 function updateFilterViewColorAvailability() {
