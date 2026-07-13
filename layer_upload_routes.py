@@ -322,7 +322,7 @@ def _prepare_vector_layer(layer_id: str, original_name: str, upload_path: Path, 
             SELECT
                 row_number() OVER () AS feature_id,
                 {field_select_sql}
-                ST_Force2D({geom_expr}) AS geom
+                CAST(ST_Force2D({geom_expr}) AS GEOMETRY) AS geom
             FROM {source_sql}
             WHERE {_sql_identifier(geom_name)} IS NOT NULL;
         """)
