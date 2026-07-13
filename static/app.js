@@ -104,6 +104,10 @@ const viewFilterSourceId = "view-filter-buildings";
 const viewFilterFillLayerId = "view-filter-buildings-fill";
 const viewFilterOutlineLayerId = "view-filter-buildings-outline";
 const viewFilterSourceLayer = "buildings";
+const mapElement = document.getElementById("map");
+const viewFilterMinZoom = Number(mapElement?.dataset.filterViewMinZoom || 15);
+const viewFilterMaxTileZoom = Number(mapElement?.dataset.filterViewMaxTileZoom || 17);
+const viewFilterZoomMessage = "Zoom to see building level filter view";
 
 function dismissCriticalNote() {
   criticalNote?.classList.add("hidden");
@@ -1074,7 +1078,7 @@ function removeViewFilterLayer() {
   }
 }
 
-function viewFilterTileUrl(bounds) {
+function viewFilterTileUrl() {
   if (!activeViewFilter) return "";
 
   const params = new URLSearchParams({
@@ -1082,23 +1086,13 @@ function viewFilterTileUrl(bounds) {
     value: activeViewFilter.value
   });
 
-  if (activeViewFilter.all) {
-    params.set("view_min_lon", String(bounds.getWest()));
-    params.set("view_min_lat", String(bounds.getSouth()));
-    params.set("view_max_lon", String(bounds.getEast()));
-    params.set("view_max_lat", String(bounds.getNorth()));
-  }
-
-  if (activeViewFilter.color) {
+  if (!activeViewFilter.all && activeViewFilter.color) {
     params.set("color", activeViewFilter.color);
   }
 
   return `${window.location.origin}/api/tiles/{z}/{x}/{y}.mvt?${params.toString()}`;
 }
 
-// Before MVT, the filter overlay used the GeoJSON payload returned by
-// /api/building-footprints directly: renderViewFilterLayer(payload) with a
-// geojson source here, while refreshViewFilter kept the same fetch/error flow.
 function renderViewFilterLayer(tileUrl) {
   if (!tileUrl) return;
   if (map.getSource(viewFilterSourceId) && viewFilterTileUrlActive === tileUrl) {
@@ -1111,8 +1105,8 @@ function renderViewFilterLayer(tileUrl) {
   map.addSource(viewFilterSourceId, {
     type: "vector",
     tiles: [tileUrl],
-    minzoom: 0,
-    maxzoom: 22
+    minzoom: viewFilterMinZoom,
+    maxzoom: viewFilterMaxTileZoom
   });
 
   map.addLayer({
@@ -1120,9 +1114,16 @@ function renderViewFilterLayer(tileUrl) {
     type: "fill",
     source: viewFilterSourceId,
     "source-layer": viewFilterSourceLayer,
+    minzoom: viewFilterMinZoom,
     paint: {
       "fill-color": ["coalesce", ["get", "__color"], "#64748b"],
-      "fill-opacity": 0.36
+      "fill-opacity": [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        viewFilterMinZoom, 0.22,
+        viewFilterMinZoom + 1, 0.36
+      ]
     }
   });
 
@@ -1131,10 +1132,23 @@ function renderViewFilterLayer(tileUrl) {
     type: "line",
     source: viewFilterSourceId,
     "source-layer": viewFilterSourceLayer,
+    minzoom: viewFilterMinZoom,
     paint: {
       "line-color": ["coalesce", ["get", "__color"], "#64748b"],
-      "line-width": 1.2,
-      "line-opacity": 0.8
+      "line-width": [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        viewFilterMinZoom, 0.7,
+        viewFilterMinZoom + 2, 1.2
+      ],
+      "line-opacity": [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        viewFilterMinZoom, 0.35,
+        viewFilterMinZoom + 1, 0.8
+      ]
     }
   });
 }
@@ -1145,11 +1159,21 @@ async function refreshViewFilter({ silent = false } = {}) {
 
   const requestId = ++viewFilterRequestId;
   const bounds = map.getBounds();
-  const tileUrl = viewFilterTileUrl(bounds);
+  const tileUrl = viewFilterTileUrl();
   renderViewFilterLayer(tileUrl);
 
   if (viewFilterFetchController) {
     viewFilterFetchController.abort();
+    viewFilterFetchController = null;
+  }
+
+  if (map.getZoom() < viewFilterMinZoom) {
+    window.filterViewAll?.clearLegend();
+    setFilterViewMessage(viewFilterZoomMessage);
+    if (!silent || statusEl.textContent === "Filtering") {
+      statusEl.textContent = "Ready";
+    }
+    return;
   }
   viewFilterFetchController = new AbortController();
 
@@ -1158,6 +1182,7 @@ async function refreshViewFilter({ silent = false } = {}) {
     min_lat: String(bounds.getSouth()),
     max_lon: String(bounds.getEast()),
     max_lat: String(bounds.getNorth()),
+    zoom: String(map.getZoom()),
     column: activeViewFilter.column,
     value: activeViewFilter.value
   });
@@ -1168,7 +1193,7 @@ async function refreshViewFilter({ silent = false } = {}) {
   }
 
   try {
-    const response = await fetch(`api/building-footprints?${params.toString()}`, {
+    const response = await fetch(`api/building-filter-summary?${params.toString()}`, {
       signal: viewFilterFetchController.signal
     });
     const payload = await response.json();
@@ -1179,16 +1204,15 @@ async function refreshViewFilter({ silent = false } = {}) {
     }
     viewFilterFetchController = null;
 
-    const matched = Number(payload.count || (payload.features || []).length || 0);
+    const matched = Number(payload.count || 0);
     if (activeViewFilter.all) {
       window.filterViewAll?.renderLegend(payload, formatFieldLabel(activeViewFilter.column));
-      const clipped = payload.truncated ? " · zoom in for more" : "";
-      setFilterViewMessage(`${formatInteger(matched)} polygons drawn across all visible values${clipped}.`, matched ? "success" : "");
+      setFilterViewMessage(`${formatInteger(matched)} polygons across all visible values.`, matched ? "success" : "");
     } else {
       window.filterViewAll?.clearLegend();
       setFilterViewMessage(`${formatInteger(matched)} polygons matched in the current view.`, matched ? "success" : "");
     }
-    if (!silent) {
+    if (!silent || statusEl.textContent === "Filtering") {
       statusEl.textContent = "Ready";
     }
   } catch (error) {
@@ -1199,9 +1223,9 @@ async function refreshViewFilter({ silent = false } = {}) {
 
     viewFilterFetchController = null;
 
-    clearViewFilterLayer();
+    window.filterViewAll?.clearLegend();
     setFilterViewMessage(error.message, "error");
-    if (!silent) {
+    if (!silent || statusEl.textContent === "Filtering") {
       statusEl.textContent = "Error";
     }
   }

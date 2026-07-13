@@ -15,7 +15,11 @@
 <body>
   <main class="shell">
     <section id="lookupMain" class="main-view">
-      <div id="map"></div>
+      <div
+        id="map"
+        data-filter-view-min-zoom="{{ filter_view_min_zoom }}"
+        data-filter-view-max-tile-zoom="{{ filter_view_max_tile_zoom }}"
+      ></div>
     </section>
 
     <section id="exposureMain" class="main-view hidden">
