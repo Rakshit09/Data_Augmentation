@@ -9,6 +9,7 @@ EXPOSURE_BIN_VERSION = "2"
 EXPOSURE_ROW_TABLE_VERSION = "1"
 EXPOSURE_BIN_ZOOMS: Tuple[int, ...] = (6, 8, 10, 12, 14, 16)
 RAW_POINT_ZOOM = 14.5
+OVERVIEW_MAX_TILE_ZOOM = 14
 DUPLICATE_SPREAD_ZOOM = 18.0
 MAX_MERCATOR_LAT = 85.05112878
 EARTH_RADIUS_EQUATOR_PX = 156543.03392
@@ -278,6 +279,120 @@ def _tile_range_for_bounds(
     min_x, max_x = sorted((min_x, max_x))
     min_y, max_y = sorted((min_y, max_y))
     return min_x, max_x, min_y, max_y
+
+
+def _tile_to_mercator_bounds(
+    x: int,
+    y: int,
+    zoom: int,
+) -> Tuple[float, float, float, float]:
+    tile_count = 2 ** zoom
+    world_half_width = 20_037_508.342789244
+    tile_width = (world_half_width * 2.0) / tile_count
+    min_x = -world_half_width + x * tile_width
+    max_x = min_x + tile_width
+    max_y = world_half_width - y * tile_width
+    min_y = max_y - tile_width
+    return min_x, min_y, max_x, max_y
+
+
+def _overview_source_zoom(tile_zoom: int) -> int:
+    target_zoom = tile_zoom + 3
+    for source_zoom in EXPOSURE_BIN_ZOOMS:
+        if source_zoom >= target_zoom:
+            return source_zoom
+    return EXPOSURE_BIN_ZOOMS[-1]
+
+
+def lookup_exposure_overview_tile(
+    cache_path: Path,
+    zoom: int,
+    tile_x: int,
+    tile_y: int,
+    con: duckdb.DuckDBPyConnection | None = None,
+) -> bytes:
+    """Return stable aggregated exposure points for a Web Mercator vector tile."""
+    source_zoom = _overview_source_zoom(zoom)
+    zoom_delta = source_zoom - zoom
+    source_max_tile = (1 << source_zoom) - 1
+    source_padding = max(1, 1 << max(0, zoom_delta - 4))
+    source_min_x = max(0, (tile_x << zoom_delta) - source_padding)
+    source_max_x = min(
+        source_max_tile,
+        ((tile_x + 1) << zoom_delta) - 1 + source_padding,
+    )
+    source_min_y = max(0, (tile_y << zoom_delta) - source_padding)
+    source_max_y = min(
+        source_max_tile,
+        ((tile_y + 1) << zoom_delta) - 1 + source_padding,
+    )
+    min_x, min_y, max_x, max_y = _tile_to_mercator_bounds(tile_x, tile_y, zoom)
+    table_name = _bin_table_name(source_zoom)
+
+    owns_connection = con is None
+    if con is None:
+        con = duckdb.connect(str(cache_path), read_only=True)
+        con.execute("LOAD spatial;")
+    try:
+        tile_blob = con.execute(
+            f"""
+            WITH envelope AS (
+                SELECT {{
+                    'min_x': ?,
+                    'min_y': ?,
+                    'max_x': ?,
+                    'max_y': ?
+                }}::BOX_2D AS bounds
+            ),
+            source AS (
+                SELECT
+                    row_id,
+                    csv_count,
+                    lon * 20037508.342789244 / 180.0 AS mercator_x,
+                    LN(TAN(
+                        PI() / 4.0
+                        + RADIANS(LEAST(
+                            GREATEST(lat, {-MAX_MERCATOR_LAT}),
+                            {MAX_MERCATOR_LAT}
+                        )) / 2.0
+                    )) * 20037508.342789244 / PI() AS mercator_y
+                FROM {table_name}
+                WHERE tile_x BETWEEN ? AND ?
+                    AND tile_y BETWEEN ? AND ?
+            ),
+            tile_rows AS (
+                SELECT
+                    ST_AsMVTGeom(
+                        ST_Point(mercator_x, mercator_y),
+                        envelope.bounds,
+                        4096,
+                        256,
+                        true
+                    ) AS geom,
+                    row_id,
+                    csv_count
+                FROM source, envelope
+            )
+            SELECT ST_AsMVT(tile_rows, 'exposure', 4096, 'geom')
+            FROM tile_rows
+            WHERE geom IS NOT NULL;
+            """,
+            [
+                min_x,
+                min_y,
+                max_x,
+                max_y,
+                source_min_x,
+                source_max_x,
+                source_min_y,
+                source_max_y,
+            ],
+        ).fetchone()[0]
+    finally:
+        if owns_connection:
+            con.close()
+
+    return bytes(tile_blob) if tile_blob is not None else b""
 
 
 def _select_source_zoom(
@@ -631,13 +746,16 @@ def lookup_exposure_points_multires(
     height: int,
     max_features: int,
     zoom: float = 0.0,
+    con: duckdb.DuckDBPyConnection | None = None,
 ) -> Dict[str, Any]:
     min_lon, min_lat, max_lon, max_lat = _clamp_bounds(min_lon, min_lat, max_lon, max_lat)
     if min_lon >= max_lon or min_lat >= max_lat:
         return _empty_feature_collection()
 
     safe_max = max(500, int(max_features or 12000))
-    con = duckdb.connect(str(cache_path), read_only=True)
+    owns_connection = con is None
+    if con is None:
+        con = duckdb.connect(str(cache_path), read_only=True)
     try:
         if zoom >= RAW_POINT_ZOOM:
             if zoom < DUPLICATE_SPREAD_ZOOM:
@@ -657,4 +775,5 @@ def lookup_exposure_points_multires(
             height,
         )
     finally:
-        con.close()
+        if owns_connection:
+            con.close()

@@ -34,12 +34,15 @@ from werkzeug.utils import secure_filename
 from country_boundary_catalog import DEFAULT_COUNTRY_BOUNDARY_CATALOG, list_catalog_countries
 from custom_parquet_database import register_custom_parquet_routes
 from exposure_map_cache import (
+    OVERVIEW_MAX_TILE_ZOOM,
+    RAW_POINT_ZOOM,
     build_exposure_multires_tables,
     build_exposure_row_table,
     ensure_exposure_multires_cache,
     exposure_row_table_is_current,
     lookup_exposure_row as lookup_exposure_csv_row,
     lookup_exposure_points_multires,
+    lookup_exposure_overview_tile,
 )
 from layer_upload_routes import register_layer_upload_routes
 from obm_country_to_parquet import ETLConfig, OpenBuildingMapCountryETL
@@ -1264,6 +1267,9 @@ def create_app(
         str,
         Tuple[int, int, Set[str], Tuple[str, int, bool]],
     ] = {}
+    exposure_overview_conn_lock = Lock()
+    exposure_overview_connection: List[Optional[duckdb.DuckDBPyConnection]] = [None]
+    exposure_overview_connection_path = [""]
     enrichment_lock = Lock()
     exposure_map_cache_lock = Lock()
     latest_upload_id: List[Optional[str]] = [None]
@@ -1335,6 +1341,32 @@ def create_app(
                 quadkey_config,
             )
             return available_columns, quadkey_config
+
+    def cached_exposure_overview_cursor(
+        cache_path: Path,
+    ) -> duckdb.DuckDBPyConnection:
+        resolved_cache_path = str(cache_path.resolve())
+        with exposure_overview_conn_lock:
+            cached_con = exposure_overview_connection[0]
+            if (
+                cached_con is None
+                or exposure_overview_connection_path[0] != resolved_cache_path
+            ):
+                if cached_con is not None:
+                    cached_con.close()
+                cached_con = duckdb.connect(resolved_cache_path, read_only=True)
+                cached_con.execute("LOAD spatial;")
+                exposure_overview_connection[0] = cached_con
+                exposure_overview_connection_path[0] = resolved_cache_path
+            return cached_con.cursor()
+
+    def close_cached_exposure_overview_connection() -> None:
+        with exposure_overview_conn_lock:
+            cached_con = exposure_overview_connection[0]
+            if cached_con is not None:
+                cached_con.close()
+            exposure_overview_connection[0] = None
+            exposure_overview_connection_path[0] = ""
     
     
 
@@ -1457,6 +1489,8 @@ def create_app(
             "index.html",
             filter_view_min_zoom=FILTER_VIEW_MIN_ZOOM,
             filter_view_max_tile_zoom=FILTER_VIEW_MAX_TILE_ZOOM,
+            exposure_raw_point_zoom=RAW_POINT_ZOOM,
+            exposure_overview_max_tile_zoom=OVERVIEW_MAX_TILE_ZOOM,
         )
 
     @app.route("/help/readme")
@@ -1863,18 +1897,28 @@ def create_app(
         if upload_path is None:
             return jsonify({"error": "Uploaded file was not found. Upload it again."}), 404
 
+        has_bounds = all(
+            key in request.args
+            for key in ("min_lon", "min_lat", "max_lon", "max_lat")
+        )
+        cache_path = exposure_map_cache_path(upload_path, upload_id, lat_col, lon_col)
         try:
-            with exposure_map_cache_lock:
-                cache_path, metadata = prepare_exposure_map_cache(upload_path, upload_id, lat_col, lon_col)
+            if has_bounds and cache_path.is_file():
+                metadata = {}
+            else:
+                close_cached_exposure_overview_connection()
+                with exposure_map_cache_lock:
+                    cache_path, metadata = prepare_exposure_map_cache(
+                        upload_path,
+                        upload_id,
+                        lat_col,
+                        lon_col,
+                    )
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         except Exception as exc:
             return jsonify({"error": f"Could not prepare exposure map points: {exc}"}), 500
 
-        has_bounds = all(
-            key in request.args
-            for key in ("min_lon", "min_lat", "max_lon", "max_lat")
-        )
         if not has_bounds:
             return jsonify({
                 **metadata,
@@ -1908,21 +1952,73 @@ def create_app(
         ):
             return jsonify({"error": "Map bounds must be finite numeric values."}), 400
 
-        points_payload = lookup_exposure_points_in_view(
-            cache_path=cache_path,
-            min_lon=min_lon,
-            min_lat=min_lat,
-            max_lon=max_lon,
-            max_lat=max_lat,
-            width=width,
-            height=height,
-            max_features=limit,
-            zoom=zoom,
-        )
+        point_con: Optional[duckdb.DuckDBPyConnection] = None
+        try:
+            point_con = cached_exposure_overview_cursor(cache_path)
+            points_payload = lookup_exposure_points_in_view(
+                cache_path=cache_path,
+                min_lon=min_lon,
+                min_lat=min_lat,
+                max_lon=max_lon,
+                max_lat=max_lat,
+                width=width,
+                height=height,
+                max_features=limit,
+                zoom=zoom,
+                con=point_con,
+            )
+        except Exception as exc:
+            return jsonify({"error": f"Could not load exposure map points: {exc}"}), 500
+        finally:
+            if point_con is not None:
+                point_con.close()
         return jsonify({
             **metadata,
             **points_payload,
         })
+
+    @app.route("/api/exposure/tiles/<int:z>/<int:x>/<int:y>.mvt")
+    def exposure_overview_tiles(z: int, x: int, y: int):
+        if z < 0 or z > OVERVIEW_MAX_TILE_ZOOM:
+            return jsonify({
+                "error": f"Exposure overview tiles are available through zoom {OVERVIEW_MAX_TILE_ZOOM}."
+            }), 400
+
+        tile_count = 1 << z
+        if x < 0 or y < 0 or x >= tile_count or y >= tile_count:
+            return jsonify({"error": "Tile coordinates are out of range."}), 400
+
+        upload_id = str(request.args.get("upload_id", "")).strip()
+        lat_col = str(request.args.get("lat_col", "")).strip()
+        lon_col = str(request.args.get("lon_col", "")).strip()
+        if not upload_id or not lat_col or not lon_col:
+            return jsonify({
+                "error": "Upload id, latitude column, and longitude column are required."
+            }), 400
+
+        upload_path = find_upload(Path(app.config["UPLOAD_DIR"]), upload_id)
+        if upload_path is None:
+            return jsonify({"error": "Uploaded file was not found. Upload it again."}), 404
+
+        cache_path = exposure_map_cache_path(upload_path, upload_id, lat_col, lon_col)
+        if not cache_path.is_file():
+            return jsonify({
+                "error": "Exposure map cache is not ready. Open View on Map again."
+            }), 409
+
+        tile_con: Optional[duckdb.DuckDBPyConnection] = None
+        try:
+            tile_con = cached_exposure_overview_cursor(cache_path)
+            tile_blob = lookup_exposure_overview_tile(cache_path, z, x, y, con=tile_con)
+        except Exception as exc:
+            return jsonify({"error": f"Could not load exposure overview tile: {exc}"}), 500
+        finally:
+            if tile_con is not None:
+                tile_con.close()
+
+        response = Response(tile_blob, mimetype="application/vnd.mapbox-vector-tile")
+        response.headers["Cache-Control"] = "private, max-age=3600"
+        return response
 
     @app.route("/api/exposure/row")
     def exposure_row_detail():
@@ -2657,6 +2753,7 @@ def lookup_exposure_points_in_view(
     height: int,
     max_features: int = EXPOSURE_MAP_MAX_FEATURES,
     zoom: float = 0.0,
+    con: Optional[duckdb.DuckDBPyConnection] = None,
 ) -> Dict[str, Any]:
     safe_max = max(500, min(int(max_features or EXPOSURE_MAP_MAX_FEATURES), EXPOSURE_MAP_MAX_FEATURES))
     return lookup_exposure_points_multires(
@@ -2669,6 +2766,7 @@ def lookup_exposure_points_in_view(
         height=height,
         max_features=safe_max,
         zoom=zoom,
+        con=con,
     )
 
 
