@@ -12,6 +12,7 @@ RAW_POINT_ZOOM = 14.5
 DUPLICATE_SPREAD_ZOOM = 18.0
 MAX_MERCATOR_LAT = 85.05112878
 EARTH_RADIUS_EQUATOR_PX = 156543.03392
+OVERVIEW_REPRESENTATIVES_PER_CELL = 3
 
 
 def _table_exists(con: duckdb.DuckDBPyConnection, table_name: str) -> bool:
@@ -323,13 +324,13 @@ def _select_source_zoom(
     if not math.isfinite(view_zoom):
         view_zoom = 0.0
 
-    # A bin five zoom levels above the map is roughly 16 screen pixels wide.
-    # That is detailed enough to look like the point layer while keeping a
-    # whole viewport to a few thousand stable representatives.
-    target_zoom = min(EXPOSURE_BIN_ZOOMS[-1], max(0, int(math.floor(view_zoom + 5))))
+    # Sample from fine bins so clustered portfolios retain several genuine
+    # locations at country-level zooms. The later screen grid and feature limit
+    # keep this bounded even when the source contains millions of rows.
+    target_zoom = min(EXPOSURE_BIN_ZOOMS[-1], max(0, int(math.floor(view_zoom + 9))))
 
     candidates = [zoom for zoom in EXPOSURE_BIN_ZOOMS if zoom <= target_zoom]
-    tile_budget = max(25_000, int(max_features) * 8)
+    tile_budget = max(250_000, int(max_features) * 40)
 
     for zoom in reversed(candidates):
         min_x, max_x, min_y, max_y = _tile_range_for_bounds(min_lon, min_lat, max_lon, max_lat, zoom)
@@ -345,11 +346,11 @@ def _view_grid(width: int, height: int, max_features: int) -> Tuple[int, int]:
     safe_height = max(240, min(2160, int(height or 800)))
     safe_max = max(500, int(max_features or 12000))
 
-    # Keep the overview payload bounded by screen density. A 12 px cell is
-    # visually dense for the existing circles and substantially cheaper to
-    # serialize, transfer, and rebuild in MapLibre than the former 8 px grid.
-    cols = max(24, min(260, math.ceil(safe_width / 12)))
-    rows = max(18, min(200, math.ceil(safe_height / 12)))
+    # Ten-pixel cells balance screen density and spatial coverage. A few real
+    # locations may survive per cell; the final query limit still caps the
+    # overall response independently of display size.
+    cols = max(24, min(260, math.ceil(safe_width / 10)))
+    rows = max(18, min(200, math.ceil(safe_height / 10)))
     cell_count = cols * rows
 
     if cell_count > safe_max:
@@ -589,24 +590,36 @@ def _query_view_grid_points(
                 LEAST(GREATEST(CAST(FLOOR((lat - ?) / ?) AS BIGINT), 0), ?) AS grid_y
             FROM source
         ),
-        cells AS (
-            SELECT
-                MIN(row_id) AS row_id,
-                ARG_MIN(lon, row_id) AS lon,
-                ARG_MIN(lat, row_id) AS lat,
-                SUM(csv_count) AS csv_count
-            FROM gridded
-            GROUP BY grid_x, grid_y
-        ),
-        ranked AS (
+        ranked_cells AS (
             SELECT
                 row_id,
                 lon,
                 lat,
                 csv_count,
-                SUM(csv_count) OVER () AS visible_count,
+                ROW_NUMBER() OVER (
+                    PARTITION BY grid_x, grid_y
+                    ORDER BY csv_count DESC, row_id
+                ) AS cell_rank
+            FROM gridded
+        ),
+        representatives AS (
+            SELECT row_id, lon, lat, csv_count
+            FROM ranked_cells
+            WHERE cell_rank <= {OVERVIEW_REPRESENTATIVES_PER_CELL}
+        ),
+        source_stats AS (
+            SELECT COALESCE(SUM(csv_count), 0) AS visible_count
+            FROM source
+        ),
+        ranked AS (
+            SELECT
+                representatives.row_id,
+                representatives.lon,
+                representatives.lat,
+                representatives.csv_count,
+                source_stats.visible_count,
                 COUNT(*) OVER () AS cell_count
-            FROM cells
+            FROM representatives, source_stats
         )
         SELECT row_id, lon, lat, csv_count, visible_count, cell_count
         FROM ranked
