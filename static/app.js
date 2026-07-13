@@ -69,7 +69,6 @@ let viewFilterTileUrlActive = "";
 let viewFilterFetchController = null;
 let activeExposureMap = null;
 let exposureMapFetchController = null;
-let exposureOverviewTileUrlActive = "";
 let exposureMapRequestId = 0;
 
 function exposureUploadState() {
@@ -108,12 +107,6 @@ const viewFilterMinZoom = Number(mapElement?.dataset.filterViewMinZoom || 15);
 const viewFilterMaxTileZoom = Number(mapElement?.dataset.filterViewMaxTileZoom || 17);
 const viewFilterZoomMessage = "Zoom to see building level filter view";
 const exposureRawPointZoom = Number(mapElement?.dataset.exposureRawPointZoom || 14.5);
-const exposureOverviewMaxTileZoom = Number(mapElement?.dataset.exposureOverviewMaxTileZoom || 14);
-const exposureOverviewSourceId = "exposure-overview";
-const exposureOverviewSourceLayer = "exposure";
-const exposureOverviewHeatmapLayerId = "exposure-overview-heatmap";
-const exposureOverviewCircleLayerId = "exposure-overview-circle";
-const exposureOverviewCountLayerId = "exposure-overview-count";
 
 function dismissCriticalNote() {
   criticalNote?.classList.add("hidden");
@@ -564,14 +557,14 @@ loadDataSources();
 map.on("load", () => {
   map.addSource("exposure-points", {
     type: "geojson",
-    data: emptyFeatureCollection
+    data: emptyFeatureCollection,
+    buffer: 64
   });
 
   map.addLayer({
     id: "exposure-points-halo",
     type: "circle",
     source: "exposure-points",
-    minzoom: exposureRawPointZoom,
     paint: {
       "circle-color": "#ffffff",
       "circle-opacity": 0.84,
@@ -592,7 +585,6 @@ map.on("load", () => {
     id: "exposure-points-circle",
     type: "circle",
     source: "exposure-points",
-    minzoom: exposureRawPointZoom,
     paint: {
       "circle-color": "#0f766e",
       "circle-opacity": 0.88,
@@ -613,7 +605,7 @@ map.on("load", () => {
     id: "exposure-points-count",
     type: "symbol",
     source: "exposure-points",
-    minzoom: exposureRawPointZoom,
+    minzoom: 11,
     filter: [">", ["coalesce", ["get", "csv_count"], 1], 1],
     layout: {
       "text-field": ["coalesce", ["get", "csv_label"], ["to-string", ["get", "csv_count"]]],
@@ -673,12 +665,8 @@ map.on("click", async (event) => {
   if (event.defaultPrevented) return;
 
   if (activeExposureMap && map.isStyleLoaded()) {
-    const exposureLayers = [
-      "exposure-points-circle",
-      exposureOverviewCircleLayerId
-    ].filter((layerId) => map.getLayer(layerId));
     const pointFeatures = map.queryRenderedFeatures(event.point, {
-      layers: exposureLayers
+      layers: ["exposure-points-circle"]
     });
     if (pointFeatures.length) {
       await renderExposurePointDetails(pointFeatures[0]);
@@ -1293,133 +1281,6 @@ clearExposureMap?.addEventListener("click", () => {
   clearActiveExposureMap();
 });
 
-function exposureOverviewTileUrl() {
-  if (!activeExposureMap) return "";
-  const params = new URLSearchParams({
-    upload_id: activeExposureMap.upload_id,
-    lat_col: activeExposureMap.lat_col,
-    lon_col: activeExposureMap.lon_col
-  });
-  return `${window.location.origin}/api/exposure/tiles/{z}/{x}/{y}.mvt?${params.toString()}`;
-}
-
-function removeExposureOverviewLayer() {
-  [
-    exposureOverviewCountLayerId,
-    exposureOverviewCircleLayerId,
-    exposureOverviewHeatmapLayerId
-  ].forEach((layerId) => {
-    if (map.getLayer(layerId)) map.removeLayer(layerId);
-  });
-  if (map.getSource(exposureOverviewSourceId)) {
-    map.removeSource(exposureOverviewSourceId);
-  }
-  exposureOverviewTileUrlActive = "";
-}
-
-function renderExposureOverviewLayer() {
-  const tileUrl = exposureOverviewTileUrl();
-  if (!tileUrl || !map.isStyleLoaded()) return;
-  if (map.getSource(exposureOverviewSourceId) && exposureOverviewTileUrlActive === tileUrl) {
-    return;
-  }
-
-  removeExposureOverviewLayer();
-  exposureOverviewTileUrlActive = tileUrl;
-  map.addSource(exposureOverviewSourceId, {
-    type: "vector",
-    tiles: [tileUrl],
-    minzoom: 0,
-    maxzoom: exposureOverviewMaxTileZoom
-  });
-
-  map.addLayer({
-    id: exposureOverviewHeatmapLayerId,
-    type: "heatmap",
-    source: exposureOverviewSourceId,
-    "source-layer": exposureOverviewSourceLayer,
-    maxzoom: 11.5,
-    paint: {
-      "heatmap-weight": [
-        "interpolate",
-        ["linear"],
-        ["coalesce", ["get", "csv_count"], 1],
-        1, 0.12,
-        10, 0.35,
-        100, 0.65,
-        1000, 1
-      ],
-      "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 0, 0.7, 10, 1.3],
-      "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 0, 10, 10, 24],
-      "heatmap-opacity": ["interpolate", ["linear"], ["zoom"], 9.5, 0.86, 11.5, 0],
-      "heatmap-color": [
-        "interpolate",
-        ["linear"],
-        ["heatmap-density"],
-        0, "rgba(15, 118, 110, 0)",
-        0.2, "rgba(45, 212, 191, 0.48)",
-        0.5, "rgba(14, 116, 144, 0.72)",
-        0.8, "rgba(29, 78, 216, 0.82)",
-        1, "rgba(30, 64, 175, 0.94)"
-      ]
-    }
-  });
-
-  map.addLayer({
-    id: exposureOverviewCircleLayerId,
-    type: "circle",
-    source: exposureOverviewSourceId,
-    "source-layer": exposureOverviewSourceLayer,
-    minzoom: 7,
-    maxzoom: exposureRawPointZoom + 1,
-    paint: {
-      "circle-color": "#0f766e",
-      "circle-radius": [
-        "interpolate",
-        ["linear"],
-        ["coalesce", ["get", "csv_count"], 1],
-        1, 3,
-        10, 5,
-        100, 8,
-        1000, 12
-      ],
-      "circle-opacity": [
-        "interpolate",
-        ["linear"],
-        ["zoom"],
-        7, 0,
-        8, 0.84,
-        exposureRawPointZoom, 0.72,
-        exposureRawPointZoom + 1, 0
-      ],
-      "circle-stroke-color": "rgba(255, 255, 255, 0.9)",
-      "circle-stroke-width": 1
-    }
-  });
-
-  map.addLayer({
-    id: exposureOverviewCountLayerId,
-    type: "symbol",
-    source: exposureOverviewSourceId,
-    "source-layer": exposureOverviewSourceLayer,
-    minzoom: 11,
-    maxzoom: exposureRawPointZoom + 0.5,
-    filter: [">", ["coalesce", ["get", "csv_count"], 1], 1],
-    layout: {
-      "text-field": ["to-string", ["get", "csv_count"]],
-      "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-      "text-size": 11,
-      "text-allow-overlap": false,
-      "text-ignore-placement": false
-    },
-    paint: {
-      "text-color": "#063f35",
-      "text-halo-color": "rgba(255, 255, 255, 0.94)",
-      "text-halo-width": 1.2
-    }
-  });
-}
-
 async function uploadSelectedCsv() {
   if (!csvFile.files.length) {
     setUploadedCsvName("");
@@ -1519,13 +1380,12 @@ async function activateExposureMap() {
       extent: payload.extent
     };
     exposureMapRequestId += 1;
-    renderExposureOverviewLayer();
 
     updateExposureMapPanel({
       visible_count: 0,
       returned_count: 0,
       cell_count: 0,
-      mode: "overview"
+      mode: "loading"
     });
     setExposureMapMessage(`Ready to map ${formatInteger(validRows)} locations.`, "success");
     switchMode("lookup");
@@ -1585,41 +1445,24 @@ function requestExposurePointRefresh() {
 
 async function refreshExposurePoints({ silent = false } = {}) {
   if (!activeExposureMap || !map.isStyleLoaded()) return;
-  renderExposureOverviewLayer();
-
-  if (map.getZoom() < exposureRawPointZoom) {
-    exposureMapRequestId += 1;
-    if (exposureMapFetchController) {
-      exposureMapFetchController.abort();
-      exposureMapFetchController = null;
-    }
-    map.getSource("exposure-points")?.setData(emptyFeatureCollection);
-    activeExposureMap = {
-      ...activeExposureMap,
-      visible_count: 0,
-      returned_count: 0,
-      cell_count: 0,
-      mode: "overview"
-    };
-    updateExposureMapPanel(activeExposureMap);
-    if (statusEl.textContent === "Loading points") statusEl.textContent = "Ready";
-    return;
-  }
 
   const requestId = ++exposureMapRequestId;
   const bounds = map.getBounds();
   const canvas = map.getCanvas();
+  const lonPadding = Math.max(0.00001, Math.abs(bounds.getEast() - bounds.getWest()) * 0.12);
+  const latPadding = Math.max(0.00001, Math.abs(bounds.getNorth() - bounds.getSouth()) * 0.12);
   const params = new URLSearchParams({
     upload_id: activeExposureMap.upload_id,
     lat_col: activeExposureMap.lat_col,
     lon_col: activeExposureMap.lon_col,
-    min_lon: String(bounds.getWest()),
-    min_lat: String(bounds.getSouth()),
-    max_lon: String(bounds.getEast()),
-    max_lat: String(bounds.getNorth()),
+    min_lon: String(bounds.getWest() - lonPadding),
+    min_lat: String(bounds.getSouth() - latPadding),
+    max_lon: String(bounds.getEast() + lonPadding),
+    max_lat: String(bounds.getNorth() + latPadding),
     width: String(canvas.clientWidth || 1200),
     height: String(canvas.clientHeight || 800),
-    zoom: String(map.getZoom())
+    zoom: String(map.getZoom()),
+    format: "compact"
   });
 
   if (exposureMapFetchController) {
@@ -1642,29 +1485,44 @@ async function refreshExposurePoints({ silent = false } = {}) {
       throw new Error(payload.error || "Could not load map points");
     }
 
-    map.getSource("exposure-points")?.setData({
-      type: "FeatureCollection",
-      features: payload.features || []
-    });
+    const points = Array.isArray(payload.points) ? payload.points : [];
+    const features = new Array(points.length);
+    for (let index = 0; index < points.length; index += 1) {
+      const point = points[index];
+      features[index] = {
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [point[0], point[1]] },
+        properties: {
+          row_id: point[2],
+          csv_count: point[3],
+          csv_label: point[4],
+          duplicate_count: point[5]
+        }
+      };
+    }
+
+    // One setData call swaps the whole padded viewport at once. Keeping the
+    // previous collection until here avoids blank flashes during navigation.
+    map.getSource("exposure-points")?.setData({ type: "FeatureCollection", features });
 
     activeExposureMap = {
       ...activeExposureMap,
       total_rows: Number(payload.total_rows || activeExposureMap.total_rows || 0),
       valid_rows: Number(payload.valid_rows || activeExposureMap.valid_rows || 0),
       visible_count: Number(payload.visible_count || 0),
-      returned_count: Number(payload.returned_count || (payload.features || []).length || 0),
+      returned_count: Number(payload.returned_count || features.length || 0),
       cell_count: Number(payload.cell_count || 0),
-      mode: "raw"
+      mode: payload.mode || (map.getZoom() >= exposureRawPointZoom ? "raw" : "grid")
     };
     updateExposureMapPanel(activeExposureMap);
-    if (!silent) {
+    if (!silent || statusEl.textContent === "Preparing map" || statusEl.textContent === "Loading points") {
       statusEl.textContent = "Ready";
     }
   } catch (error) {
     if (error.name === "AbortError") return;
     if (requestId !== exposureMapRequestId) return;
     setExposureMapPanelError(error.message);
-    if (!silent) {
+    if (!silent || statusEl.textContent === "Preparing map" || statusEl.textContent === "Loading points") {
       statusEl.textContent = "Error";
     }
   } finally {
@@ -1686,8 +1544,8 @@ function updateExposureMapPanel(payload) {
   const drawn = Number(payload.returned_count || 0);
   const valid = Number(activeExposureMap.valid_rows || 0);
   if (exposureMapStats) {
-    exposureMapStats.textContent = payload.mode === "overview"
-      ? `${formatInteger(valid)} valid locations · overview`
+    exposureMapStats.textContent = payload.mode === "loading"
+      ? `${formatInteger(valid)} valid locations · loading view…`
       : visible
       ? `${formatInteger(visible)} in view · ${formatInteger(drawn)} drawn · ${formatInteger(valid)} valid`
       : `${formatInteger(valid)} valid locations`;
@@ -1710,7 +1568,6 @@ function clearActiveExposureMap({ keepControls = false } = {}) {
   }
 
   map.getSource("exposure-points")?.setData(emptyFeatureCollection);
-  removeExposureOverviewLayer();
   exposureMapPanel?.classList.add("hidden");
   exposureMapPanel?.classList.remove("error");
   if (exposureMapStats) exposureMapStats.textContent = "";

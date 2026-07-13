@@ -34,7 +34,6 @@ from werkzeug.utils import secure_filename
 from country_boundary_catalog import DEFAULT_COUNTRY_BOUNDARY_CATALOG, list_catalog_countries
 from custom_parquet_database import register_custom_parquet_routes
 from exposure_map_cache import (
-    OVERVIEW_MAX_TILE_ZOOM,
     RAW_POINT_ZOOM,
     build_exposure_multires_tables,
     build_exposure_row_table,
@@ -42,7 +41,6 @@ from exposure_map_cache import (
     exposure_row_table_is_current,
     lookup_exposure_row as lookup_exposure_csv_row,
     lookup_exposure_points_multires,
-    lookup_exposure_overview_tile,
 )
 from layer_upload_routes import register_layer_upload_routes
 from obm_country_to_parquet import ETLConfig, OpenBuildingMapCountryETL
@@ -1267,9 +1265,9 @@ def create_app(
         str,
         Tuple[int, int, Set[str], Tuple[str, int, bool]],
     ] = {}
-    exposure_overview_conn_lock = Lock()
-    exposure_overview_connection: List[Optional[duckdb.DuckDBPyConnection]] = [None]
-    exposure_overview_connection_path = [""]
+    exposure_map_conn_lock = Lock()
+    exposure_map_connection: List[Optional[duckdb.DuckDBPyConnection]] = [None]
+    exposure_map_connection_path = [""]
     enrichment_lock = Lock()
     exposure_map_cache_lock = Lock()
     latest_upload_id: List[Optional[str]] = [None]
@@ -1342,31 +1340,30 @@ def create_app(
             )
             return available_columns, quadkey_config
 
-    def cached_exposure_overview_cursor(
+    def cached_exposure_map_cursor(
         cache_path: Path,
     ) -> duckdb.DuckDBPyConnection:
         resolved_cache_path = str(cache_path.resolve())
-        with exposure_overview_conn_lock:
-            cached_con = exposure_overview_connection[0]
+        with exposure_map_conn_lock:
+            cached_con = exposure_map_connection[0]
             if (
                 cached_con is None
-                or exposure_overview_connection_path[0] != resolved_cache_path
+                or exposure_map_connection_path[0] != resolved_cache_path
             ):
                 if cached_con is not None:
                     cached_con.close()
                 cached_con = duckdb.connect(resolved_cache_path, read_only=True)
-                cached_con.execute("LOAD spatial;")
-                exposure_overview_connection[0] = cached_con
-                exposure_overview_connection_path[0] = resolved_cache_path
+                exposure_map_connection[0] = cached_con
+                exposure_map_connection_path[0] = resolved_cache_path
             return cached_con.cursor()
 
-    def close_cached_exposure_overview_connection() -> None:
-        with exposure_overview_conn_lock:
-            cached_con = exposure_overview_connection[0]
+    def close_cached_exposure_map_connection() -> None:
+        with exposure_map_conn_lock:
+            cached_con = exposure_map_connection[0]
             if cached_con is not None:
                 cached_con.close()
-            exposure_overview_connection[0] = None
-            exposure_overview_connection_path[0] = ""
+            exposure_map_connection[0] = None
+            exposure_map_connection_path[0] = ""
     
     
 
@@ -1490,7 +1487,6 @@ def create_app(
             filter_view_min_zoom=FILTER_VIEW_MIN_ZOOM,
             filter_view_max_tile_zoom=FILTER_VIEW_MAX_TILE_ZOOM,
             exposure_raw_point_zoom=RAW_POINT_ZOOM,
-            exposure_overview_max_tile_zoom=OVERVIEW_MAX_TILE_ZOOM,
         )
 
     @app.route("/help/readme")
@@ -1906,7 +1902,7 @@ def create_app(
             if has_bounds and cache_path.is_file():
                 metadata = {}
             else:
-                close_cached_exposure_overview_connection()
+                close_cached_exposure_map_connection()
                 with exposure_map_cache_lock:
                     cache_path, metadata = prepare_exposure_map_cache(
                         upload_path,
@@ -1954,7 +1950,7 @@ def create_app(
 
         point_con: Optional[duckdb.DuckDBPyConnection] = None
         try:
-            point_con = cached_exposure_overview_cursor(cache_path)
+            point_con = cached_exposure_map_cursor(cache_path)
             points_payload = lookup_exposure_points_in_view(
                 cache_path=cache_path,
                 min_lon=min_lon,
@@ -1972,53 +1968,24 @@ def create_app(
         finally:
             if point_con is not None:
                 point_con.close()
-        return jsonify({
-            **metadata,
-            **points_payload,
-        })
+        if request.args.get("format") == "compact":
+            compact_points = []
+            for feature in points_payload.pop("features", []):
+                coordinates = feature.get("geometry", {}).get("coordinates", [])
+                properties = feature.get("properties", {})
+                if len(coordinates) < 2:
+                    continue
+                compact_points.append([
+                    coordinates[0],
+                    coordinates[1],
+                    properties.get("row_id", 0),
+                    properties.get("csv_count", 1),
+                    properties.get("csv_label", "1"),
+                    properties.get("duplicate_count", 1),
+                ])
+            points_payload["points"] = compact_points
 
-    @app.route("/api/exposure/tiles/<int:z>/<int:x>/<int:y>.mvt")
-    def exposure_overview_tiles(z: int, x: int, y: int):
-        if z < 0 or z > OVERVIEW_MAX_TILE_ZOOM:
-            return jsonify({
-                "error": f"Exposure overview tiles are available through zoom {OVERVIEW_MAX_TILE_ZOOM}."
-            }), 400
-
-        tile_count = 1 << z
-        if x < 0 or y < 0 or x >= tile_count or y >= tile_count:
-            return jsonify({"error": "Tile coordinates are out of range."}), 400
-
-        upload_id = str(request.args.get("upload_id", "")).strip()
-        lat_col = str(request.args.get("lat_col", "")).strip()
-        lon_col = str(request.args.get("lon_col", "")).strip()
-        if not upload_id or not lat_col or not lon_col:
-            return jsonify({
-                "error": "Upload id, latitude column, and longitude column are required."
-            }), 400
-
-        upload_path = find_upload(Path(app.config["UPLOAD_DIR"]), upload_id)
-        if upload_path is None:
-            return jsonify({"error": "Uploaded file was not found. Upload it again."}), 404
-
-        cache_path = exposure_map_cache_path(upload_path, upload_id, lat_col, lon_col)
-        if not cache_path.is_file():
-            return jsonify({
-                "error": "Exposure map cache is not ready. Open View on Map again."
-            }), 409
-
-        tile_con: Optional[duckdb.DuckDBPyConnection] = None
-        try:
-            tile_con = cached_exposure_overview_cursor(cache_path)
-            tile_blob = lookup_exposure_overview_tile(cache_path, z, x, y, con=tile_con)
-        except Exception as exc:
-            return jsonify({"error": f"Could not load exposure overview tile: {exc}"}), 500
-        finally:
-            if tile_con is not None:
-                tile_con.close()
-
-        response = Response(tile_blob, mimetype="application/vnd.mapbox-vector-tile")
-        response.headers["Cache-Control"] = "private, max-age=3600"
-        return response
+        return jsonify({**metadata, **points_payload})
 
     @app.route("/api/exposure/row")
     def exposure_row_detail():
@@ -2724,23 +2691,6 @@ def prepare_exposure_map_cache(
         unlink_duckdb_file(tmp_cache_path)
         if converted_csv_path is not None:
             converted_csv_path.unlink(missing_ok=True)
-
-
-def exposure_view_grid(width: int, height: int, max_features: int) -> Tuple[int, int, int]:
-    safe_width = max(320, min(3840, int(width or 1200)))
-    safe_height = max(240, min(2160, int(height or 800)))
-    safe_max = max(500, min(int(max_features or EXPOSURE_MAP_MAX_FEATURES), EXPOSURE_MAP_MAX_FEATURES))
-
-    cols = max(24, min(260, math.ceil(safe_width / 8)))
-    rows = max(18, min(200, math.ceil(safe_height / 8)))
-    cell_count = cols * rows
-
-    if cell_count > safe_max:
-        scale = math.sqrt(safe_max / cell_count)
-        cols = max(24, int(cols * scale))
-        rows = max(18, int(rows * scale))
-
-    return cols, rows, safe_max
 
 
 def lookup_exposure_points_in_view(

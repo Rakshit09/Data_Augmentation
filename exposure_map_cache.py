@@ -5,11 +5,10 @@ from typing import Any, Dict, Iterable, List, Tuple
 import duckdb
 
 
-EXPOSURE_BIN_VERSION = "2"
+EXPOSURE_BIN_VERSION = "3"
 EXPOSURE_ROW_TABLE_VERSION = "1"
 EXPOSURE_BIN_ZOOMS: Tuple[int, ...] = (6, 8, 10, 12, 14, 16)
 RAW_POINT_ZOOM = 14.5
-OVERVIEW_MAX_TILE_ZOOM = 14
 DUPLICATE_SPREAD_ZOOM = 18.0
 MAX_MERCATOR_LAT = 85.05112878
 EARTH_RADIUS_EQUATOR_PX = 156543.03392
@@ -63,42 +62,73 @@ def build_exposure_multires_tables(con: duckdb.DuckDBPyConnection) -> None:
 
     con.execute("CREATE INDEX IF NOT EXISTS points_lon_lat_idx ON points(lon, lat);")
 
-    for zoom in EXPOSURE_BIN_ZOOMS:
-        table_name = _bin_table_name(zoom)
-        tile_count = 2 ** zoom
-        max_tile = tile_count - 1
-
-        con.execute(f"""
-            CREATE TABLE {table_name} AS
-            WITH projected AS (
+    # Project the raw coordinates only once at the finest resolution. Coarser
+    # tables are exact count-preserving rollups of that table, avoiding five
+    # additional full scans and repeated trigonometry on large uploads.
+    finest_zoom = EXPOSURE_BIN_ZOOMS[-1]
+    finest_table = _bin_table_name(finest_zoom)
+    tile_count = 2 ** finest_zoom
+    max_tile = tile_count - 1
+    con.execute(f"""
+        CREATE TABLE {finest_table} AS
+        WITH projected AS (
+            SELECT
+                row_id,
+                lon,
+                lat,
+                LEAST(
+                    GREATEST(
+                        CAST(FLOOR(((lon + 180.0) / 360.0) * {tile_count}) AS BIGINT),
+                        0
+                    ),
+                    {max_tile}
+                ) AS tile_x,
+                LEAST(
+                    GREATEST(
+                        CAST(FLOOR((
+                            0.5 - LN((1.0 + sin_lat) / (1.0 - sin_lat)) / (4.0 * PI())
+                        ) * {tile_count}) AS BIGINT),
+                        0
+                    ),
+                    {max_tile}
+                ) AS tile_y
+            FROM (
                 SELECT
                     row_id,
                     lon,
                     lat,
-                    LEAST(
-                        GREATEST(
-                            CAST(FLOOR(((lon + 180.0) / 360.0) * {tile_count}) AS BIGINT),
-                            0
-                        ),
-                        {max_tile}
-                    ) AS tile_x,
-                    LEAST(
-                        GREATEST(
-                            CAST(FLOOR((
-                                0.5 - LN((1.0 + sin_lat) / (1.0 - sin_lat)) / (4.0 * PI())
-                            ) * {tile_count}) AS BIGINT),
-                            0
-                        ),
-                        {max_tile}
-                    ) AS tile_y
-                FROM (
-                    SELECT
-                        row_id,
-                        lon,
-                        lat,
-                        SIN(RADIANS(LEAST(GREATEST(lat, {-MAX_MERCATOR_LAT}), {MAX_MERCATOR_LAT}))) AS sin_lat
-                    FROM points
-                ) AS p
+                    SIN(RADIANS(LEAST(GREATEST(lat, {-MAX_MERCATOR_LAT}), {MAX_MERCATOR_LAT}))) AS sin_lat
+                FROM points
+            ) AS p
+        )
+        SELECT
+            tile_x,
+            tile_y,
+            MIN(row_id) AS row_id,
+            ARG_MIN(lon, row_id) AS lon,
+            ARG_MIN(lat, row_id) AS lat,
+            COUNT(*) AS csv_count
+        FROM projected
+        GROUP BY tile_x, tile_y;
+    """)
+    con.execute(f"CREATE INDEX {finest_table}_xy_idx ON {finest_table}(tile_x, tile_y);")
+
+    source_zoom = finest_zoom
+    for zoom in reversed(EXPOSURE_BIN_ZOOMS[:-1]):
+        table_name = _bin_table_name(zoom)
+        source_table = _bin_table_name(source_zoom)
+        scale = 2 ** (source_zoom - zoom)
+        con.execute(f"""
+            CREATE TABLE {table_name} AS
+            WITH rolled AS (
+                SELECT
+                    CAST(FLOOR(tile_x / {scale}) AS BIGINT) AS tile_x,
+                    CAST(FLOOR(tile_y / {scale}) AS BIGINT) AS tile_y,
+                    row_id,
+                    lon,
+                    lat,
+                    csv_count
+                FROM {source_table}
             )
             SELECT
                 tile_x,
@@ -106,11 +136,12 @@ def build_exposure_multires_tables(con: duckdb.DuckDBPyConnection) -> None:
                 MIN(row_id) AS row_id,
                 ARG_MIN(lon, row_id) AS lon,
                 ARG_MIN(lat, row_id) AS lat,
-                COUNT(*) AS csv_count
-            FROM projected
+                SUM(csv_count) AS csv_count
+            FROM rolled
             GROUP BY tile_x, tile_y;
         """)
         con.execute(f"CREATE INDEX {table_name}_xy_idx ON {table_name}(tile_x, tile_y);")
+        source_zoom = zoom
 
     con.execute("""
         CREATE TABLE IF NOT EXISTS exposure_multires_metadata(
@@ -281,120 +312,6 @@ def _tile_range_for_bounds(
     return min_x, max_x, min_y, max_y
 
 
-def _tile_to_mercator_bounds(
-    x: int,
-    y: int,
-    zoom: int,
-) -> Tuple[float, float, float, float]:
-    tile_count = 2 ** zoom
-    world_half_width = 20_037_508.342789244
-    tile_width = (world_half_width * 2.0) / tile_count
-    min_x = -world_half_width + x * tile_width
-    max_x = min_x + tile_width
-    max_y = world_half_width - y * tile_width
-    min_y = max_y - tile_width
-    return min_x, min_y, max_x, max_y
-
-
-def _overview_source_zoom(tile_zoom: int) -> int:
-    target_zoom = tile_zoom + 3
-    for source_zoom in EXPOSURE_BIN_ZOOMS:
-        if source_zoom >= target_zoom:
-            return source_zoom
-    return EXPOSURE_BIN_ZOOMS[-1]
-
-
-def lookup_exposure_overview_tile(
-    cache_path: Path,
-    zoom: int,
-    tile_x: int,
-    tile_y: int,
-    con: duckdb.DuckDBPyConnection | None = None,
-) -> bytes:
-    """Return stable aggregated exposure points for a Web Mercator vector tile."""
-    source_zoom = _overview_source_zoom(zoom)
-    zoom_delta = source_zoom - zoom
-    source_max_tile = (1 << source_zoom) - 1
-    source_padding = max(1, 1 << max(0, zoom_delta - 4))
-    source_min_x = max(0, (tile_x << zoom_delta) - source_padding)
-    source_max_x = min(
-        source_max_tile,
-        ((tile_x + 1) << zoom_delta) - 1 + source_padding,
-    )
-    source_min_y = max(0, (tile_y << zoom_delta) - source_padding)
-    source_max_y = min(
-        source_max_tile,
-        ((tile_y + 1) << zoom_delta) - 1 + source_padding,
-    )
-    min_x, min_y, max_x, max_y = _tile_to_mercator_bounds(tile_x, tile_y, zoom)
-    table_name = _bin_table_name(source_zoom)
-
-    owns_connection = con is None
-    if con is None:
-        con = duckdb.connect(str(cache_path), read_only=True)
-        con.execute("LOAD spatial;")
-    try:
-        tile_blob = con.execute(
-            f"""
-            WITH envelope AS (
-                SELECT {{
-                    'min_x': ?,
-                    'min_y': ?,
-                    'max_x': ?,
-                    'max_y': ?
-                }}::BOX_2D AS bounds
-            ),
-            source AS (
-                SELECT
-                    row_id,
-                    csv_count,
-                    lon * 20037508.342789244 / 180.0 AS mercator_x,
-                    LN(TAN(
-                        PI() / 4.0
-                        + RADIANS(LEAST(
-                            GREATEST(lat, {-MAX_MERCATOR_LAT}),
-                            {MAX_MERCATOR_LAT}
-                        )) / 2.0
-                    )) * 20037508.342789244 / PI() AS mercator_y
-                FROM {table_name}
-                WHERE tile_x BETWEEN ? AND ?
-                    AND tile_y BETWEEN ? AND ?
-            ),
-            tile_rows AS (
-                SELECT
-                    ST_AsMVTGeom(
-                        ST_Point(mercator_x, mercator_y),
-                        envelope.bounds,
-                        4096,
-                        256,
-                        true
-                    ) AS geom,
-                    row_id,
-                    csv_count
-                FROM source, envelope
-            )
-            SELECT ST_AsMVT(tile_rows, 'exposure', 4096, 'geom')
-            FROM tile_rows
-            WHERE geom IS NOT NULL;
-            """,
-            [
-                min_x,
-                min_y,
-                max_x,
-                max_y,
-                source_min_x,
-                source_max_x,
-                source_min_y,
-                source_max_y,
-            ],
-        ).fetchone()[0]
-    finally:
-        if owns_connection:
-            con.close()
-
-    return bytes(tile_blob) if tile_blob is not None else b""
-
-
 def _select_source_zoom(
     view_zoom: float,
     min_lon: float,
@@ -406,12 +323,10 @@ def _select_source_zoom(
     if not math.isfinite(view_zoom):
         view_zoom = 0.0
 
-    if view_zoom >= 12:
-        target_zoom = 16
-    elif view_zoom >= 8:
-        target_zoom = 14
-    else:
-        target_zoom = 12
+    # A bin five zoom levels above the map is roughly 16 screen pixels wide.
+    # That is detailed enough to look like the point layer while keeping a
+    # whole viewport to a few thousand stable representatives.
+    target_zoom = min(EXPOSURE_BIN_ZOOMS[-1], max(0, int(math.floor(view_zoom + 5))))
 
     candidates = [zoom for zoom in EXPOSURE_BIN_ZOOMS if zoom <= target_zoom]
     tile_budget = max(25_000, int(max_features) * 8)
@@ -430,8 +345,11 @@ def _view_grid(width: int, height: int, max_features: int) -> Tuple[int, int]:
     safe_height = max(240, min(2160, int(height or 800)))
     safe_max = max(500, int(max_features or 12000))
 
-    cols = max(24, min(260, math.ceil(safe_width / 8)))
-    rows = max(18, min(200, math.ceil(safe_height / 8)))
+    # Keep the overview payload bounded by screen density. A 12 px cell is
+    # visually dense for the existing circles and substantially cheaper to
+    # serialize, transfer, and rebuild in MapLibre than the former 8 px grid.
+    cols = max(24, min(260, math.ceil(safe_width / 12)))
+    rows = max(18, min(200, math.ceil(safe_height / 12)))
     cell_count = cols * rows
 
     if cell_count > safe_max:
