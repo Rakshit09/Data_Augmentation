@@ -18,10 +18,11 @@ from flask import Flask, jsonify, request, send_from_directory
 from werkzeug.utils import secure_filename
 
 
-VECTOR_EXTENSIONS = {".gpkg", ".shp", ".zip", ".geojson", ".json"}
+VECTOR_EXTENSIONS = {".gpkg", ".shp", ".shx", ".dbf", ".prj", ".cpg", ".zip", ".geojson", ".json"}
 RASTER_EXTENSIONS = {".tif", ".tiff"}
+SHAPEFILE_REQUIRED_EXTENSIONS = {".shp", ".shx", ".dbf"}
 RASTER_PREVIEW_MAX_SIZE = int(os.environ.get("ADD_LAYER_RASTER_PREVIEW_MAX_SIZE", "4096"))
-MAX_VECTOR_FEATURES = int(os.environ.get("ADD_LAYER_MAX_VECTOR_FEATURES", "7000"))
+MAX_VECTOR_FEATURES = int(os.environ.get("ADD_LAYER_MAX_VECTOR_FEATURES", "15000"))
 MAX_LAYER_UPLOAD_BYTES = int(os.environ.get("ADD_LAYER_MAX_UPLOAD_BYTES", str(2 * 1024 ** 3)))
 MAX_EXTRACTED_FILES = 48
 NUMERIC_FIELD_TYPES = {
@@ -74,28 +75,24 @@ def get_uploaded_layer(layer_id: str) -> Optional[Dict[str, Any]]:
 def register_layer_upload_routes(app: Flask) -> None:
     @app.route("/api/layers/upload", methods=["POST"])
     def upload_layer():
-        uploaded_file = request.files.get("file")
-        if uploaded_file is None or not uploaded_file.filename:
-            return jsonify({"error": "Upload a GeoPackage, zipped shapefile, shapefile, GeoJSON, or GeoTIFF."}), 400
+        uploaded_files = [file for file in request.files.getlist("file") if file and file.filename]
+        if not uploaded_files:
+            return jsonify({"error": "Upload a GeoPackage, zipped shapefile, shapefile sidecar set (.shp, .shx, .dbf), GeoJSON, or GeoTIFF."}), 400
 
-        original_name = Path(uploaded_file.filename or "").name
-        safe_name = secure_filename(original_name) or f"layer_{uuid.uuid4().hex}"
-        extension = Path(safe_name).suffix.lower()
-        if extension not in VECTOR_EXTENSIONS and extension not in RASTER_EXTENSIONS:
-            return jsonify({"error": "Supported layer files are .gpkg, .zip shapefile, .shp, .geojson, .json, .tif, and .tiff."}), 400
+        upload_items = _normalized_uploads(uploaded_files)
+        try:
+            upload_kind = _classify_uploads(upload_items)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
 
         layer_id = uuid.uuid4().hex
         work_dir = _runtime_dir("map_layers") / layer_id
         upload_dir = work_dir / "upload"
         upload_dir.mkdir(parents=True, exist_ok=True)
-        upload_path = upload_dir / safe_name
 
         try:
-            saved_size = _save_upload_stream(uploaded_file, upload_path)
-            if saved_size == 0:
-                raise ValueError("Uploaded layer file is empty.")
-
-            if extension in RASTER_EXTENSIONS:
+            original_name, upload_path = _save_upload_bundle(upload_items, upload_kind, upload_dir)
+            if upload_kind == "raster":
                 layer = _prepare_raster_layer(layer_id, original_name, upload_path, work_dir)
             else:
                 layer = _prepare_vector_layer(layer_id, original_name, upload_path, work_dir)
@@ -215,6 +212,74 @@ def _save_upload_stream(uploaded_file: Any, output_path: Path) -> int:
                 raise ValueError("Layer upload is too large for this local session.")
             handle.write(chunk)
     return total
+
+
+def _normalized_uploads(uploaded_files: List[Any]) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    for uploaded_file in uploaded_files:
+        original_name = Path(uploaded_file.filename or "").name
+        safe_name = secure_filename(original_name) or f"layer_{uuid.uuid4().hex}"
+        extension = Path(safe_name).suffix.lower()
+        items.append({
+            "file": uploaded_file,
+            "original_name": original_name,
+            "safe_name": safe_name,
+            "extension": extension,
+            "stem": Path(safe_name).stem.casefold(),
+        })
+    return items
+
+
+def _classify_uploads(upload_items: List[Dict[str, Any]]) -> str:
+    invalid_extensions = sorted({item["extension"] for item in upload_items if item["extension"] not in VECTOR_EXTENSIONS and item["extension"] not in RASTER_EXTENSIONS})
+    if invalid_extensions:
+        raise ValueError("Supported layer files are .gpkg, .zip shapefile, .shp/.shx/.dbf sidecars, .geojson, .json, .tif, and .tiff.")
+
+    extensions = {item["extension"] for item in upload_items}
+    if extensions & RASTER_EXTENSIONS:
+        if len(upload_items) != 1 or not extensions <= RASTER_EXTENSIONS:
+            raise ValueError("GeoTIFF uploads must contain a single .tif or .tiff file.")
+        return "raster"
+
+    shapefile_extensions = SHAPEFILE_REQUIRED_EXTENSIONS | {".prj", ".cpg"}
+    if extensions & shapefile_extensions:
+        if ".zip" in extensions or ".gpkg" in extensions or ".geojson" in extensions or ".json" in extensions:
+            raise ValueError("Upload a zipped shapefile, or select only the shapefile sidecar files together.")
+        stems = {item["stem"] for item in upload_items}
+        if len(stems) != 1:
+            raise ValueError("All shapefile sidecar uploads must share the same base filename.")
+        missing = sorted(SHAPEFILE_REQUIRED_EXTENSIONS - extensions)
+        if missing:
+            missing_text = ", ".join(missing)
+            raise ValueError(f"A shapefile upload must include {missing_text} together with the matching sidecars.")
+        return "vector"
+
+    if len(upload_items) != 1:
+        raise ValueError("Upload a single GeoPackage, zipped shapefile, or GeoJSON file, or select the full shapefile sidecar set.")
+    return "vector"
+
+
+def _save_upload_bundle(upload_items: List[Dict[str, Any]], upload_kind: str, upload_dir: Path) -> Tuple[str, Path]:
+    total = 0
+    saved_paths: List[Path] = []
+    for item in upload_items:
+        output_path = upload_dir / item["safe_name"]
+        size = _save_upload_stream(item["file"], output_path)
+        if size == 0:
+            raise ValueError("Uploaded layer file is empty.")
+        total += size
+        if total > MAX_LAYER_UPLOAD_BYTES:
+            raise ValueError("Layer upload is too large for this local session.")
+        saved_paths.append(output_path)
+
+    if upload_kind == "raster":
+        return upload_items[0]["original_name"], saved_paths[0]
+
+    shapefile_item = next((item for item in upload_items if item["extension"] == ".shp"), None)
+    shapefile_path = next((path for path in saved_paths if path.suffix.lower() == ".shp"), None)
+    if shapefile_item is not None and shapefile_path is not None:
+        return shapefile_item["original_name"], shapefile_path
+    return upload_items[0]["original_name"], saved_paths[0]
 
 
 def _prepare_vector_layer(layer_id: str, original_name: str, upload_path: Path, work_dir: Path) -> Dict[str, Any]:

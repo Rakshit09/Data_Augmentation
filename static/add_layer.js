@@ -48,12 +48,12 @@
   }
 
   layerFile.addEventListener("change", () => {
-    const file = layerFile.files && layerFile.files[0];
-    const name = file ? file.name : "";
-    layerFileTitle.textContent = name || "Choose Layer File";
-    layerFileSubtitle.textContent = name
+    const files = Array.from(layerFile.files || []);
+    const primaryName = files[0] ? files[0].name : "";
+    layerFileTitle.textContent = files.length > 1 ? `${files.length} files selected` : (primaryName || "Choose Layer File");
+    layerFileSubtitle.textContent = files.length
       ? "Click Add layer to render it on the map"
-      : "GeoPackage, zipped shapefile, shapefile, GeoJSON, or GeoTIFF";
+      : "GeoPackage, zipped shapefile, shapefile sidecar set (.shp, .shx, .dbf), GeoJSON, or GeoTIFF";
   });
 
   uploadButton.addEventListener("click", uploadLayer);
@@ -72,8 +72,8 @@
   transparencyInput.addEventListener("input", updateLayerOpacity);
 
   async function uploadLayer() {
-    const file = layerFile.files && layerFile.files[0];
-    if (!file) {
+    const files = Array.from(layerFile.files || []);
+    if (!files.length) {
       setMessage("Choose a layer file first.", "error");
       return;
     }
@@ -84,7 +84,9 @@
     setMessage("Preparing layer for smooth map rendering...");
 
     const formData = new FormData();
-    formData.append("file", file);
+    for (const file of files) {
+      formData.append("file", file);
+    }
 
     try {
       const response = await fetch("api/layers/upload", {
