@@ -6,6 +6,8 @@ The Data Augmentation Platform is a local web application for working with build
 - enrich an exposure CSV with local building attributes
 - create a new local DuckDB lookup database from OpenBuildingMap or from an existing Parquet file
 
+For a code-level explanation of how the ETL, lookup, enrichment, and raster/vector intersection algorithms work, see [CODE_README.md](CODE_README.md).
+
 > [!IMPORTANT]
 > **Run the application, the Parquet files, and the DuckDB files from a local drive.** Do not work directly against `J:` or other network locations.
 
