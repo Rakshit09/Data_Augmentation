@@ -57,7 +57,7 @@
   });
 
   uploadButton.addEventListener("click", uploadLayer);
-  clearButton?.addEventListener("click", clearLayer);
+  clearButton?.addEventListener("click", () => clearLayer());
   fieldSelect.addEventListener("change", () => {
     if (!state.layer) return;
     state.layer.field = fieldSelect.value;
@@ -87,6 +87,10 @@
     for (const file of files) {
       formData.append("file", file);
     }
+    const previousLayerId = state.layer?.id || "";
+    if (previousLayerId) {
+      formData.append("replace_layer_id", previousLayerId);
+    }
 
     try {
       const response = await fetch("api/layers/upload", {
@@ -99,7 +103,7 @@
         throw new Error(payload.error || "Could not add layer");
       }
 
-      clearLayer({ silent: true });
+      clearLayer({ silent: true, cleanupServer: false });
       state.layer = {
         ...payload,
         field: payload.default_field || "",
@@ -122,7 +126,9 @@
       }
       if (typeof statusEl !== "undefined") statusEl.textContent = "Ready";
     } catch (error) {
-      clearLayer({ silent: true });
+      if (state.layer && state.layer.id !== previousLayerId) {
+        clearLayer({ silent: true });
+      }
       setMessage(error.message, "error");
       if (typeof statusEl !== "undefined") statusEl.textContent = "Error";
     } finally {
@@ -412,7 +418,8 @@
       : undefined;
   }
 
-  function clearLayer({ silent = false } = {}) {
+  function clearLayer({ silent = false, cleanupServer = true } = {}) {
+    const layerId = state.layer?.id || "";
     state.layer = null;
     state.requestId += 1;
     state.refreshQueued = false;
@@ -428,7 +435,21 @@
     removeRasterLayer();
     controls.classList.add("hidden");
     publishLayerChange();
+    if (cleanupServer && layerId) {
+      deleteLayerOnServer(layerId);
+    }
     if (!silent) setMessage("Layer cleared.");
+  }
+
+  async function deleteLayerOnServer(layerId) {
+    try {
+      await fetch(`/api/layers/${encodeURIComponent(layerId)}`, {
+        method: "DELETE",
+        keepalive: true
+      });
+    } catch (_error) {
+      // The UI is already cleared; server-side session cleanup can be retried by replacement.
+    }
   }
 
   function publishLayerChange() {

@@ -68,8 +68,7 @@ def get_uploaded_layer(layer_id: str) -> Optional[Dict[str, Any]]:
     if not layer_id:
         return None
     with LAYER_REGISTRY_LOCK:
-        layer = LAYER_REGISTRY.get(layer_id)
-        return dict(layer) if layer else None
+        return LAYER_REGISTRY.get(layer_id)
 
 
 def register_layer_upload_routes(app: Flask) -> None:
@@ -80,6 +79,7 @@ def register_layer_upload_routes(app: Flask) -> None:
             return jsonify({"error": "Upload a GeoPackage, zipped shapefile, shapefile sidecar set (.shp, .shx, .dbf), GeoJSON, or GeoTIFF."}), 400
 
         upload_items = _normalized_uploads(uploaded_files)
+        replace_layer_id = str(request.form.get("replace_layer_id") or "").strip()
         try:
             upload_kind = _classify_uploads(upload_items)
         except ValueError as exc:
@@ -104,10 +104,25 @@ def register_layer_upload_routes(app: Flask) -> None:
             shutil.rmtree(work_dir, ignore_errors=True)
             return jsonify({"error": f"Could not prepare map layer: {exc}"}), 500
 
+        replaced_layer = None
         with LAYER_REGISTRY_LOCK:
             LAYER_REGISTRY[layer_id] = layer
+            if replace_layer_id and replace_layer_id != layer_id:
+                replaced_layer = LAYER_REGISTRY.pop(replace_layer_id, None)
+
+        if replaced_layer is not None:
+            _cleanup_layer(replaced_layer)
 
         return jsonify(_public_layer_metadata(layer))
+
+    @app.route("/api/layers/<layer_id>", methods=["DELETE"])
+    def delete_layer(layer_id: str):
+        with LAYER_REGISTRY_LOCK:
+            layer = LAYER_REGISTRY.pop(layer_id, None)
+
+        if layer is not None:
+            _cleanup_layer(layer)
+        return ("", 204)
 
     @app.route("/api/layers/<layer_id>/features")
     def layer_features(layer_id: str):
@@ -324,8 +339,7 @@ def _prepare_vector_layer(layer_id: str, original_name: str, upload_path: Path, 
                 bbox_ymin = ST_YMin(geom),
                 bbox_xmax = ST_XMax(geom),
                 bbox_ymax = ST_YMax(geom);
-            CREATE INDEX features_xmin_idx ON features(bbox_xmin);
-            CREATE INDEX features_ymin_idx ON features(bbox_ymin);
+            CREATE INDEX features_geom_rtree ON features USING RTREE (geom);
         """)
         row = con.execute("""
             SELECT
@@ -338,45 +352,49 @@ def _prepare_vector_layer(layer_id: str, original_name: str, upload_path: Path, 
         """).fetchone()
         field_summaries = _field_summaries(con, field_defs)
         con.execute("CHECKPOINT;")
-    finally:
-        con.close()
 
-    feature_count = int(row[0] or 0)
-    if feature_count == 0:
-        raise ValueError("The uploaded vector layer does not contain any readable geometries.")
+        feature_count = int(row[0] or 0)
+        if feature_count == 0:
+            raise ValueError("The uploaded vector layer does not contain any readable geometries.")
 
-    extent = {
-        "min_lon": float(row[1]),
-        "min_lat": float(row[2]),
-        "max_lon": float(row[3]),
-        "max_lat": float(row[4]),
-    }
-    if not _valid_lonlat_extent(extent):
-        raise ValueError(
-            "The uploaded vector layer could not be placed on the map. "
-            "Check that the file has a readable CRS, or reproject it to EPSG:4326."
-        )
-    fields = [
-        {
-            **field,
-            "numeric": field["name"] in field_summaries and field_summaries[field["name"]].get("numeric", False),
-            "summary": field_summaries.get(field["name"], {}),
+        extent = {
+            "min_lon": float(row[1]),
+            "min_lat": float(row[2]),
+            "max_lon": float(row[3]),
+            "max_lat": float(row[4]),
         }
-        for field in field_defs
-    ]
+        if not _valid_lonlat_extent(extent):
+            raise ValueError(
+                "The uploaded vector layer could not be placed on the map. "
+                "Check that the file has a readable CRS, or reproject it to EPSG:4326."
+            )
+        fields = [
+            {
+                **field,
+                "numeric": field["name"] in field_summaries and field_summaries[field["name"]].get("numeric", False),
+                "summary": field_summaries.get(field["name"], {}),
+            }
+            for field in field_defs
+        ]
 
-    return {
-        "id": layer_id,
-        "kind": "vector",
-        "name": Path(original_name or upload_path.name).name,
-        "cache_path": str(cache_path),
-        "feature_count": feature_count,
-        "extent": extent,
-        "fields": fields,
-        "default_field": _default_display_field(fields),
-        "source_crs": source_crs or "unknown",
-        "created_at": time.time(),
-    }
+        return {
+            "id": layer_id,
+            "kind": "vector",
+            "name": Path(original_name or upload_path.name).name,
+            "cache_path": str(cache_path),
+            "work_dir": str(work_dir),
+            "connection": con,
+            "connection_lock": Lock(),
+            "feature_count": feature_count,
+            "extent": extent,
+            "fields": fields,
+            "default_field": _default_display_field(fields),
+            "source_crs": source_crs or "unknown",
+            "created_at": time.time(),
+        }
+    except Exception:
+        con.close()
+        raise
 
 
 def _valid_lonlat_extent(extent: Dict[str, float]) -> bool:
@@ -547,17 +565,19 @@ def _query_vector_features(
     selected_field_sql = _sql_identifier(selected_field) if selected_field else "NULL"
     tolerance = _simplify_tolerance(min_lon, min_lat, max_lon, max_lat, width, height, zoom)
     min_feature_size = tolerance * 3
-    con = duckdb.connect(str(layer["cache_path"]), read_only=True)
-    try:
-        con.execute("LOAD spatial;")
+    con = layer.get("connection")
+    connection_lock = layer.get("connection_lock")
+    if con is None or connection_lock is None:
+        raise ValueError("The uploaded vector layer connection is no longer available. Upload it again.")
+
+    with connection_lock:
+        if layer.get("connection") is not con:
+            raise ValueError("The uploaded vector layer connection is no longer available. Upload it again.")
         count_row = con.execute("""
             SELECT COUNT(*) FROM features
-            WHERE bbox_xmax >= ?
-                AND bbox_xmin <= ?
-                AND bbox_ymax >= ?
-                AND bbox_ymin <= ?
+            WHERE ST_Intersects(geom, ST_MakeEnvelope(?, ?, ?, ?))
                 AND (bbox_xmax - bbox_xmin) + (bbox_ymax - bbox_ymin) >= ?
-        """, [min_lon, max_lon, min_lat, max_lat, min_feature_size]).fetchone()
+        """, [min_lon, min_lat, max_lon, max_lat, min_feature_size]).fetchone()
         visible_count = int(count_row[0]) if count_row else 0
 
         rows = con.execute(f"""
@@ -580,10 +600,7 @@ def _query_vector_features(
                     TRY_CAST({selected_field_sql} AS DOUBLE) AS numeric_value,
                     geom
                 FROM features
-                WHERE bbox_xmax >= ?
-                    AND bbox_xmin <= ?
-                    AND bbox_ymax >= ?
-                    AND bbox_ymin <= ?
+                WHERE ST_Intersects(geom, ST_MakeEnvelope(?, ?, ?, ?))
                     AND (bbox_xmax - bbox_xmin) + (bbox_ymax - bbox_ymin) >= ?
                 ORDER BY feature_id
                 LIMIT ?
@@ -592,14 +609,12 @@ def _query_vector_features(
             tolerance,
             tolerance,
             min_lon,
-            max_lon,
             min_lat,
+            max_lon,
             max_lat,
             min_feature_size,
             MAX_VECTOR_FEATURES,
         ]).fetchall()
-    finally:
-        con.close()
 
     summary = fields.get(selected_field, {}).get("summary", {}) if selected_field else {}
     features = []
@@ -712,7 +727,7 @@ def _prepare_raster_layer(layer_id: str, original_name: str, upload_path: Path, 
         )
 
     normalized_path = _normalize_raster_for_tiling(upload_path, work_dir, gdal_tools)
-    info = _run_json_command([gdal_tools["gdalinfo"], "-json", str(normalized_path)], env=gdal_tools["env"])
+    info = _run_json_command([gdal_tools["gdalinfo"], "-json", "-mm", str(normalized_path)], env=gdal_tools["env"])
     extent = _raster_extent(info)
     if not extent:
         raise ValueError("This raster does not expose a usable WGS84 extent.")
@@ -730,6 +745,7 @@ def _prepare_raster_layer(layer_id: str, original_name: str, upload_path: Path, 
         "raster_path": str(normalized_path),
         "preview_path": str(preview_path),
         "source_upload_path": str(upload_path),
+        "work_dir": str(work_dir),
         "extent": extent,
         "crs": _raster_crs_label(info),
         "bands": _raster_bands(info),
@@ -751,10 +767,10 @@ def _generate_raster_tiles(
         gdal_tools["gdal_translate"],
         "-of", "GTiff",
         "-ot", "Byte",
-        "-scale",
         "-co", "TILED=YES",
         "-co", "COMPRESS=DEFLATE",
     ]
+    command.extend(_display_scale_arguments(info))
     nodata = _first_band_nodata(info)
     if nodata is not None:
         command.extend(["-a_nodata", "0"])
@@ -829,7 +845,6 @@ def _prepare_raster_preview_image(
         "GTiff",
         "-ot",
         "Byte",
-        "-scale",
         "-outsize",
         str(out_width),
         str(out_height),
@@ -838,6 +853,7 @@ def _prepare_raster_preview_image(
         "-co",
         "COMPRESS=DEFLATE",
     ]
+    command.extend(_display_scale_arguments(info))
     nodata = _first_band_nodata(info)
     if nodata is not None:
         command.extend(["-a_nodata", "0"])
@@ -868,6 +884,29 @@ def _first_band_nodata(info: Dict[str, Any]) -> Optional[Any]:
         if band.get("noDataValue") is not None:
             return band.get("noDataValue")
     return None
+
+
+def _display_scale_arguments(info: Dict[str, Any]) -> List[str]:
+    """Reserve display value zero for transparency, including constant bands."""
+    arguments: List[str] = []
+    for position, band in enumerate(info.get("bands") or [], start=1):
+        minimum = band.get("computedMin", band.get("minimum"))
+        maximum = band.get("computedMax", band.get("maximum"))
+        try:
+            minimum = float(minimum)
+            maximum = float(maximum)
+        except (TypeError, ValueError):
+            return ["-scale"]
+        if not math.isfinite(minimum) or not math.isfinite(maximum):
+            return ["-scale"]
+        arguments.extend([
+            f"-scale_{position}",
+            str(minimum),
+            str(maximum),
+            "1",
+            "255",
+        ])
+    return arguments or ["-scale"]
 
 
 def _has_real_georeference(info: Dict[str, Any]) -> bool:
@@ -1091,5 +1130,44 @@ def _public_layer_metadata(layer: Dict[str, Any]) -> Dict[str, Any]:
     return {
         key: value
         for key, value in layer.items()
-        if key not in {"cache_path", "tile_dir", "raster_path", "preview_path", "source_upload_path"}
+        if key not in {
+            "cache_path",
+            "tile_dir",
+            "raster_path",
+            "preview_path",
+            "source_upload_path",
+            "work_dir",
+            "connection",
+            "connection_lock",
+        }
     }
+
+
+def _cleanup_layer(layer: Dict[str, Any]) -> None:
+    connection_lock = layer.get("connection_lock")
+    if connection_lock is not None:
+        with connection_lock:
+            connection = layer.pop("connection", None)
+            if connection is not None:
+                try:
+                    connection.close()
+                except Exception:
+                    pass
+    else:
+        connection = layer.pop("connection", None)
+        if connection is not None:
+            try:
+                connection.close()
+            except Exception:
+                pass
+
+    work_dir_value = str(layer.get("work_dir") or "").strip()
+    if not work_dir_value:
+        return
+    map_layers_dir = _runtime_dir("map_layers").resolve()
+    try:
+        resolved_work_dir = Path(work_dir_value).resolve()
+        resolved_work_dir.relative_to(map_layers_dir)
+    except (OSError, ValueError):
+        return
+    shutil.rmtree(resolved_work_dir, ignore_errors=True)

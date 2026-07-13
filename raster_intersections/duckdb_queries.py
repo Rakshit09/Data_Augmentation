@@ -146,9 +146,15 @@ def intersect_vector_candidates(
     display_field_sql = sql_identifier(selected_field) if selected_field else "CAST(feature_id AS VARCHAR)"
     numeric_field_sql = f"TRY_CAST({sql_identifier(selected_field)} AS DOUBLE)" if selected_field else "NULL"
 
-    con = duckdb.connect(str(cache_path))
-    try:
-        con.execute("LOAD spatial;")
+    con = layer.get("connection")
+    connection_lock = layer.get("connection_lock")
+    if con is None or connection_lock is None:
+        raise ValueError("The uploaded vector layer connection is no longer available. Upload it again.")
+
+    with connection_lock:
+        if layer.get("connection") is not con:
+            raise ValueError("The uploaded vector layer connection is no longer available. Upload it again.")
+        con.execute("DROP TABLE IF EXISTS candidate_points;")
         con.execute("""
             CREATE TEMP TABLE candidate_points(
                 candidate_index BIGINT,
@@ -163,32 +169,33 @@ def intersect_vector_candidates(
                 for index, row in enumerate(candidates)
             ],
         )
-        rows = con.execute(f"""
-            WITH matches AS (
-                SELECT
-                    c.candidate_index,
-                    f.feature_id,
-                    CAST({display_field_sql} AS VARCHAR) AS vector_value,
-                    {numeric_field_sql} AS vector_numeric_value,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY c.candidate_index
-                        ORDER BY f.feature_id
-                    ) AS rn
-                FROM candidate_points c
-                JOIN features f
-                    ON f.bbox_xmax >= c.lon
-                    AND f.bbox_xmin <= c.lon
-                    AND f.bbox_ymax >= c.lat
-                    AND f.bbox_ymin <= c.lat
-                    AND ST_Intersects(f.geom, ST_Point(c.lon, c.lat))
-            )
-            SELECT candidate_index, feature_id, vector_value, vector_numeric_value
-            FROM matches
-            WHERE rn = 1
-            ORDER BY candidate_index;
-        """).fetchall()
-    finally:
-        con.close()
+        try:
+            rows = con.execute(f"""
+                WITH matches AS (
+                    SELECT
+                        c.candidate_index,
+                        f.feature_id,
+                        CAST({display_field_sql} AS VARCHAR) AS vector_value,
+                        {numeric_field_sql} AS vector_numeric_value,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY c.candidate_index
+                            ORDER BY f.feature_id
+                        ) AS rn
+                    FROM candidate_points c
+                    JOIN features f
+                        ON f.bbox_xmax >= c.lon
+                        AND f.bbox_xmin <= c.lon
+                        AND f.bbox_ymax >= c.lat
+                        AND f.bbox_ymin <= c.lat
+                        AND ST_Intersects(f.geom, ST_Point(c.lon, c.lat))
+                )
+                SELECT candidate_index, feature_id, vector_value, vector_numeric_value
+                FROM matches
+                WHERE rn = 1
+                ORDER BY candidate_index;
+            """).fetchall()
+        finally:
+            con.execute("DROP TABLE IF EXISTS candidate_points;")
 
     output: List[Dict[str, Any]] = []
     for candidate_index, feature_id, vector_value, vector_numeric_value in rows:
