@@ -210,6 +210,29 @@ def intersect_vector_candidates(
     return output
 
 
+def _load_excel_extension(con: duckdb.DuckDBPyConnection) -> None:
+    try:
+        con.execute("LOAD excel;")
+    except duckdb.Error:
+        con.execute("INSTALL excel;")
+        con.execute("LOAD excel;")
+
+
+def _source_from_sql(con: duckdb.DuckDBPyConnection, upload_path: Path) -> Tuple[str, List[str]]:
+    """Return (FROM-clause SQL, column list) for a CSV or XLSX upload."""
+    if upload_path.suffix.lower() == ".xlsx":
+        _load_excel_extension(con)
+        from_sql = f"read_xlsx({sql_string(str(upload_path.resolve()))}, header := true, all_varchar := true)"
+        desc = con.execute(f"DESCRIBE SELECT * FROM {from_sql};").fetchall()
+        columns = [str(row[0]) for row in desc]
+        return from_sql, columns
+
+    scan_options = resolve_csv_scan_options(con, upload_path)
+    columns = csv_columns(con, upload_path, scan_options)
+    csv_sql = sql_string(str(upload_path.resolve()))
+    return f"read_csv_auto({csv_sql}, {scan_options})", columns
+
+
 def append_exposure_source_columns(
     upload_path: Path,
     sampled_rows: List[Dict[str, Any]],
@@ -218,20 +241,10 @@ def append_exposure_source_columns(
     if not sampled_rows:
         return [], [], None
 
-    csv_path = upload_path
-    converted_path: Optional[Path] = None
-    if upload_path.suffix.lower() == ".xlsx":
-        if convert_excel_to_csv is None:
-            return _sampled_columns(sampled_rows), sampled_rows, "Excel source rows could not be joined; only sampled coordinates were returned."
-        converted_path = runtime_dir("raster_intersections") / f"{upload_path.stem}_intersection_source.csv"
-        convert_excel_to_csv(upload_path, converted_path)
-        csv_path = converted_path
-
     con = duckdb.connect()
     try:
         con.execute(f"SET temp_directory = {sql_string(str(runtime_dir('duckdb_temp').resolve()))};")
-        scan_options = resolve_csv_scan_options(con, csv_path)
-        source_columns = csv_columns(con, csv_path, scan_options)
+        source_from_sql, source_columns = _source_from_sql(con, upload_path)
         include_vector = any("vector_feature_id" in row or "vector_value" in row for row in sampled_rows)
         exposure_row_id_name = unique_name("exposure_row_id", source_columns)
         raster_lon_name = unique_name("raster_sample_lon", [*source_columns, exposure_row_id_name])
@@ -278,13 +291,13 @@ def append_exposure_source_columns(
                 sampled.vector_feature_id AS {sql_identifier(vector_feature_id_name)},
                 sampled.vector_field AS {sql_identifier(vector_field_name)},
                 sampled.vector_value AS {sql_identifier(vector_value_name)}"""
-        csv_sql = sql_string(str(csv_path.resolve()))
+        csv_sql = sql_string(str(upload_path.resolve()))
         result = con.execute(f"""
             WITH source AS (
                 SELECT
                     row_number() OVER () AS __source_row_id,
                     *
-                FROM read_csv_auto({csv_sql}, {scan_options})
+                FROM {source_from_sql}
             )
             SELECT
                 sampled.row_id AS {sql_identifier(exposure_row_id_name)},
@@ -310,8 +323,6 @@ def append_exposure_source_columns(
         return _sampled_columns(sampled_rows), sampled_rows, f"Source rows could not be joined; sampled coordinate rows were returned instead. {exc}"
     finally:
         con.close()
-        if converted_path is not None:
-            converted_path.unlink(missing_ok=True)
 
 
 def table_columns(con: duckdb.DuckDBPyConnection, table_name: str) -> List[str]:

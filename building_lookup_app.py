@@ -461,6 +461,15 @@ def ensure_utf8_bom(csv_path: Path) -> None:
 
 
 def load_csv_dataframe(csv_path: Path) -> pd.DataFrame:
+    if csv_path.suffix.lower() == ".xlsx":
+        con = duckdb.connect()
+        try:
+            _load_excel_extension(con)
+            xlsx_sql = _xlsx_read_sql(csv_path)
+            return con.execute(f"SELECT * FROM {xlsx_sql};").fetchdf().astype(str)
+        finally:
+            con.close()
+
     errors: List[str] = []
 
     for encoding in csv_encoding_candidates(csv_path):
@@ -486,83 +495,52 @@ def excel_cell_to_string(value: Any) -> str:
     return str(value)
 
 
+def _load_excel_extension(con: duckdb.DuckDBPyConnection) -> None:
+    try:
+        con.execute("LOAD excel;")
+    except duckdb.Error:
+        con.execute("INSTALL excel;")
+        con.execute("LOAD excel;")
+
+
+def _xlsx_read_sql(xlsx_path: Path) -> str:
+    return f"read_xlsx({sql_string(str(xlsx_path.resolve()))}, header := true, all_varchar := true)"
+
+
 def preview_excel_file(excel_path: Path) -> tuple[List[str], List[Dict[str, Any]]]:
+    con = duckdb.connect()
     try:
-        from openpyxl import load_workbook
-    except ImportError as exc:
-        raise ValueError(
-            "Excel uploads require the openpyxl package to be installed."
-        ) from exc
+        _load_excel_extension(con)
+        xlsx_sql = _xlsx_read_sql(excel_path)
 
-    workbook = load_workbook(excel_path, read_only=True, data_only=True)
-    try:
-        sheet = workbook.worksheets[0] if workbook.worksheets else None
-        if sheet is None:
-            raise ValueError("Uploaded Excel file does not contain any worksheets.")
-
-        row_iter = sheet.iter_rows(values_only=True)
-        header_row = next(row_iter, None)
-        if header_row is None:
-            raise ValueError("Uploaded Excel file is empty.")
-
-        columns = [excel_cell_to_string(value) for value in header_row]
-        if not any(column.strip() for column in columns):
+        desc = con.execute(f"DESCRIBE SELECT * FROM {xlsx_sql};").fetchall()
+        columns = [str(row[0]) for row in desc]
+        if not columns:
             raise ValueError("Uploaded Excel file does not contain any readable columns.")
 
+        rows = con.execute(f"SELECT * FROM {xlsx_sql} LIMIT 10;").fetchall()
         preview_rows: List[Dict[str, Any]] = []
-        for row in row_iter:
-            row_values = list(row)
-            if len(row_values) < len(columns):
-                row_values.extend([None] * (len(columns) - len(row_values)))
+        for row in rows:
             record = {
-                column: json_safe(excel_cell_to_string(row_values[index]))
-                for index, column in enumerate(columns)
+                columns[i]: json_safe("" if row[i] is None else str(row[i]))
+                for i in range(len(columns))
             }
             preview_rows.append(record)
-            if len(preview_rows) >= 10:
-                break
 
         return columns, preview_rows
     finally:
-        workbook.close()
+        con.close()
 
 
 def convert_excel_to_csv(excel_path: Path, csv_path: Path) -> None:
+    con = duckdb.connect()
     try:
-        from openpyxl import load_workbook
-    except ImportError as exc:
-        raise ValueError(
-            "Excel uploads require the openpyxl package to be installed."
-        ) from exc
-
-    workbook = load_workbook(excel_path, read_only=True, data_only=True)
-    try:
-        sheet = workbook.worksheets[0] if workbook.worksheets else None
-        if sheet is None:
-            raise ValueError("Uploaded Excel file does not contain any worksheets.")
-
-        row_iter = sheet.iter_rows(values_only=True)
-        header_row = next(row_iter, None)
-        if header_row is None:
-            raise ValueError("Uploaded Excel file is empty.")
-
-        columns = [excel_cell_to_string(value) for value in header_row]
-        if not any(column.strip() for column in columns):
-            raise ValueError("Uploaded Excel file does not contain any readable columns.")
-
-        with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
-            writer = csv.writer(handle)
-            writer.writerow(columns)
-            for row in row_iter:
-                row_values = list(row)
-                if len(row_values) < len(columns):
-                    row_values.extend([None] * (len(columns) - len(row_values)))
-                writer.writerow([
-                    excel_cell_to_string(row_values[index])
-                    for index, _column in enumerate(columns)
-                ])
+        _load_excel_extension(con)
+        xlsx_sql = _xlsx_read_sql(excel_path)
+        csv_out = sql_string(str(csv_path.resolve()))
+        con.execute(f"COPY (SELECT * FROM {xlsx_sql}) TO {csv_out} (HEADER, DELIMITER ',');")
     finally:
-        workbook.close()
+        con.close()
 
 
 def prepare_exposure_upload(uploaded_file, upload_dir: Path, upload_id: str) -> tuple[Path, str]:
@@ -1707,7 +1685,7 @@ def create_app(
 
         min_lon, max_lon = sorted((min_lon, max_lon))
         min_lat, max_lat = sorted((min_lat, max_lat))
-
+            
         if not (
             -180 <= min_lon <= 180
             and -180 <= max_lon <= 180
@@ -2125,25 +2103,12 @@ def create_app(
         )
 
         def run_job() -> None:
-            converted_upload_path: Optional[Path] = None
             try:
                 log_flask_memory(f"Before enrichment job {job_id}")
                 if not enrichment_lock.acquire(blocking=False):
                     raise RuntimeError("Another enrichment is already running.")
 
                 try:
-                    worker_csv_path = upload_path
-                    if upload_path.suffix.lower() == ".xlsx":
-                        set_job(
-                            job_id,
-                            status="running",
-                            phase="Converting Excel workbook",
-                            percent=3,
-                        )
-                        converted_upload_path = local_runtime_dir("exposure_uploads") / f"{job_id}_{upload_path.stem}.csv"
-                        convert_excel_to_csv(upload_path, converted_upload_path)
-                        worker_csv_path = converted_upload_path
-
                     set_job(
                         job_id,
                         status="running",
@@ -2152,7 +2117,7 @@ def create_app(
                     )
                     summary = run_enrichment_worker(
                         db_path=db_path,
-                        csv_path=worker_csv_path,
+                        csv_path=upload_path,
                         output_path=output_path,
                         lat_col=lat_col,
                         lon_col=lon_col,
@@ -2192,8 +2157,6 @@ def create_app(
                     _progress_path=None,
                 )
             finally:
-                if converted_upload_path is not None:
-                    converted_upload_path.unlink(missing_ok=True)
                 cleanup_exposure_runtime()
 
         Thread(target=run_job, daemon=True).start()
@@ -2606,24 +2569,28 @@ def prepare_exposure_map_cache(
 
     cache_dir = cache_path.parent
     tmp_cache_path = cache_dir / f"{cache_path.stem}.{uuid.uuid4().hex}.tmp.duckdb"
-    converted_csv_path: Optional[Path] = None
-    csv_path = upload_path
+    is_xlsx = upload_path.suffix.lower() == ".xlsx"
 
     try:
-        if upload_path.suffix.lower() == ".xlsx":
-            converted_csv_path = local_runtime_dir("exposure_map_uploads") / f"{cache_path.stem}.csv"
-            convert_excel_to_csv(upload_path, converted_csv_path)
-            csv_path = converted_csv_path
-
         con = duckdb.connect(str(tmp_cache_path))
         try:
             con.execute(f"SET temp_directory = {sql_string(str(local_runtime_dir('duckdb_temp').resolve()))};")
-            scan_options_sql = resolve_csv_scan_options(con, csv_path)
-            columns = csv_columns(con, csv_path, scan_options_sql)
+
+            if is_xlsx:
+                _load_excel_extension(con)
+                source_from_sql = _xlsx_read_sql(upload_path)
+                desc = con.execute(f"DESCRIBE SELECT * FROM {source_from_sql};").fetchall()
+                columns = [str(row[0]) for row in desc]
+                scan_options_sql = None
+            else:
+                scan_options_sql = resolve_csv_scan_options(con, upload_path)
+                columns = csv_columns(con, upload_path, scan_options_sql)
+                csv_sql = sql_string(str(upload_path.resolve()))
+                source_from_sql = f"read_csv_auto({csv_sql}, {scan_options_sql})"
+
             if lat_col not in columns or lon_col not in columns:
                 raise ValueError("Selected latitude/longitude columns were not found in the uploaded file.")
 
-            csv_sql = sql_string(str(csv_path.resolve()))
             lat_sql = f"source.{sql_identifier(lat_col)}"
             lon_sql = f"source.{sql_identifier(lon_col)}"
 
@@ -2633,7 +2600,7 @@ def prepare_exposure_map_cache(
                     row_number() OVER () AS row_id,
                     TRY_CAST(NULLIF(TRIM(CAST({lon_sql} AS VARCHAR)), '') AS DOUBLE) AS lon,
                     TRY_CAST(NULLIF(TRIM(CAST({lat_sql} AS VARCHAR)), '') AS DOUBLE) AS lat
-                FROM read_csv_auto({csv_sql}, {scan_options_sql}) AS source;
+                FROM {source_from_sql} AS source;
             """)
 
             total_rows, valid_rows, min_lon, min_lat, max_lon, max_lat = con.execute("""
@@ -2661,7 +2628,7 @@ def prepare_exposure_map_cache(
             con.execute("DROP TABLE source_points;")
             con.execute("CREATE INDEX points_lon_idx ON points(lon);")
             con.execute("CREATE INDEX points_lat_idx ON points(lat);")
-            build_exposure_row_table(con, csv_path, scan_options_sql, columns)
+            build_exposure_row_table(con, upload_path, columns, scan_options_sql=scan_options_sql)
             build_exposure_multires_tables(con)
             con.execute("CREATE TABLE metadata(key VARCHAR PRIMARY KEY, value VARCHAR);")
 
@@ -2689,8 +2656,6 @@ def prepare_exposure_map_cache(
         return cache_path, metadata
     finally:
         unlink_duckdb_file(tmp_cache_path)
-        if converted_csv_path is not None:
-            converted_csv_path.unlink(missing_ok=True)
 
 
 def lookup_exposure_points_in_view(

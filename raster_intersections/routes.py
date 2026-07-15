@@ -28,7 +28,7 @@ def register_raster_intersection_routes(
     find_upload: Callable[[Path, str], Optional[Path]],
     prepare_exposure_map_cache: Callable[[Path, str, str, str], Any],
     open_db: Callable[[str, bool], duckdb.DuckDBPyConnection],
-    convert_excel_to_csv: Optional[Callable[[Path, Path], None]] = None,
+    convert_excel_to_csv: Optional[Callable[[Path, Path], None]] = None,  # deprecated, no longer used
 ) -> None:
     @app.route("/api/raster-intersections/exposure", methods=["POST"])
     def raster_intersect_exposure():
@@ -59,7 +59,7 @@ def register_raster_intersection_routes(
             if not sampled:
                 raise ValueError(_empty_sample_message(candidates, raster_path, raster_metadata, threshold, threshold_operator))
 
-            columns, rows, source_warning = append_exposure_source_columns(upload_path, sampled, convert_excel_to_csv)
+            columns, rows, source_warning = append_exposure_source_columns(upload_path, sampled)
             summary = build_summary(
                 rows=rows,
                 source_type="exposure",
@@ -152,7 +152,7 @@ def register_raster_intersection_routes(
             if not matched:
                 raise ValueError("Exposure points were found, but none intersected the selected vector layer.")
 
-            columns, rows, source_warning = append_exposure_source_columns(upload_path, matched, convert_excel_to_csv)
+            columns, rows, source_warning = append_exposure_source_columns(upload_path, matched)
             summary = build_vector_summary(
                 rows=rows,
                 source_type="vector_exposure",

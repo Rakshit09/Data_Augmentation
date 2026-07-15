@@ -7,7 +7,14 @@ _ddb_version = _ddb.__version__
 _ext_path = os.path.expanduser(
     f"~/.duckdb/extensions/v{_ddb_version}/windows_amd64/spatial.duckdb_extension"
 )
-_extra_datas = [(_ext_path, "duckdb_extensions")] if os.path.isfile(_ext_path) else []
+_excel_ext_path = os.path.expanduser(
+    f"~/.duckdb/extensions/v{_ddb_version}/windows_amd64/excel.duckdb_extension"
+)
+_extra_datas = []
+if os.path.isfile(_ext_path):
+    _extra_datas.append((_ext_path, "duckdb_extensions"))
+if os.path.isfile(_excel_ext_path):
+    _extra_datas.append((_excel_ext_path, "duckdb_extensions"))
 _country_catalog_zip = os.path.join("etl_output", "boundary", "ne_10m_admin_0_countries.zip")
 _boundary_datas = [(_country_catalog_zip, os.path.join("etl_output", "boundary"))] if os.path.isfile(_country_catalog_zip) else []
 _readme_path = "README.md"
@@ -78,6 +85,7 @@ a = Analysis(
         'raster_intersections.utils',
         'rasterio',
         'pyproj',
+        'openpyxl',
     ],
     hookspath=[],
     hooksconfig={},
@@ -93,7 +101,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='DataAugmentation_v2.4',
+    name='DataAugmentation_v2.6',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -113,5 +121,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='DataAugmentation_v2.4',
+    name='DataAugmentation_v2.6',
 )
