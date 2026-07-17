@@ -1117,8 +1117,8 @@ function renderViewFilterLayer(tileUrl) {
         "interpolate",
         ["linear"],
         ["zoom"],
-        viewFilterMinZoom, 0.22,
-        viewFilterMinZoom + 1, 0.36
+        viewFilterMinZoom, 0.34,
+        viewFilterMinZoom + 1, 0.52
       ]
     }
   });
@@ -1142,11 +1142,28 @@ function renderViewFilterLayer(tileUrl) {
         "interpolate",
         ["linear"],
         ["zoom"],
-        viewFilterMinZoom, 0.35,
-        viewFilterMinZoom + 1, 0.8
+        viewFilterMinZoom, 0.7,
+        viewFilterMinZoom + 1, 0.95
       ]
     }
   });
+}
+
+function applyViewFilterLegendColors(legend) {
+  if (!activeViewFilter?.all || !map.getLayer(viewFilterFillLayerId)) return;
+
+  const items = Array.isArray(legend) ? legend : [];
+  if (!items.length) return;
+  const colorExpression = ["match", ["get", "filter_value"]];
+  for (const item of items) {
+    colorExpression.push(String(item.value ?? ""), item.color || "#64748b");
+  }
+  colorExpression.push(["coalesce", ["get", "__color"], "#64748b"]);
+
+  map.setPaintProperty(viewFilterFillLayerId, "fill-color", colorExpression);
+  if (map.getLayer(viewFilterOutlineLayerId)) {
+    map.setPaintProperty(viewFilterOutlineLayerId, "line-color", colorExpression);
+  }
 }
 
 async function refreshViewFilter({ silent = false } = {}) {
@@ -1200,13 +1217,15 @@ async function refreshViewFilter({ silent = false } = {}) {
     }
     viewFilterFetchController = null;
 
-    const matched = Number(payload.count || 0);
+    const colored = Number(payload.colored_count ?? payload.count ?? 0);
+    const shown = Number(payload.shown_count ?? colored);
     if (activeViewFilter.all) {
+      applyViewFilterLegendColors(payload.legend);
       window.filterViewAll?.renderLegend(payload, formatFieldLabel(activeViewFilter.column));
-      setFilterViewMessage(`${formatInteger(matched)} polygons across all visible values.`, matched ? "success" : "");
+      setFilterViewMessage(`${formatInteger(shown)} polygons shown · ${formatInteger(colored)} coloured.`, colored ? "success" : "");
     } else {
       window.filterViewAll?.clearLegend();
-      setFilterViewMessage(`${formatInteger(matched)} polygons matched in the current view.`, matched ? "success" : "");
+      setFilterViewMessage(`${formatInteger(shown)} polygons shown · ${formatInteger(colored)} coloured.`, colored ? "success" : "");
     }
     if (!silent || statusEl.textContent === "Filtering") {
       statusEl.textContent = "Ready";

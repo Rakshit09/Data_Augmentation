@@ -66,32 +66,32 @@ SUPPORTED_EXPOSURE_UPLOAD_EXTENSIONS = {".csv", ".xlsx"}
 EXPOSURE_MAP_MAX_FEATURES = int(os.environ.get("EXPOSURE_MAP_MAX_FEATURES", "12000"))
 EXPOSURE_MAP_CACHE_MAX_FILES = int(os.environ.get("EXPOSURE_MAP_CACHE_MAX_FILES", "3"))
 MAX_BUILDING_FILTER_VALUES = 500
-FILTER_VIEW_MIN_ZOOM = 15
+FILTER_VIEW_MIN_ZOOM = 11
 FILTER_VIEW_MAX_TILE_ZOOM = 17
-MAX_FILTER_VIEW_FEATURES_PER_TILE = 25000
+MAX_FILTER_VIEW_FEATURES_PER_TILE = 50000
 MAX_FILTER_VIEW_SUMMARY_TILES = 256
 FILTER_VIEW_ALL_VALUE = "__ALL__"
 FILTER_VIEW_PALETTE = [
-    "#1f77b4",
-    "#ff7f0e",
-    "#2ca02c",
-    "#d62728",
-    "#9467bd",
-    "#8c564b",
-    "#e377c2",
-    "#7f7f7f",
-    "#bcbd22",
-    "#17becf",
-    "#393b79",
-    "#637939",
-    "#8c6d31",
-    "#843c39",
-    "#7b4173",
-    "#3182bd",
-    "#31a354",
-    "#756bb1",
-    "#e6550d",
-    "#969696",
+    "#e85d04",  # orange
+    "#0067c5",  # blue
+    "#b5175b",  # magenta
+    "#008c95",  # teal
+    "#6f42c1",  # purple
+    "#c62828",  # red
+    "#2e7d32",  # green
+    "#b07800",  # amber
+    "#3f51b5",  # indigo
+    "#a63c06",  # rust
+    "#00796b",  # emerald
+    "#8e24aa",  # violet
+    "#ad2831",  # brick
+    "#0077a8",  # ocean
+    "#667a00",  # olive
+    "#d43d00",  # vermilion
+    "#5d3f8c",  # plum
+    "#00834f",  # jade
+    "#8c2d55",  # wine
+    "#52606d",  # slate
 ]
 BUILDING_COLUMNS = [
     "building_id",
@@ -2658,6 +2658,23 @@ def prepare_exposure_map_cache(
         unlink_duckdb_file(tmp_cache_path)
 
 
+def exposure_view_grid(width: int, height: int, max_features: int) -> Tuple[int, int, int]:
+    safe_width = max(320, min(3840, int(width or 1200)))
+    safe_height = max(240, min(2160, int(height or 800)))
+    safe_max = max(500, min(int(max_features or EXPOSURE_MAP_MAX_FEATURES), EXPOSURE_MAP_MAX_FEATURES))
+
+    cols = max(24, min(260, math.ceil(safe_width / 8)))
+    rows = max(18, min(200, math.ceil(safe_height / 8)))
+    cell_count = cols * rows
+
+    if cell_count > safe_max:
+        scale = math.sqrt(safe_max / cell_count)
+        cols = max(24, int(cols * scale))
+        rows = max(18, int(rows * scale))
+
+    return cols, rows, safe_max
+
+
 def lookup_exposure_points_in_view(
     cache_path: Path,
     min_lon: float,
@@ -4172,29 +4189,34 @@ def lookup_building_filter_summary(
 
     if value != FILTER_VIEW_ALL_VALUE:
         row = con.execute(f"""
-            SELECT COUNT(*)
+            SELECT
+                COUNT(*) AS shown_count,
+                COUNT(*) FILTER (
+                    WHERE CAST({column_sql} AS VARCHAR) = ?
+                ) AS colored_count
             FROM buildings AS b
             WHERE
                 {qk_filter}
                 AND b.bbox_xmax >= ?
                 AND b.bbox_xmin <= ?
                 AND b.bbox_ymax >= ?
-                AND b.bbox_ymin <= ?
-                AND CAST({column_sql} AS VARCHAR) = ?;
-        """, [*bounds_params, value]).fetchone()
+                AND b.bbox_ymin <= ?;
+        """, [value, *bounds_params]).fetchone()
+        shown_count = int(row[0] or 0)
+        colored_count = int(row[1] or 0)
         return {
-            "count": int(row[0] or 0),
+            "count": colored_count,
+            "shown_count": shown_count,
+            "colored_count": colored_count,
             "mode": "single",
             "legend": [],
         }
 
     filter_value_sql = f"CAST({column_sql} AS VARCHAR)"
-    color_sql = filter_value_color_sql("filter_value")
     rows = con.execute(f"""
-        WITH grouped AS (
+        WITH visible AS (
             SELECT
-                {filter_value_sql} AS filter_value,
-                COUNT(*) AS value_count
+                {filter_value_sql} AS filter_value
             FROM buildings AS b
             WHERE
                 {qk_filter}
@@ -4202,30 +4224,42 @@ def lookup_building_filter_summary(
                 AND b.bbox_xmin <= ?
                 AND b.bbox_ymax >= ?
                 AND b.bbox_ymin <= ?
-                AND {column_sql} IS NOT NULL
-                AND {filter_value_sql} <> ''
+        ),
+        grouped AS (
+            SELECT filter_value, COUNT(*) AS value_count
+            FROM visible
+            WHERE filter_value IS NOT NULL AND filter_value <> ''
             GROUP BY filter_value
+        ),
+        totals AS (
+            SELECT COUNT(*) AS shown_count FROM visible
         )
         SELECT
-            filter_value,
-            value_count,
-            SUM(value_count) OVER () AS visible_count,
-            {color_sql} AS color
-        FROM grouped
+            grouped.filter_value,
+            grouped.value_count,
+            COALESCE(SUM(grouped.value_count) OVER (), 0) AS colored_count,
+            totals.shown_count
+        FROM totals
+        LEFT JOIN grouped ON true
         ORDER BY value_count DESC, filter_value
         LIMIT ?;
     """, [*bounds_params, MAX_BUILDING_FILTER_VALUES]).fetchall()
 
+    shown_count = int(rows[0][3] or 0) if rows else 0
+    colored_count = int(rows[0][2] or 0) if rows else 0
     return {
-        "count": int(rows[0][2] or 0) if rows else 0,
+        "count": colored_count,
+        "shown_count": shown_count,
+        "colored_count": colored_count,
         "mode": "all",
         "legend": [
             {
                 "value": str(filter_value),
                 "count": int(value_count or 0),
-                "color": str(color),
+                "color": FILTER_VIEW_PALETTE[index % len(FILTER_VIEW_PALETTE)],
             }
-            for filter_value, value_count, _visible_count, color in rows
+            for index, (filter_value, value_count, _colored_count, _shown_count) in enumerate(rows)
+            if filter_value is not None
         ],
     }
 
