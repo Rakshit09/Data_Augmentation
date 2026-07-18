@@ -1182,7 +1182,7 @@ async function refreshViewFilter({ silent = false } = {}) {
 
   if (map.getZoom() < viewFilterMinZoom) {
     window.filterViewAll?.clearLegend();
-    setFilterViewMessage(viewFilterZoomMessage);
+    setFilterViewMessage(viewFilterZoomMessage, "zoom");
     if (!silent || statusEl.textContent === "Filtering") {
       statusEl.textContent = "Ready";
     }
@@ -1219,13 +1219,18 @@ async function refreshViewFilter({ silent = false } = {}) {
 
     const colored = Number(payload.colored_count ?? payload.count ?? 0);
     const shown = Number(payload.shown_count ?? colored);
+    const tileLimit = Number(payload.tile_feature_limit || colored);
+    const maxColoredPerTile = Math.min(colored, tileLimit);
+    const filterCountMessage = colored > maxColoredPerTile
+      ? `${formatInteger(shown)} polygons shown · ${formatInteger(colored)} matching · up to ${formatInteger(maxColoredPerTile)} coloured per tile.`
+      : `${formatInteger(shown)} polygons shown · ${formatInteger(colored)} coloured.`;
     if (activeViewFilter.all) {
       applyViewFilterLegendColors(payload.legend);
       window.filterViewAll?.renderLegend(payload, formatFieldLabel(activeViewFilter.column));
-      setFilterViewMessage(`${formatInteger(shown)} polygons shown · ${formatInteger(colored)} coloured.`, colored ? "success" : "");
+      setFilterViewMessage(filterCountMessage, colored ? "success" : "");
     } else {
       window.filterViewAll?.clearLegend();
-      setFilterViewMessage(`${formatInteger(shown)} polygons shown · ${formatInteger(colored)} coloured.`, colored ? "success" : "");
+      setFilterViewMessage(filterCountMessage, colored ? "success" : "");
     }
     if (!silent || statusEl.textContent === "Filtering") {
       statusEl.textContent = "Ready";
@@ -1281,6 +1286,7 @@ function setFilterViewMessage(message, type = "") {
   filterViewMessage.textContent = message;
   filterViewMessage.classList.toggle("error", type === "error");
   filterViewMessage.classList.toggle("success", type === "success");
+  filterViewMessage.classList.toggle("zoom-notice", type === "zoom");
 }
 
 uploadForm.addEventListener("submit", (event) => {

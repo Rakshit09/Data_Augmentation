@@ -4121,23 +4121,26 @@ def _viewport_quadkey_filter(
     prefix_zoom: int,
     allow_null_prefix: bool,
 ) -> str:
-    min_x, min_y = _tile_xy(min_lon, max_lat, prefix_zoom)
-    max_x, max_y = _tile_xy(max_lon, min_lat, prefix_zoom)
-    max_tile = (1 << prefix_zoom) - 1
-    min_x = max(0, min_x - 1)
-    min_y = max(0, min_y - 1)
-    max_x = min(max_tile, max_x + 1)
-    max_y = min(max_tile, max_y + 1)
+    # A zoom-14 database prefix can cover too many cells at the filter view's
+    # minimum map zoom. Shorter prefixes still match the stored full quadkeys,
+    # while the exact bbox predicates applied later preserve the result.
+    effective_zoom = max(1, int(prefix_zoom))
+    while True:
+        min_x, min_y = _tile_xy(min_lon, max_lat, effective_zoom)
+        max_x, max_y = _tile_xy(max_lon, min_lat, effective_zoom)
+        max_tile = (1 << effective_zoom) - 1
+        min_x = max(0, min_x - 1)
+        min_y = max(0, min_y - 1)
+        max_x = min(max_tile, max_x + 1)
+        max_y = min(max_tile, max_y + 1)
 
-    tile_count = (max_x - min_x + 1) * (max_y - min_y + 1)
-    if tile_count > MAX_FILTER_VIEW_SUMMARY_TILES:
-        raise ValueError(
-            "Viewport is too large for a building-level filter summary. "
-            "Zoom in and try again."
-        )
+        tile_count = (max_x - min_x + 1) * (max_y - min_y + 1)
+        if tile_count <= MAX_FILTER_VIEW_SUMMARY_TILES or effective_zoom == 1:
+            break
+        effective_zoom -= 1
 
     quadkeys = {
-        _tile_to_quadkey(tile_x, tile_y, prefix_zoom)
+        _tile_to_quadkey(tile_x, tile_y, effective_zoom)
         for tile_x in range(min_x, max_x + 1)
         for tile_y in range(min_y, max_y + 1)
     }
@@ -4208,6 +4211,7 @@ def lookup_building_filter_summary(
             "count": colored_count,
             "shown_count": shown_count,
             "colored_count": colored_count,
+            "tile_feature_limit": MAX_FILTER_VIEW_FEATURES_PER_TILE,
             "mode": "single",
             "legend": [],
         }
@@ -4251,6 +4255,7 @@ def lookup_building_filter_summary(
         "count": colored_count,
         "shown_count": shown_count,
         "colored_count": colored_count,
+        "tile_feature_limit": MAX_FILTER_VIEW_FEATURES_PER_TILE,
         "mode": "all",
         "legend": [
             {
