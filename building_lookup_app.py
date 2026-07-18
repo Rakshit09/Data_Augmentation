@@ -27,7 +27,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import duckdb
 import pandas as pd
-from flask import Flask, Response, jsonify, render_template, request, send_file
+from flask import Flask, jsonify, render_template, request, send_file
 from markupsafe import Markup
 from werkzeug.utils import secure_filename
 
@@ -67,8 +67,7 @@ EXPOSURE_MAP_MAX_FEATURES = int(os.environ.get("EXPOSURE_MAP_MAX_FEATURES", "120
 EXPOSURE_MAP_CACHE_MAX_FILES = int(os.environ.get("EXPOSURE_MAP_CACHE_MAX_FILES", "3"))
 MAX_BUILDING_FILTER_VALUES = 500
 FILTER_VIEW_MIN_ZOOM = 11
-FILTER_VIEW_MAX_TILE_ZOOM = 17
-MAX_FILTER_VIEW_FEATURES_PER_TILE = 50000
+MAX_VIEW_FILTER_FEATURES = 15000
 MAX_FILTER_VIEW_SUMMARY_TILES = 256
 FILTER_VIEW_ALL_VALUE = "__ALL__"
 FILTER_VIEW_PALETTE = [
@@ -666,16 +665,6 @@ def _tile_to_quadkey(x: int, y: int, zoom: int) -> str:
     return "".join(chars)
 
 
-def tile_to_bounds(x: int, y: int, z: int) -> Tuple[float, float, float, float]:
-    """Convert slippy-map tile coordinates to lon/lat bounds."""
-    n = 1 << z
-    west = x / n * 360.0 - 180.0
-    east = (x + 1) / n * 360.0 - 180.0
-    north = math.degrees(math.atan(math.sinh(math.pi * (1.0 - (2.0 * y) / n))))
-    south = math.degrees(math.atan(math.sinh(math.pi * (1.0 - (2.0 * (y + 1)) / n))))
-    return west, south, east, north
-
-
 def _compute_covering_quadkeys(
     lons: Any,
     lats: Any,
@@ -755,41 +744,6 @@ def _point_quadkey_filter(
         return f"(b.{col_sql} IN ({qk_sql}) OR b.{col_sql} IS NULL)"
 
     return f"b.{col_sql} IN ({qk_sql})"
-
-
-def _tile_quadkey_filter(
-    x: int,
-    y: int,
-    z: int,
-    prefix_column: str,
-    prefix_zoom: int,
-    allow_null_prefix: bool,
-) -> str:
-    if z >= prefix_zoom:
-        west, south, east, north = tile_to_bounds(x, y, z)
-        return _point_quadkey_filter(
-            (west + east) / 2.0,
-            (south + north) / 2.0,
-            prefix_column,
-            prefix_zoom,
-            allow_null_prefix,
-        )
-
-    if z <= 0:
-        return "TRUE"
-
-    prefix = _tile_to_quadkey(x, y, z)
-    range_start, range_end = merge_quadkey_prefix_ranges({prefix})[0]
-    prefix_sql = sql_identifier(prefix_column)
-    predicate = f"b.{prefix_sql} >= {sql_string(range_start)}"
-    if range_end is not None:
-        predicate += f" AND b.{prefix_sql} < {sql_string(range_end)}"
-    predicate = f"({predicate})"
-
-    if allow_null_prefix:
-        return f"({predicate} OR b.{prefix_sql} IS NULL)"
-
-    return predicate
 
 
 def run_enrichment_worker(
@@ -1463,7 +1417,6 @@ def create_app(
         return render_template(
             "index.html",
             filter_view_min_zoom=FILTER_VIEW_MIN_ZOOM,
-            filter_view_max_tile_zoom=FILTER_VIEW_MAX_TILE_ZOOM,
             exposure_raw_point_zoom=RAW_POINT_ZOOM,
         )
 
@@ -1685,7 +1638,7 @@ def create_app(
 
         min_lon, max_lon = sorted((min_lon, max_lon))
         min_lat, max_lat = sorted((min_lat, max_lat))
-            
+
         if not (
             -180 <= min_lon <= 180
             and -180 <= max_lon <= 180
@@ -1731,28 +1684,37 @@ def create_app(
 
         return jsonify(summary)
 
-    @app.route("/api/tiles/<int:z>/<int:x>/<int:y>.mvt")
-    def building_filter_tiles(z: int, x: int, y: int):
-        if z < 0:
-            return jsonify({"error": "Tile zoom must be non-negative."}), 400
-        if z > FILTER_VIEW_MAX_TILE_ZOOM:
+    @app.route("/api/building-footprints")
+    def building_filter_footprints():
+        try:
+            min_lon = float(request.args["min_lon"])
+            min_lat = float(request.args["min_lat"])
+            max_lon = float(request.args["max_lon"])
+            max_lat = float(request.args["max_lat"])
+            zoom = float(request.args["zoom"])
+        except (KeyError, ValueError):
             return jsonify({
-                "error": f"Filter-view tiles are available through zoom {FILTER_VIEW_MAX_TILE_ZOOM}."
+                "error": "Valid min_lon, min_lat, max_lon, max_lat, and zoom query parameters are required."
             }), 400
-
-        tile_count = 1 << z
-        if x < 0 or y < 0 or x >= tile_count or y >= tile_count:
-            return jsonify({"error": "Tile coordinates are out of range."}), 400
 
         column = str(request.args.get("column", "")).strip()
         value = str(request.args.get("value", "")).strip()
-        color = str(request.args.get("color", "")).strip() or None
-
         if not column or not value:
             return jsonify({"error": "Both filter column and value are required."}), 400
 
-        if z < FILTER_VIEW_MIN_ZOOM:
-            return Response(status=204)
+        min_lon, max_lon = sorted((min_lon, max_lon))
+        min_lat, max_lat = sorted((min_lat, max_lat))
+        if not (
+            -180 <= min_lon <= 180
+            and -180 <= max_lon <= 180
+            and -90 <= min_lat <= 90
+            and -90 <= max_lat <= 90
+            and math.isfinite(zoom)
+        ):
+            return jsonify({"error": "Viewport coordinates are out of range."}), 400
+
+        if zoom < FILTER_VIEW_MIN_ZOOM:
+            return jsonify(_empty_filter_feature_collection())
 
         db_path = app.config.get("DB_PATH") or ""
         if not db_path or not Path(db_path).is_file():
@@ -1764,14 +1726,15 @@ def create_app(
         con = cached_readonly_db_cursor(db_path)
         try:
             available_columns, quadkey_config = cached_filter_view_metadata(db_path, con)
-            tile_blob = lookup_buildings_mvt(
+            feature_collection = lookup_buildings_geojson(
                 con,
-                z=z,
-                x=x,
-                y=y,
+                min_lon=min_lon,
+                min_lat=min_lat,
+                max_lon=max_lon,
+                max_lat=max_lat,
+                zoom=zoom,
                 column=column,
                 value=value,
-                color=color,
                 available_columns=available_columns,
                 quadkey_config=quadkey_config,
             )
@@ -1780,10 +1743,7 @@ def create_app(
         finally:
             con.close()
 
-        response = Response(tile_blob, mimetype="application/vnd.mapbox-vector-tile")
-        response.headers["Cache-Control"] = "public, max-age=3600"
-        return response
-
+        return jsonify(feature_collection)
 
     @app.route("/api/search-address")
     def search_address():
@@ -4101,17 +4061,6 @@ def lookup_filter_values(
     return [str(row[0]) for row in rows if row and row[0] is not None]
 
 
-def filter_value_color_sql(value_sql: str) -> str:
-    color_cases = " ".join(
-        f"WHEN {index} THEN {sql_string(color)}"
-        for index, color in enumerate(FILTER_VIEW_PALETTE)
-    )
-    return (
-        f"CASE (hash({value_sql}) % {len(FILTER_VIEW_PALETTE)}) "
-        f"{color_cases} ELSE '#64748b' END"
-    )
-
-
 def _viewport_quadkey_filter(
     min_lon: float,
     min_lat: float,
@@ -4211,7 +4160,7 @@ def lookup_building_filter_summary(
             "count": colored_count,
             "shown_count": shown_count,
             "colored_count": colored_count,
-            "tile_feature_limit": MAX_FILTER_VIEW_FEATURES_PER_TILE,
+            "feature_limit": MAX_VIEW_FILTER_FEATURES,
             "mode": "single",
             "legend": [],
         }
@@ -4255,7 +4204,7 @@ def lookup_building_filter_summary(
         "count": colored_count,
         "shown_count": shown_count,
         "colored_count": colored_count,
-        "tile_feature_limit": MAX_FILTER_VIEW_FEATURES_PER_TILE,
+        "feature_limit": MAX_VIEW_FILTER_FEATURES,
         "mode": "all",
         "legend": [
             {
@@ -4274,76 +4223,67 @@ def filter_value_color(value: str) -> str:
     return FILTER_VIEW_PALETTE[int(digest[:8], 16) % len(FILTER_VIEW_PALETTE)]
 
 
-def lookup_buildings_mvt(
+def _empty_filter_feature_collection() -> Dict[str, Any]:
+    return {
+        "type": "FeatureCollection",
+        "features": [],
+        "drawn_count": 0,
+        "feature_limit": MAX_VIEW_FILTER_FEATURES,
+    }
+
+
+def _filter_view_simplify_tolerance(zoom: float) -> float:
+    safe_zoom = max(0.0, min(22.0, float(zoom)))
+    return 360.0 / (4096.0 * (2.0 ** safe_zoom))
+
+
+def lookup_buildings_geojson(
     con: duckdb.DuckDBPyConnection,
-    z: int,
-    x: int,
-    y: int,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    zoom: float,
     column: str,
     value: str,
-    color: Optional[str],
     available_columns: Optional[Set[str]] = None,
     quadkey_config: Optional[Tuple[str, int, bool]] = None,
-) -> bytes:
+) -> Dict[str, Any]:
     if available_columns is None:
         available_columns = set(lookup_display_columns(con))
     if column not in available_columns:
         raise ValueError(f"Unknown lookup filter column: {column}")
 
-    min_lon, min_lat, max_lon, max_lat = tile_to_bounds(x, y, z)
-    tolerance = 360.0 / (4096.0 * (1 << z))
     column_sql = sql_identifier(column)
-    quadkey_prefix_column, quadkey_prefix_zoom, allow_null_quadkey_prefix = (
+    prefix_column, prefix_zoom, has_null_prefixes = (
         quadkey_config or enrichment_quadkey_config(con)
     )
-    qk_filter = _tile_quadkey_filter(
-        x,
-        y,
-        z,
-        quadkey_prefix_column,
-        quadkey_prefix_zoom,
-        allow_null_quadkey_prefix,
+    qk_filter = _viewport_quadkey_filter(
+        min_lon,
+        min_lat,
+        max_lon,
+        max_lat,
+        prefix_column,
+        prefix_zoom,
+        has_null_prefixes,
     )
+    filter_value_sql = f"CAST({column_sql} AS VARCHAR)"
 
     if value == FILTER_VIEW_ALL_VALUE:
-        color_sql = filter_value_color_sql(f"CAST({column_sql} AS VARCHAR)")
-        value_sql = f"{column_sql} IS NOT NULL AND CAST({column_sql} AS VARCHAR) <> ''"
-        params: List[Any] = [
-            min_lon, min_lat, max_lon, max_lat, tolerance,
-            min_lon, max_lon, min_lat, max_lat,
-            MAX_FILTER_VIEW_FEATURES_PER_TILE,
-        ]
+        value_sql = f"{column_sql} IS NOT NULL AND {filter_value_sql} <> ''"
+        params: List[Any] = [min_lon, max_lon, min_lat, max_lat]
     else:
-        color_sql = sql_string(color or filter_value_color(value))
-        value_sql = f"CAST({column_sql} AS VARCHAR) = ?"
-        params = [
-            min_lon, min_lat, max_lon, max_lat, tolerance,
-            min_lon, max_lon, min_lat, max_lat, value,
-            MAX_FILTER_VIEW_FEATURES_PER_TILE,
-        ]
+        value_sql = f"{filter_value_sql} = ?"
+        params = [min_lon, max_lon, min_lat, max_lat, value]
 
-    tile_blob = con.execute(f"""
-        WITH envelope AS (
-            SELECT {{
-                'min_x': ?,
-                'min_y': ?,
-                'max_x': ?,
-                'max_y': ?
-            }}::BOX_2D AS bounds
-        ),
-        filtered AS (
+    tolerance = _filter_view_simplify_tolerance(zoom)
+    rows = con.execute(f"""
+        WITH selected AS MATERIALIZED (
             SELECT
-                ST_AsMVTGeom(
-                    ST_Simplify(b.geom, ?),
-                    envelope.bounds,
-                    4096,
-                    8,
-                    true
-                ) AS geom,
                 b.building_id,
-                CAST({column_sql} AS VARCHAR) AS filter_value,
-                {color_sql} AS __color
-            FROM buildings AS b, envelope
+                {filter_value_sql} AS filter_value,
+                b.geom
+            FROM buildings AS b
             WHERE
                 {qk_filter}
                 AND b.bbox_xmax >= ?
@@ -4354,18 +4294,41 @@ def lookup_buildings_mvt(
             ORDER BY b.building_id
             LIMIT ?
         )
-        SELECT ST_AsMVT(tile_rows, 'buildings', 4096, 'geom')
-        FROM (
-            SELECT geom, building_id, filter_value, __color
-            FROM filtered
-            WHERE geom IS NOT NULL
-        ) AS tile_rows;
-    """, params).fetchone()[0]
+        SELECT
+            building_id,
+            filter_value,
+            ST_AsGeoJSON(
+                CASE
+                    WHEN ? > 0 THEN ST_SimplifyPreserveTopology(geom, ?)
+                    ELSE geom
+                END
+            ) AS geometry
+        FROM selected
+        WHERE geom IS NOT NULL;
+    """, [*params, MAX_VIEW_FILTER_FEATURES, tolerance, tolerance]).fetchall()
 
-    if tile_blob is None:
-        return b""
+    features = []
+    for building_id, filter_value, geometry_json in rows:
+        if not geometry_json:
+            continue
+        normalized_value = str(filter_value)
+        features.append({
+            "type": "Feature",
+            "geometry": json.loads(str(geometry_json)),
+            "properties": {
+                "building_id": building_id,
+                "filter_column": column,
+                "filter_value": normalized_value,
+                "__color": filter_value_color(normalized_value),
+            },
+        })
 
-    return bytes(tile_blob)
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+        "drawn_count": len(features),
+        "feature_limit": MAX_VIEW_FILTER_FEATURES,
+    }
 
 
 def default_enrichment_fields(

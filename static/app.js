@@ -65,7 +65,6 @@ let availableDbFiles = [];
 let selectedBuilding = null;
 let activeViewFilter = null;
 let viewFilterRequestId = 0;
-let viewFilterTileUrlActive = "";
 let viewFilterFetchController = null;
 let activeExposureMap = null;
 let exposureMapFetchController = null;
@@ -101,10 +100,8 @@ const emptyFeatureCollection = {
 const viewFilterSourceId = "view-filter-buildings";
 const viewFilterFillLayerId = "view-filter-buildings-fill";
 const viewFilterOutlineLayerId = "view-filter-buildings-outline";
-const viewFilterSourceLayer = "buildings";
 const mapElement = document.getElementById("map");
 const viewFilterMinZoom = Number(mapElement?.dataset.filterViewMinZoom || 15);
-const viewFilterMaxTileZoom = Number(mapElement?.dataset.filterViewMaxTileZoom || 17);
 const viewFilterZoomMessage = "Zoom to see building level filter view";
 const exposureRawPointZoom = Number(mapElement?.dataset.exposureRawPointZoom || 14.5);
 
@@ -654,6 +651,21 @@ map.on("load", () => {
   });
 });
 
+map.on("movestart", () => {
+  if (activeViewFilter) {
+    cancelViewFilterRequest();
+  }
+});
+
+map.on("zoom", () => {
+  if (!activeViewFilter) return;
+  if (map.getZoom() < viewFilterMinZoom) {
+    setFilterViewMessage(viewFilterZoomMessage, "zoom");
+  } else if (filterViewMessage?.classList.contains("zoom-notice")) {
+    setFilterViewMessage("Loading matching footprints in the current view...");
+  }
+});
+
 map.on("moveend", () => {
   if (activeViewFilter) {
     refreshViewFilter({ silent: true });
@@ -1062,91 +1074,72 @@ function renderViewFilterValueOptions(values) {
   updateFilterViewColorAvailability();
 }
 
-function removeViewFilterLayer() {
+function renderViewFilterLayer(featureCollection) {
+  let source = map.getSource(viewFilterSourceId);
+  if (!source) {
+    map.addSource(viewFilterSourceId, {
+      type: "geojson",
+      data: featureCollection || emptyFeatureCollection
+    });
+    source = map.getSource(viewFilterSourceId);
+  } else {
+    source.setData(featureCollection || emptyFeatureCollection);
+  }
+
+  if (!map.getLayer(viewFilterFillLayerId)) {
+    map.addLayer({
+      id: viewFilterFillLayerId,
+      type: "fill",
+      source: viewFilterSourceId,
+      minzoom: viewFilterMinZoom,
+      paint: {
+        "fill-color": ["coalesce", ["get", "__color"], "#64748b"],
+        "fill-opacity": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          viewFilterMinZoom, 0.34,
+          viewFilterMinZoom + 1, 0.52
+        ]
+      }
+    });
+  }
+
+  if (!map.getLayer(viewFilterOutlineLayerId)) {
+    map.addLayer({
+      id: viewFilterOutlineLayerId,
+      type: "line",
+      source: viewFilterSourceId,
+      minzoom: viewFilterMinZoom,
+      paint: {
+        "line-color": ["coalesce", ["get", "__color"], "#64748b"],
+        "line-width": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          viewFilterMinZoom, 0.7,
+          viewFilterMinZoom + 2, 1.2
+        ],
+        "line-opacity": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          viewFilterMinZoom, 0.7,
+          viewFilterMinZoom + 1, 0.95
+        ]
+      }
+    });
+  }
+}
+
+function setViewFilterLayerColor(color) {
+  const paintColor = color || ["coalesce", ["get", "__color"], "#64748b"];
   if (map.getLayer(viewFilterFillLayerId)) {
-    map.removeLayer(viewFilterFillLayerId);
+    map.setPaintProperty(viewFilterFillLayerId, "fill-color", paintColor);
   }
   if (map.getLayer(viewFilterOutlineLayerId)) {
-    map.removeLayer(viewFilterOutlineLayerId);
+    map.setPaintProperty(viewFilterOutlineLayerId, "line-color", paintColor);
   }
-  if (map.getSource(viewFilterSourceId)) {
-    map.removeSource(viewFilterSourceId);
-  }
-}
-
-function viewFilterTileUrl() {
-  if (!activeViewFilter) return "";
-
-  const params = new URLSearchParams({
-    column: activeViewFilter.column,
-    value: activeViewFilter.value
-  });
-
-  if (!activeViewFilter.all && activeViewFilter.color) {
-    params.set("color", activeViewFilter.color);
-  }
-
-  return `${window.location.origin}/api/tiles/{z}/{x}/{y}.mvt?${params.toString()}`;
-}
-
-function renderViewFilterLayer(tileUrl) {
-  if (!tileUrl) return;
-  if (map.getSource(viewFilterSourceId) && viewFilterTileUrlActive === tileUrl) {
-    return;
-  }
-
-  removeViewFilterLayer();
-  viewFilterTileUrlActive = tileUrl;
-
-  map.addSource(viewFilterSourceId, {
-    type: "vector",
-    tiles: [tileUrl],
-    minzoom: viewFilterMinZoom,
-    maxzoom: viewFilterMaxTileZoom
-  });
-
-  map.addLayer({
-    id: viewFilterFillLayerId,
-    type: "fill",
-    source: viewFilterSourceId,
-    "source-layer": viewFilterSourceLayer,
-    minzoom: viewFilterMinZoom,
-    paint: {
-      "fill-color": ["coalesce", ["get", "__color"], "#64748b"],
-      "fill-opacity": [
-        "interpolate",
-        ["linear"],
-        ["zoom"],
-        viewFilterMinZoom, 0.34,
-        viewFilterMinZoom + 1, 0.52
-      ]
-    }
-  });
-
-  map.addLayer({
-    id: viewFilterOutlineLayerId,
-    type: "line",
-    source: viewFilterSourceId,
-    "source-layer": viewFilterSourceLayer,
-    minzoom: viewFilterMinZoom,
-    paint: {
-      "line-color": ["coalesce", ["get", "__color"], "#64748b"],
-      "line-width": [
-        "interpolate",
-        ["linear"],
-        ["zoom"],
-        viewFilterMinZoom, 0.7,
-        viewFilterMinZoom + 2, 1.2
-      ],
-      "line-opacity": [
-        "interpolate",
-        ["linear"],
-        ["zoom"],
-        viewFilterMinZoom, 0.7,
-        viewFilterMinZoom + 1, 0.95
-      ]
-    }
-  });
 }
 
 function applyViewFilterLegendColors(legend) {
@@ -1170,17 +1163,12 @@ async function refreshViewFilter({ silent = false } = {}) {
   if (!activeViewFilter) return;
   if (!map.isStyleLoaded()) return;
 
+  cancelViewFilterRequest();
   const requestId = ++viewFilterRequestId;
   const bounds = map.getBounds();
-  const tileUrl = viewFilterTileUrl();
-  renderViewFilterLayer(tileUrl);
-
-  if (viewFilterFetchController) {
-    viewFilterFetchController.abort();
-    viewFilterFetchController = null;
-  }
 
   if (map.getZoom() < viewFilterMinZoom) {
+    map.getSource(viewFilterSourceId)?.setData(emptyFeatureCollection);
     window.filterViewAll?.clearLegend();
     setFilterViewMessage(viewFilterZoomMessage, "zoom");
     if (!silent || statusEl.textContent === "Filtering") {
@@ -1188,7 +1176,13 @@ async function refreshViewFilter({ silent = false } = {}) {
     }
     return;
   }
-  viewFilterFetchController = new AbortController();
+
+  // Clear the red zoom notice before either backend request completes.
+  setFilterViewMessage("Loading matching footprints in the current view...");
+  if (!silent) statusEl.textContent = "Filtering";
+
+  const controller = new AbortController();
+  viewFilterFetchController = controller;
 
   const params = new URLSearchParams({
     min_lon: String(bounds.getWest()),
@@ -1200,37 +1194,44 @@ async function refreshViewFilter({ silent = false } = {}) {
     value: activeViewFilter.value
   });
 
-  if (!silent) {
-    statusEl.textContent = "Filtering";
-    setFilterViewMessage("Loading matching footprints in the current view...");
-  }
-
   try {
-    const response = await fetch(`api/building-filter-summary?${params.toString()}`, {
-      signal: viewFilterFetchController.signal
-    });
-    const payload = await response.json();
+    const query = params.toString();
+    const footprintsPromise = fetch(`api/building-footprints?${query}`, {
+      signal: controller.signal
+    }).then(readViewFilterResponse);
+    const summaryPromise = fetch(`api/building-filter-summary?${query}`, {
+      signal: controller.signal
+    })
+      .then(readViewFilterResponse)
+      .then(
+        (payload) => ({ payload }),
+        (error) => ({ error })
+      );
+
+    const footprints = await footprintsPromise;
+    if (requestId !== viewFilterRequestId) return;
+
+    renderViewFilterLayer(footprints);
+    setViewFilterLayerColor(activeViewFilter.all ? null : activeViewFilter.color);
+
+    const summaryResult = await summaryPromise;
+    if (summaryResult.error) throw summaryResult.error;
+    const summary = summaryResult.payload;
 
     if (requestId !== viewFilterRequestId) return;
-    if (!response.ok) {
-      throw new Error(payload.error || "Could not load building footprints");
-    }
     viewFilterFetchController = null;
 
-    const colored = Number(payload.colored_count ?? payload.count ?? 0);
-    const shown = Number(payload.shown_count ?? colored);
-    const tileLimit = Number(payload.tile_feature_limit || colored);
-    const maxColoredPerTile = Math.min(colored, tileLimit);
-    const filterCountMessage = colored > maxColoredPerTile
-      ? `${formatInteger(shown)} polygons shown · ${formatInteger(colored)} matching · up to ${formatInteger(maxColoredPerTile)} coloured per tile.`
-      : `${formatInteger(shown)} polygons shown · ${formatInteger(colored)} coloured.`;
+    const drawn = Number(footprints.drawn_count ?? (footprints.features || []).length ?? 0);
+    const matching = Number(summary.colored_count ?? summary.count ?? 0);
+    const clipped = matching > drawn ? " · zoom in for more" : "";
+    const filterCountMessage = `${formatInteger(drawn)} drawn · ${formatInteger(matching)} matching${clipped}.`;
     if (activeViewFilter.all) {
-      applyViewFilterLegendColors(payload.legend);
-      window.filterViewAll?.renderLegend(payload, formatFieldLabel(activeViewFilter.column));
-      setFilterViewMessage(filterCountMessage, colored ? "success" : "");
+      applyViewFilterLegendColors(summary.legend);
+      window.filterViewAll?.renderLegend(summary, formatFieldLabel(activeViewFilter.column));
+      setFilterViewMessage(filterCountMessage, drawn ? "success" : "");
     } else {
       window.filterViewAll?.clearLegend();
-      setFilterViewMessage(filterCountMessage, colored ? "success" : "");
+      setFilterViewMessage(filterCountMessage, drawn ? "success" : "");
     }
     if (!silent || statusEl.textContent === "Filtering") {
       statusEl.textContent = "Ready";
@@ -1243,12 +1244,28 @@ async function refreshViewFilter({ silent = false } = {}) {
 
     viewFilterFetchController = null;
 
+    map.getSource(viewFilterSourceId)?.setData(emptyFeatureCollection);
     window.filterViewAll?.clearLegend();
     setFilterViewMessage(error.message, "error");
     if (!silent || statusEl.textContent === "Filtering") {
       statusEl.textContent = "Error";
     }
   }
+}
+
+async function readViewFilterResponse(response) {
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload.error || "Could not load building footprints");
+  }
+  return payload;
+}
+
+function cancelViewFilterRequest() {
+  if (!viewFilterFetchController) return;
+  viewFilterFetchController.abort();
+  viewFilterFetchController = null;
+  viewFilterRequestId += 1;
 }
 
 function clearViewFilter(message = "", type = "") {
@@ -1263,12 +1280,8 @@ function clearViewFilter(message = "", type = "") {
 }
 
 function clearViewFilterLayer() {
-  if (viewFilterFetchController) {
-    viewFilterFetchController.abort();
-    viewFilterFetchController = null;
-  }
-  viewFilterTileUrlActive = "";
-  removeViewFilterLayer();
+  cancelViewFilterRequest();
+  map.getSource(viewFilterSourceId)?.setData(emptyFeatureCollection);
   window.filterViewAll?.clearLegend();
 }
 
