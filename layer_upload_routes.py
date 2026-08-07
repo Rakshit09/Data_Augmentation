@@ -72,6 +72,42 @@ def get_uploaded_layer(layer_id: str) -> Optional[Dict[str, Any]]:
 
 
 def register_layer_upload_routes(app: Flask) -> None:
+    @app.route("/api/gdal/status")
+    def gdal_status():
+        """Diagnostic endpoint to check GDAL availability."""
+        import sys as _sys
+        result = {
+            "frozen": getattr(_sys, "frozen", False),
+            "executable": str(Path(_sys.executable).resolve()),
+            "exe_dir": str(Path(_sys.executable).resolve().parent),
+            "meipass": getattr(_sys, "_MEIPASS", None),
+            "candidate_roots": [],
+            "tools_found": None,
+            "error": None,
+        }
+        
+        try:
+            roots = _candidate_gdal_roots()
+            result["candidate_roots"] = [
+                {"path": str(r), "exists": r.exists()} for r in roots
+            ]
+            
+            tools = _find_gdal_tools()
+            if tools:
+                result["tools_found"] = {
+                    "gdalinfo": tools.get("gdalinfo"),
+                    "gdal_translate": tools.get("gdal_translate"),
+                    "gdal2tiles": tools.get("gdal2tiles"),
+                    "GDAL_DATA": tools.get("env", {}).get("GDAL_DATA"),
+                    "PROJ_LIB": tools.get("env", {}).get("PROJ_LIB"),
+                }
+            else:
+                result["error"] = "GDAL tools not found"
+        except Exception as e:
+            result["error"] = str(e)
+        
+        return jsonify(result)
+
     @app.route("/api/layers/upload", methods=["POST"])
     def upload_layer():
         uploaded_files = [file for file in request.files.getlist("file") if file and file.filename]
@@ -1007,11 +1043,16 @@ def _candidate_gdal_roots() -> List[Path]:
         Path.cwd() / "vendor" / "gdal",
     ])
 
-    return list(dict.fromkeys(root for root in roots if root))
+    unique_roots = list(dict.fromkeys(root for root in roots if root))
+    print(f"[GDAL] Candidate roots: {unique_roots}")
+    for r in unique_roots:
+        print(f"[GDAL]   {r} exists={r.exists()}")
+    return unique_roots
 
 
 def _tools_from_gdal_root(root: Path) -> Optional[Dict[str, Any]]:
     if not root.exists():
+        print(f"[GDAL] Root {root} does not exist, skipping")
         return None
 
     bin_dirs = [
@@ -1020,13 +1061,21 @@ def _tools_from_gdal_root(root: Path) -> Optional[Dict[str, Any]]:
         root / "apps",
         root / "Library" / "bin",
     ]
+    print(f"[GDAL] Checking root: {root}")
+    print(f"[GDAL]   bin_dirs: {[str(d) for d in bin_dirs if d.is_dir()]}")
+    
     gdalinfo = _first_existing_tool(bin_dirs, ["gdalinfo.exe", "gdalinfo"])
     gdal_translate = _first_existing_tool(bin_dirs, ["gdal_translate.exe", "gdal_translate"])
     gdal2tiles = _first_existing_tool(
         bin_dirs,
         ["gdal2tiles.exe", "gdal2tiles.bat", "gdal2tiles.py", "gdal2tiles"],
     )
+    print(f"[GDAL]   gdalinfo: {gdalinfo}")
+    print(f"[GDAL]   gdal_translate: {gdal_translate}")
+    print(f"[GDAL]   gdal2tiles: {gdal2tiles}")
+    
     if not gdalinfo or not gdal2tiles or not gdal_translate:
+        print(f"[GDAL]   Missing required tools, skipping this root")
         return None
 
     env = os.environ.copy()
@@ -1047,6 +1096,10 @@ def _tools_from_gdal_root(root: Path) -> Optional[Dict[str, Any]]:
         env.setdefault("GDAL_DATA", str(gdal_data))
     if proj_lib:
         env.setdefault("PROJ_LIB", str(proj_lib))
+    
+    print(f"[GDAL]   GDAL_DATA: {gdal_data}")
+    print(f"[GDAL]   PROJ_LIB: {proj_lib}")
+    print(f"[GDAL] SUCCESS: Found all tools at {root}")
 
     return {
         "gdalinfo": str(gdalinfo),
