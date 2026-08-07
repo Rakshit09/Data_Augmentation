@@ -1018,6 +1018,7 @@ def _tools_from_gdal_root(root: Path) -> Optional[Dict[str, Any]]:
         root,
         root / "bin",
         root / "apps",
+        root / "Scripts",
         root / "Library" / "bin",
     ]
     gdalinfo = _first_existing_tool(bin_dirs, ["gdalinfo.exe", "gdalinfo"])
