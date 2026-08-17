@@ -71,7 +71,7 @@ input[type=number] {
 
 .shell {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 550px;
+  grid-template-columns: minmax(0, 1fr) 600px;
   height: 100%;
   background: #fff;
 }

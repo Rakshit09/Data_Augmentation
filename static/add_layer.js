@@ -2,6 +2,7 @@
   const layerFile = document.getElementById("addLayerFile");
   const layerFileTitle = document.getElementById("addLayerFileTitle");
   const layerFileSubtitle = document.getElementById("addLayerFileSubtitle");
+  const dropzone = document.querySelector('label.add-layer-dropzone[for="addLayerFile"]');
   const uploadButton = document.getElementById("uploadMapLayer");
   const controls = document.getElementById("addLayerControls");
   const fieldSelect = document.getElementById("addLayerField");
@@ -9,6 +10,8 @@
   const transparencyInput = document.getElementById("addLayerOpacity");
   const clearButton = document.getElementById("clearMapLayer");
   const messageEl = document.getElementById("addLayerMessage");
+  const importStatusEl = document.getElementById("layerImportStatus");
+  const maxUploadBytes = Number(layerFile?.dataset.maxBytes || 0);
 
   const vectorSourceId = "user-added-vector-layer";
   const rasterSourceId = "user-added-raster-layer";
@@ -30,6 +33,11 @@
     requestId: 0,
     popup: null
   };
+  const defaultLayerTitle = "Choose Layer File";
+  const defaultLayerSubtitle = "GeoPackage, zipped shapefile, shapefile (.shp), GeoJSON, or GeoTIFF";
+  let selectedLocalPath = "";
+  let activeImportJobId = "";
+  let uploadAfterPick = false;
   publishLayerChange();
 
   if (!layerFile || !uploadButton || !fieldSelect || !colormapSelect || !transparencyInput) {
@@ -48,15 +56,28 @@
   }
 
   layerFile.addEventListener("change", () => {
+    selectedLocalPath = "";
     const files = Array.from(layerFile.files || []);
     const primaryName = files[0] ? files[0].name : "";
-    layerFileTitle.textContent = files.length > 1 ? `${files.length} files selected` : (primaryName || "Choose Layer File");
+    layerFileTitle.textContent = files.length > 1 ? `${files.length} files selected` : (primaryName || defaultLayerTitle);
     layerFileSubtitle.textContent = files.length
       ? "Click Add layer to render it on the map"
-      : "GeoPackage, zipped shapefile, shapefile sidecar set (.shp, .shx, .dbf), GeoJSON, or GeoTIFF";
+      : defaultLayerSubtitle;
+    if (!files.length) {
+      uploadAfterPick = false;
+      return;
+    }
+    if (uploadAfterPick) {
+      uploadAfterPick = false;
+      uploadLayerFromBrowser();
+    }
   });
 
-  uploadButton.addEventListener("click", uploadLayer);
+  dropzone?.addEventListener("click", (event) => {
+    event.preventDefault();
+    chooseLocalLayer(false);
+  });
+  uploadButton.addEventListener("click", handleAddLayerClick);
   clearButton?.addEventListener("click", () => clearLayer());
   fieldSelect.addEventListener("change", () => {
     if (!state.layer) return;
@@ -75,10 +96,121 @@
   });
   transparencyInput.addEventListener("input", updateLayerOpacity);
 
-  async function uploadLayer() {
+  async function handleAddLayerClick() {
+    if (selectedLocalPath) {
+      await importLocalLayer();
+      return;
+    }
+
+    const files = Array.from(layerFile.files || []);
+    if (files.length) {
+      await uploadLayerFromBrowser();
+      return;
+    }
+
+    await chooseLocalLayer(true);
+  }
+
+  async function chooseLocalLayer(autoImport) {
+    if (activeImportJobId) return;
+    uploadButton.disabled = true;
+    const originalLabel = uploadButton.textContent;
+    uploadButton.innerHTML = '<span class="spinner"></span> Selecting...';
+    setMessage("Opening layer file picker...");
+
+    try {
+      const response = await fetch("api/browse-file?kind=layer");
+      const payload = await response.json();
+      if (!response.ok) {
+        if (response.status === 501) {
+          hideImportStatus();
+          setMessage("Native file picker is unavailable in this session. Choose a layer file in the browser instead.");
+          openLayerPicker(autoImport);
+          return;
+        }
+        throw new Error(payload.error || "Could not open layer file picker");
+      }
+      if (payload.cancelled) {
+        setMessage("Layer selection cancelled.");
+        return;
+      }
+
+      applyLocalSelection(payload.path || "");
+      if (!selectedLocalPath) {
+        setMessage("Choose a layer file to import.");
+        return;
+      }
+      if (autoImport) {
+        await importLocalLayer();
+      } else {
+        setMessage("Layer selected. Click Import layer to load it.", "success");
+      }
+    } catch (error) {
+      setMessage(error.message, "error");
+    } finally {
+      if (!activeImportJobId) {
+        uploadButton.disabled = false;
+        uploadButton.textContent = originalLabel;
+      }
+    }
+  }
+
+  async function importLocalLayer() {
+    if (!selectedLocalPath) {
+      setMessage("Choose a layer file to import.", "error");
+      return;
+    }
+
+    if (typeof dismissCriticalNote === "function") dismissCriticalNote();
+    uploadButton.disabled = true;
+    const originalLabel = uploadButton.textContent;
+    uploadButton.innerHTML = '<span class="spinner"></span> Importing...';
+    if (typeof statusEl !== "undefined") statusEl.textContent = "Adding layer";
+    setMessage("Submitting local layer import...");
+
+    const previousLayerId = state.layer?.id || "";
+    try {
+      const response = await fetch("api/layers/import-local", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: selectedLocalPath,
+          replace_layer_id: previousLayerId
+        })
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || "Could not import layer");
+      }
+
+      activeImportJobId = payload.job_id || "";
+      showImportProgress(payload);
+      setMessage(payload.phase || "Importing layer...");
+      pollLayerImport(activeImportJobId, originalLabel);
+    } catch (error) {
+      activeImportJobId = "";
+      uploadButton.disabled = false;
+      uploadButton.textContent = originalLabel;
+      showImportError(error.message);
+      setMessage(error.message, "error");
+      if (typeof statusEl !== "undefined") statusEl.textContent = "Error";
+    }
+  }
+
+  async function uploadLayerFromBrowser() {
     const files = Array.from(layerFile.files || []);
     if (!files.length) {
-      setMessage("Choose a layer file first.", "error");
+      setMessage("Choose a layer file to upload.");
+      openLayerPicker(true);
+      return;
+    }
+
+    const oversizeFile = files.find((file) => maxUploadBytes > 0 && Number(file.size || 0) > maxUploadBytes);
+    if (oversizeFile) {
+      setMessage(
+        `Layer is too large for this local session. ${oversizeFile.name} is ${formatBytes(oversizeFile.size)}, limit ${formatBytes(maxUploadBytes)}.`,
+        "error"
+      );
       return;
     }
 
@@ -141,6 +273,143 @@
       uploadButton.disabled = false;
       uploadButton.textContent = originalLabel;
     }
+  }
+
+  async function pollLayerImport(jobId, originalLabel) {
+    try {
+      const response = await fetch(`api/layers/import-jobs/${encodeURIComponent(jobId)}`);
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || "Could not check layer import status");
+      }
+
+      showImportProgress(payload);
+      setMessage(payload.phase || "Importing layer...");
+      if (payload.status === "complete") {
+        activeImportJobId = "";
+        uploadButton.disabled = false;
+        uploadButton.textContent = originalLabel;
+        showImportSuccess(payload);
+        applyLoadedLayer(payload.layer || {});
+        return;
+      }
+
+      if (payload.status === "error") {
+        throw new Error(payload.error || "Layer import failed");
+      }
+
+      window.setTimeout(() => pollLayerImport(jobId, originalLabel), 1500);
+    } catch (error) {
+      activeImportJobId = "";
+      uploadButton.disabled = false;
+      uploadButton.textContent = originalLabel;
+      showImportError(error.message);
+      setMessage(error.message, "error");
+      if (typeof statusEl !== "undefined") statusEl.textContent = "Error";
+    }
+  }
+
+  function openLayerPicker(autoUpload) {
+    uploadAfterPick = autoUpload;
+    try {
+      if (typeof layerFile.showPicker === "function") {
+        layerFile.showPicker();
+        return;
+      }
+    } catch (_error) {
+      // Fall back to the standard file input click below.
+    }
+    layerFile.click();
+  }
+
+  function applyLocalSelection(path) {
+    selectedLocalPath = String(path || "").trim();
+    try {
+      layerFile.value = "";
+    } catch (_error) {
+      // Ignore browsers that do not allow clearing a file input here.
+    }
+    const filename = localPathName(selectedLocalPath);
+    layerFileTitle.textContent = filename || defaultLayerTitle;
+    layerFileSubtitle.textContent = selectedLocalPath
+      ? `Ready to import from ${selectedLocalPath}`
+      : defaultLayerSubtitle;
+  }
+
+  function applyLoadedLayer(payload) {
+    clearLayer({ silent: true, cleanupServer: false });
+    state.layer = {
+      ...payload,
+      field: payload.default_field || "",
+      colormap: colormapSelect.value || "hazard"
+    };
+
+    if (payload.kind === "raster") {
+      activateRasterLayer(payload);
+    } else {
+      activateVectorLayer(payload);
+    }
+
+    controls.classList.remove("hidden");
+    publishLayerChange();
+    fitToExtent(payload.extent);
+    if (payload.kind === "raster") {
+      setMessage(`Raster ready: ${payload.name || "uploaded layer"}. Click buildings normally; Alt/Option-click the layer for its popup.`, "success");
+    } else {
+      setMessage(`Vector layer ready: ${payload.name || "uploaded layer"}. Click buildings normally; Alt/Option-click the layer for its popup.`, "success");
+    }
+    if (typeof statusEl !== "undefined") statusEl.textContent = "Ready";
+  }
+
+  function localPathName(path) {
+    const value = String(path || "").trim();
+    if (!value) return "";
+    const parts = value.split(/[\\/]/);
+    return parts[parts.length - 1] || value;
+  }
+
+  function showImportProgress(payload) {
+    if (!importStatusEl) return;
+    const percent = Math.max(0, Math.min(100, Number(payload?.percent || 0)));
+    const phase = payload?.phase || payload?.status || "Importing layer...";
+    const displayName = payload?.display_name || localPathName(payload?.path || selectedLocalPath) || "Selected layer";
+    const path = payload?.path || selectedLocalPath;
+
+    importStatusEl.classList.remove("hidden", "etl-status--error", "etl-status--success");
+    importStatusEl.innerHTML = `
+      <strong>${htmlEscape(displayName)}</strong><br>
+      <div class="progress-copy">${htmlEscape(phase)}</div>
+      <div class="progress-track"><div class="progress-fill" style="width:${percent}%"></div></div>
+      <div class="progress-copy">${percent.toFixed(0)}%</div>
+      ${path ? `<div class="progress-copy">${htmlEscape(path)}</div>` : ""}
+    `;
+  }
+
+  function showImportSuccess(payload) {
+    if (!importStatusEl) return;
+    const layer = payload?.layer || {};
+    const layerName = layer.name || payload?.display_name || "Layer";
+    importStatusEl.classList.remove("hidden", "etl-status--error");
+    importStatusEl.classList.add("etl-status--success");
+    importStatusEl.innerHTML = `
+      <strong>${htmlEscape(layerName)} ready.</strong><br>
+      <div class="progress-copy">${htmlEscape(payload?.phase || "Layer ready.")}</div>
+      ${payload?.path ? `<div class="progress-copy">${htmlEscape(payload.path)}</div>` : ""}
+    `;
+  }
+
+  function showImportError(message) {
+    if (!importStatusEl) return;
+    importStatusEl.classList.remove("hidden", "etl-status--success");
+    importStatusEl.classList.add("etl-status--error");
+    importStatusEl.innerHTML = `<div class="progress-copy">${htmlEscape(message || "Layer import failed.")}</div>`;
+  }
+
+  function hideImportStatus() {
+    if (!importStatusEl) return;
+    importStatusEl.classList.add("hidden");
+    importStatusEl.classList.remove("etl-status--error", "etl-status--success");
+    importStatusEl.innerHTML = "";
   }
 
   function initLayerSources() {
@@ -517,5 +786,14 @@
     return typeof formatInteger === "function"
       ? formatInteger(value)
       : Number(value || 0).toLocaleString();
+  }
+
+  function formatBytes(value) {
+    const bytes = Number(value || 0);
+    if (!Number.isFinite(bytes) || bytes < 0) return "n/a";
+    if (bytes >= 1024 ** 3) return `${(bytes / (1024 ** 3)).toFixed(2)} GB`;
+    if (bytes >= 1024 ** 2) return `${(bytes / (1024 ** 2)).toFixed(0)} MB`;
+    if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    return `${bytes} bytes`;
   }
 })();

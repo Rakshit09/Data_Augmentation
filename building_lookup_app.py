@@ -42,7 +42,7 @@ from exposure_map_cache import (
     lookup_exposure_row as lookup_exposure_csv_row,
     lookup_exposure_points_multires,
 )
-from layer_upload_routes import register_layer_upload_routes
+from layer_upload_routes import MAX_LAYER_UPLOAD_BYTES, RASTER_EXTENSIONS, register_layer_upload_routes
 from obm_country_to_parquet import ETLConfig, OpenBuildingMapCountryETL
 from raster_intersections import register_raster_intersection_routes
 
@@ -63,6 +63,7 @@ MAX_RETAINED_EXPOSURE_UPLOADS = 1
 MAX_RETAINED_EXPOSURE_RESULTS = 1
 EXPOSURE_ARTIFACT_MAX_AGE_SECONDS = 6 * 60 * 60
 SUPPORTED_EXPOSURE_UPLOAD_EXTENSIONS = {".csv", ".xlsx"}
+SUPPORTED_LOCAL_LAYER_PICKER_EXTENSIONS = {".gpkg", ".zip", ".shp", ".geojson", ".json", ".vrt", *RASTER_EXTENSIONS}
 EXPOSURE_MAP_MAX_FEATURES = int(os.environ.get("EXPOSURE_MAP_MAX_FEATURES", "12000"))
 EXPOSURE_MAP_CACHE_MAX_FILES = int(os.environ.get("EXPOSURE_MAP_CACHE_MAX_FILES", "3"))
 MAX_BUILDING_FILTER_VALUES = 500
@@ -956,6 +957,22 @@ def validate_local_file(path_value: str, suffix: str, label: str) -> str:
     return display_path(path)
 
 
+def validate_local_file_suffixes(path_value: str, suffixes: Set[str], label: str) -> str:
+    path = Path(path_value).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    if not path.exists() or not path.is_file():
+        raise ValueError(f"{label} file does not exist: {path_value}")
+    if path.suffix.lower() not in suffixes:
+        allowed = ", ".join(sorted(suffixes))
+        raise ValueError(f"{label} file must end with one of {allowed}: {path_value}")
+    return display_path(path)
+
+
+def validate_local_layer_file(path_value: str) -> str:
+    return validate_local_file_suffixes(path_value, SUPPORTED_LOCAL_LAYER_PICKER_EXTENSIONS, "Layer")
+
+
 def save_uploaded_file(uploaded_file, destination: Path) -> int:
     size_bytes = 0
 
@@ -981,13 +998,37 @@ def derived_enrichment_download_name(upload_filename: str, suffix: str = "_enric
 
 def browse_local_file(kind: str) -> Optional[str]:
     choices = {
-        "parquet": (".parquet", "Parquet", "Select Parquet file"),
-        "db": (".duckdb", "DuckDB", "Select DuckDB lookup database"),
+        "parquet": {
+            "title": "Select Parquet file",
+            "validator": lambda selected: validate_local_file(selected, ".parquet", "Parquet"),
+            "filetypes": [("Parquet files", "*.parquet"), ("All files", "*.*")],
+        },
+        "db": {
+            "title": "Select DuckDB lookup database",
+            "validator": lambda selected: validate_local_file(selected, ".duckdb", "DuckDB"),
+            "filetypes": [("DuckDB files", "*.duckdb"), ("All files", "*.*")],
+        },
+        "layer": {
+            "title": "Select layer file",
+            "validator": validate_local_layer_file,
+            "filetypes": [
+                ("Supported layer files", "*.gpkg *.zip *.shp *.geojson *.json *.tif *.tiff"),
+                ("GeoPackage", "*.gpkg"),
+                ("Zipped shapefile", "*.zip"),
+                ("Shapefile", "*.shp"),
+                ("GeoJSON", "*.geojson *.json"),
+                ("GeoTIFF", "*.tif *.tiff"),
+                ("All files", "*.*"),
+            ],
+        },
     }
     if kind not in choices:
-        raise ValueError("File type must be parquet or db.")
+        raise ValueError("File type must be parquet, db, or layer.")
 
-    suffix, label, title = choices[kind]
+    choice = choices[kind]
+    title = str(choice["title"])
+    validator = choice["validator"]
+    filetypes = choice["filetypes"]
 
     if sys.platform == "darwin":
         script = f'POSIX path of (choose file with prompt "{title}")'
@@ -999,7 +1040,7 @@ def browse_local_file(kind: str) -> Optional[str]:
         )
         if result.returncode == 0:
             selected = result.stdout.strip()
-            return validate_local_file(selected, suffix, label)
+            return validator(selected)
         if "User canceled" in result.stderr:
             return None
         raise RuntimeError(result.stderr.strip() or "macOS file picker failed.")
@@ -1014,14 +1055,14 @@ def browse_local_file(kind: str) -> Optional[str]:
         selected = filedialog.askopenfilename(
             title=title,
             initialdir=str(Path.cwd()),
-            filetypes=[(f"{label} files", f"*{suffix}"), ("All files", "*.*")],
+            filetypes=filetypes,
         )
     finally:
         root.destroy()
 
     if not selected:
         return None
-    return validate_local_file(selected, suffix, label)
+    return validator(selected)
 
 
 def browse_local_folder() -> Optional[str]:
@@ -1224,6 +1265,11 @@ def create_app(
     result_dir: Optional[str] = None,
 ) -> Flask:
     app = Flask(__name__)
+    configured_max_content_length = app.config.get("MAX_CONTENT_LENGTH")
+    if configured_max_content_length in (None, 0):
+        app.config["MAX_CONTENT_LENGTH"] = MAX_LAYER_UPLOAD_BYTES
+    else:
+        app.config["MAX_CONTENT_LENGTH"] = min(int(configured_max_content_length), MAX_LAYER_UPLOAD_BYTES)
     app.config["DB_PATH"] = db_path
     app.config["DB_CONN"] = None
     app.config["DB_CONN_PATH"] = ""
@@ -1465,6 +1511,7 @@ def create_app(
             filter_view_min_zoom=FILTER_VIEW_MIN_ZOOM,
             filter_view_max_tile_zoom=FILTER_VIEW_MAX_TILE_ZOOM,
             exposure_raw_point_zoom=RAW_POINT_ZOOM,
+            layer_upload_max_bytes=MAX_LAYER_UPLOAD_BYTES,
         )
 
     @app.route("/help/readme")

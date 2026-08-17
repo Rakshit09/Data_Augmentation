@@ -11,12 +11,13 @@ import uuid
 import zipfile
 from io import BytesIO
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 from typing import Any, Dict, List, Optional, Tuple
 
 import duckdb
 import numpy as np
 from flask import Flask, Response, jsonify, request, send_from_directory
+from werkzeug.exceptions import RequestEntityTooLarge
 from PIL import Image
 from werkzeug.utils import secure_filename
 
@@ -66,6 +67,9 @@ COLOR_MAPS = {
 
 LAYER_REGISTRY: Dict[str, Dict[str, Any]] = {}
 LAYER_REGISTRY_LOCK = Lock()
+LAYER_IMPORT_JOBS: Dict[str, Dict[str, Any]] = {}
+LAYER_IMPORT_JOBS_LOCK = Lock()
+MAX_RETAINED_LAYER_IMPORT_JOBS = 12
 
 
 def get_uploaded_layer(layer_id: str) -> Optional[Dict[str, Any]]:
@@ -76,6 +80,17 @@ def get_uploaded_layer(layer_id: str) -> Optional[Dict[str, Any]]:
 
 
 def register_layer_upload_routes(app: Flask) -> None:
+    @app.errorhandler(RequestEntityTooLarge)
+    def handle_request_entity_too_large(_exc: RequestEntityTooLarge):
+        limit_bytes = int(app.config.get("MAX_CONTENT_LENGTH") or MAX_LAYER_UPLOAD_BYTES)
+        message = (
+            f"Layer upload is too large for this local session. "
+            f"Choose a file smaller than {_format_upload_limit(limit_bytes)}."
+        )
+        if request.path.startswith("/api/"):
+            return jsonify({"error": message}), 413
+        return message, 413
+
     @app.route("/api/gdal/status")
     def gdal_status():
         """Diagnostic endpoint to check GDAL availability."""
@@ -154,6 +169,50 @@ def register_layer_upload_routes(app: Flask) -> None:
             _cleanup_layer(replaced_layer)
 
         return jsonify(_public_layer_metadata(layer))
+
+    @app.route("/api/layers/import-local", methods=["POST"])
+    def import_local_layer():
+        payload = request.get_json(silent=True) or {}
+        path_value = str(payload.get("path") or "").strip()
+        replace_layer_id = str(payload.get("replace_layer_id") or "").strip()
+        if not path_value:
+            return jsonify({"error": "Layer path is required."}), 400
+
+        try:
+            upload_items = _normalized_local_uploads(path_value)
+            upload_kind = _classify_uploads(upload_items)
+            total_size = _local_upload_size(upload_items)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        if total_size > MAX_LAYER_UPLOAD_BYTES:
+            return jsonify({
+                "error": (
+                    f"Layer import is too large for this local session. "
+                    f"Choose a file smaller than {_format_upload_limit(MAX_LAYER_UPLOAD_BYTES)}."
+                )
+            }), 400
+
+        display_name = str(upload_items[0].get("original_name") or Path(path_value).name)
+        job = _create_layer_import_job(display_name, path_value)
+        Thread(
+            target=_run_local_import_job,
+            kwargs={
+                "job_id": job["job_id"],
+                "path_value": path_value,
+                "replace_layer_id": replace_layer_id,
+                "upload_kind": upload_kind,
+            },
+            daemon=True,
+        ).start()
+        return jsonify(_layer_import_job_payload(job)), 202
+
+    @app.route("/api/layers/import-jobs/<job_id>")
+    def layer_import_job(job_id: str):
+        job = _get_layer_import_job(job_id)
+        if job is None:
+            return jsonify({"error": "Layer import job was not found."}), 404
+        return jsonify(_layer_import_job_payload(job))
 
     @app.route("/api/layers/<layer_id>", methods=["DELETE"])
     def delete_layer(layer_id: str):
@@ -263,6 +322,16 @@ def _runtime_dir(name: str) -> Path:
     return runtime_dir
 
 
+def _format_upload_limit(value: int) -> str:
+    if value >= 1024 ** 3:
+        return f"{value / (1024 ** 3):.2f} GB"
+    if value >= 1024 ** 2:
+        return f"{value / (1024 ** 2):.0f} MB"
+    if value >= 1024:
+        return f"{value / 1024:.0f} KB"
+    return f"{value} bytes"
+
+
 def _sql_string(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
@@ -282,6 +351,58 @@ def _save_upload_stream(uploaded_file: Any, output_path: Path) -> int:
             if total > MAX_LAYER_UPLOAD_BYTES:
                 raise ValueError("Layer upload is too large for this local session.")
             handle.write(chunk)
+    return total
+
+
+def _normalized_local_uploads(path_value: str) -> List[Dict[str, Any]]:
+    source_path = _resolve_local_layer_path(path_value)
+    extension = source_path.suffix.lower()
+
+    if extension in {".shx", ".dbf", ".prj", ".cpg"}:
+        raise ValueError("Select the .shp file itself, or use a zipped shapefile.")
+
+    if extension == ".shp":
+        companion_paths = [
+            source_path,
+            source_path.with_suffix(".shx"),
+            source_path.with_suffix(".dbf"),
+            source_path.with_suffix(".prj"),
+            source_path.with_suffix(".cpg"),
+        ]
+        return [_local_upload_item(path) for path in companion_paths if path.is_file()]
+
+    return [_local_upload_item(source_path)]
+
+
+def _resolve_local_layer_path(path_value: str) -> Path:
+    source_path = Path(path_value).expanduser()
+    if not source_path.is_absolute():
+        source_path = Path.cwd() / source_path
+    source_path = source_path.resolve()
+    if not source_path.exists() or not source_path.is_file():
+        raise ValueError(f"Layer file does not exist: {path_value}")
+    return source_path
+
+
+def _local_upload_item(source_path: Path) -> Dict[str, Any]:
+    original_name = source_path.name
+    safe_name = secure_filename(original_name) or f"layer_{uuid.uuid4().hex}{source_path.suffix.lower()}"
+    return {
+        "source_path": source_path,
+        "original_name": original_name,
+        "safe_name": safe_name,
+        "extension": source_path.suffix.lower(),
+        "stem": source_path.stem.casefold(),
+    }
+
+
+def _local_upload_size(upload_items: List[Dict[str, Any]]) -> int:
+    total = 0
+    for item in upload_items:
+        try:
+            total += int(Path(item["source_path"]).stat().st_size)
+        except (OSError, KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"Could not read layer file size: {item.get('original_name') or 'unknown file'}") from exc
     return total
 
 
@@ -341,6 +462,30 @@ def _save_upload_bundle(upload_items: List[Dict[str, Any]], upload_kind: str, up
         total += size
         if total > MAX_LAYER_UPLOAD_BYTES:
             raise ValueError("Layer upload is too large for this local session.")
+        saved_paths.append(output_path)
+
+    if upload_kind == "raster":
+        return upload_items[0]["original_name"], saved_paths[0]
+
+    shapefile_item = next((item for item in upload_items if item["extension"] == ".shp"), None)
+    shapefile_path = next((path for path in saved_paths if path.suffix.lower() == ".shp"), None)
+    if shapefile_item is not None and shapefile_path is not None:
+        return shapefile_item["original_name"], shapefile_path
+    return upload_items[0]["original_name"], saved_paths[0]
+
+
+def _copy_local_upload_bundle(upload_items: List[Dict[str, Any]], upload_kind: str, upload_dir: Path) -> Tuple[str, Path]:
+    total = _local_upload_size(upload_items)
+    if total > MAX_LAYER_UPLOAD_BYTES:
+        raise ValueError("Layer upload is too large for this local session.")
+
+    saved_paths: List[Path] = []
+    for item in upload_items:
+        source_path = Path(item["source_path"])
+        output_path = upload_dir / item["safe_name"]
+        shutil.copy2(source_path, output_path)
+        if output_path.stat().st_size == 0:
+            raise ValueError("Selected layer file is empty.")
         saved_paths.append(output_path)
 
     if upload_kind == "raster":
@@ -1355,6 +1500,119 @@ def _public_layer_metadata(layer: Dict[str, Any]) -> Dict[str, Any]:
             "connection_lock",
         }
     }
+
+
+def _create_layer_import_job(display_name: str, path_value: str) -> Dict[str, Any]:
+    job = {
+        "job_id": uuid.uuid4().hex,
+        "status": "queued",
+        "phase": "Queued for import.",
+        "percent": 5,
+        "display_name": display_name,
+        "path": path_value,
+        "error": None,
+        "layer": None,
+        "created_at": time.time(),
+        "updated_at": time.time(),
+    }
+    with LAYER_IMPORT_JOBS_LOCK:
+        LAYER_IMPORT_JOBS[job["job_id"]] = job
+        _prune_layer_import_jobs_locked()
+    return dict(job)
+
+
+def _get_layer_import_job(job_id: str) -> Optional[Dict[str, Any]]:
+    with LAYER_IMPORT_JOBS_LOCK:
+        job = LAYER_IMPORT_JOBS.get(job_id)
+        return None if job is None else dict(job)
+
+
+def _update_layer_import_job(job_id: str, **updates: Any) -> Optional[Dict[str, Any]]:
+    with LAYER_IMPORT_JOBS_LOCK:
+        job = LAYER_IMPORT_JOBS.get(job_id)
+        if job is None:
+            return None
+        job.update(updates)
+        job["updated_at"] = time.time()
+        _prune_layer_import_jobs_locked()
+        return dict(job)
+
+
+def _prune_layer_import_jobs_locked() -> None:
+    if len(LAYER_IMPORT_JOBS) <= MAX_RETAINED_LAYER_IMPORT_JOBS:
+        return
+    removable = sorted(
+        (job for job in LAYER_IMPORT_JOBS.values() if job.get("status") in {"complete", "error"}),
+        key=lambda job: float(job.get("updated_at") or 0.0),
+    )
+    while len(LAYER_IMPORT_JOBS) > MAX_RETAINED_LAYER_IMPORT_JOBS and removable:
+        stale = removable.pop(0)
+        LAYER_IMPORT_JOBS.pop(str(stale.get("job_id") or ""), None)
+
+
+def _layer_import_job_payload(job: Dict[str, Any]) -> Dict[str, Any]:
+    payload = {
+        "job_id": str(job.get("job_id") or ""),
+        "status": str(job.get("status") or "queued"),
+        "phase": str(job.get("phase") or "Queued for import."),
+        "percent": max(0, min(100, int(job.get("percent") or 0))),
+        "display_name": str(job.get("display_name") or ""),
+        "path": str(job.get("path") or ""),
+    }
+    if job.get("error"):
+        payload["error"] = str(job["error"])
+    if job.get("layer"):
+        payload["layer"] = job["layer"]
+    return payload
+
+
+def _run_local_import_job(job_id: str, path_value: str, replace_layer_id: str, upload_kind: str) -> None:
+    layer_id = uuid.uuid4().hex
+    work_dir = _runtime_dir("map_layers") / layer_id
+    upload_dir = work_dir / "upload"
+    replaced_layer = None
+
+    try:
+        _update_layer_import_job(job_id, status="running", phase="Validating local layer source...", percent=12)
+        upload_items = _normalized_local_uploads(path_value)
+        upload_kind = _classify_uploads(upload_items)
+        upload_dir.mkdir(parents=True, exist_ok=True)
+
+        copy_phase = "Copying raster into the local workspace..." if upload_kind == "raster" else "Copying layer files into the local workspace..."
+        _update_layer_import_job(job_id, status="running", phase=copy_phase, percent=35)
+        original_name, upload_path = _copy_local_upload_bundle(upload_items, upload_kind, upload_dir)
+
+        prepare_phase = "Preparing raster for map rendering..." if upload_kind == "raster" else "Preparing vector layer for map rendering..."
+        _update_layer_import_job(job_id, status="running", phase=prepare_phase, percent=72)
+        if upload_kind == "raster":
+            layer = _prepare_raster_layer(layer_id, original_name, upload_path, work_dir)
+        else:
+            layer = _prepare_vector_layer(layer_id, original_name, upload_path, work_dir)
+    except ValueError as exc:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        _update_layer_import_job(job_id, status="error", phase="Import failed.", percent=100, error=str(exc), layer=None)
+        return
+    except Exception as exc:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        _update_layer_import_job(job_id, status="error", phase="Import failed.", percent=100, error=f"Could not prepare map layer: {exc}", layer=None)
+        return
+
+    with LAYER_REGISTRY_LOCK:
+        LAYER_REGISTRY[layer_id] = layer
+        if replace_layer_id and replace_layer_id != layer_id:
+            replaced_layer = LAYER_REGISTRY.pop(replace_layer_id, None)
+
+    if replaced_layer is not None:
+        _cleanup_layer(replaced_layer)
+
+    _update_layer_import_job(
+        job_id,
+        status="complete",
+        phase="Layer ready.",
+        percent=100,
+        error=None,
+        layer=_public_layer_metadata(layer),
+    )
 
 
 def _cleanup_layer(layer: Dict[str, Any]) -> None:
