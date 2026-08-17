@@ -225,11 +225,23 @@
                     <input id="rasterThresholdValue" type="number" step="any" placeholder="Optional">
                   </label>
                 </div>
+                <label for="rasterSampleRadius">
+                  <span>Radius (m, optional)</span>
+                  <input id="rasterSampleRadius" type="number" step="any" min="0" placeholder="Blank = exact point sample">
+                </label>
+                <label for="rasterSampleAggregation">
+                  <span>Radius aggregation</span>
+                  <select id="rasterSampleAggregation">
+                    <option value="mean">Mean</option>
+                    <option value="max">Max</option>
+                    <option value="min">Min</option>
+                  </select>
+                </label>
                 <div class="raster-intersection-actions">
                   <button id="intersectExposureRaster" type="button" disabled>Intersect Exposure</button>
                   <button id="intersectDatabaseRaster" type="button" disabled>Intersect Database</button>
                 </div>
-                <p id="rasterIntersectionMessage" class="raster-intersection-message">Upload a raster to sample exposure or building locations.</p>
+                <p id="rasterIntersectionMessage" class="raster-intersection-message">Upload a raster to sample exposure or building locations. Add a radius in metres to aggregate values in a circular footprint.</p>
               </section>
               <button id="clearMapLayer" type="button">Clear layer</button>
             </div>

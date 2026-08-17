@@ -16,7 +16,7 @@ from .duckdb_queries import (
 from .raster_metadata import read_raster_metadata
 from .results import build_summary, build_vector_summary, create_result_job, get_job
 from .sampling import sample_candidates, sampling_diagnostics
-from .utils import intersect_bounds, normalized_bounds, parse_threshold, safe_json_value, sql_string
+from .utils import finite_float, intersect_bounds, normalized_bounds, parse_threshold, safe_json_value, sql_string
 
 
 MAX_CANDIDATES = 250000
@@ -35,7 +35,7 @@ def register_raster_intersection_routes(
         started_at = time.perf_counter()
         try:
             payload = request.get_json(silent=True) or {}
-            layer, raster_path, band_index, bounds, threshold, threshold_operator = _analysis_context(payload)
+            layer, raster_path, band_index, bounds, threshold, threshold_operator, sample_radius_m, radius_aggregation = _analysis_context(payload)
 
             upload_id = str(payload.get("upload_id") or "").strip()
             lat_col = str(payload.get("lat_col") or "").strip()
@@ -55,9 +55,17 @@ def register_raster_intersection_routes(
             if not candidates:
                 raise ValueError("No exposure points are inside the selected raster/map area.")
 
-            sampled = sample_candidates(raster_path, candidates, raster_metadata, threshold, threshold_operator)
+            sampled = sample_candidates(
+                raster_path,
+                candidates,
+                raster_metadata,
+                threshold,
+                threshold_operator,
+                sample_radius_m=sample_radius_m,
+                radius_aggregation=radius_aggregation,
+            )
             if not sampled:
-                raise ValueError(_empty_sample_message(candidates, raster_path, raster_metadata, threshold, threshold_operator))
+                raise ValueError(_empty_sample_message(candidates, raster_path, raster_metadata, threshold, threshold_operator, sample_radius_m, radius_aggregation))
 
             columns, rows, source_warning = append_exposure_source_columns(upload_path, sampled)
             summary = build_summary(
@@ -69,6 +77,8 @@ def register_raster_intersection_routes(
                 si_field=si_field or None,
                 elapsed_seconds=time.perf_counter() - started_at,
                 raster_band=band_index,
+                sample_radius_m=sample_radius_m,
+                sample_radius_aggregation=radius_aggregation,
                 bounds=bounds,
             )
             if source_warning:
@@ -86,7 +96,7 @@ def register_raster_intersection_routes(
         started_at = time.perf_counter()
         try:
             payload = request.get_json(silent=True) or {}
-            layer, raster_path, band_index, bounds, threshold, threshold_operator = _analysis_context(payload)
+            layer, raster_path, band_index, bounds, threshold, threshold_operator, sample_radius_m, radius_aggregation = _analysis_context(payload)
             db_path = str(app.config.get("DB_PATH") or "")
             if not db_path:
                 raise ValueError("No building database is selected.")
@@ -103,9 +113,17 @@ def register_raster_intersection_routes(
             if not candidates:
                 raise ValueError("No building centroids are inside the selected raster/map area.")
 
-            rows = sample_candidates(raster_path, candidates, raster_metadata, threshold, threshold_operator)
+            rows = sample_candidates(
+                raster_path,
+                candidates,
+                raster_metadata,
+                threshold,
+                threshold_operator,
+                sample_radius_m=sample_radius_m,
+                radius_aggregation=radius_aggregation,
+            )
             if not rows:
-                raise ValueError(_empty_sample_message(candidates, raster_path, raster_metadata, threshold, threshold_operator))
+                raise ValueError(_empty_sample_message(candidates, raster_path, raster_metadata, threshold, threshold_operator, sample_radius_m, radius_aggregation))
 
             columns = _columns_from_rows(rows)
             summary = build_summary(
@@ -116,6 +134,8 @@ def register_raster_intersection_routes(
                 threshold_operator=threshold_operator,
                 elapsed_seconds=time.perf_counter() - started_at,
                 raster_band=band_index,
+                sample_radius_m=sample_radius_m,
+                sample_radius_aggregation=radius_aggregation,
                 bounds=bounds,
             )
             job = create_result_job("database", str(layer.get("name") or "Raster"), columns, rows, summary)
@@ -266,8 +286,27 @@ def _analysis_context(payload: Dict[str, Any]):
         raise ValueError("Raster band must be a number.") from exc
 
     threshold, threshold_operator = parse_threshold(payload)
+    sample_radius_m = _parse_sample_radius(payload)
+    radius_aggregation = _parse_radius_aggregation(payload)
     bounds = _analysis_bounds(payload, layer)
-    return layer, raster_path, band_index, bounds, threshold, threshold_operator
+    return layer, raster_path, band_index, bounds, threshold, threshold_operator, sample_radius_m, radius_aggregation
+
+
+def _parse_sample_radius(payload: Dict[str, Any]) -> Optional[float]:
+    raw_radius = payload.get("sample_radius_m")
+    if raw_radius in (None, ""):
+        return None
+    radius_m = finite_float(raw_radius, "sample radius")
+    if radius_m <= 0:
+        raise ValueError("Sample radius must be greater than 0 metres.")
+    return radius_m
+
+
+def _parse_radius_aggregation(payload: Dict[str, Any]) -> str:
+    value = str(payload.get("sample_radius_aggregation") or "mean").strip().casefold()
+    if value not in {"mean", "max", "min"}:
+        raise ValueError("Radius aggregation must be mean, max, or min.")
+    return value
 
 
 def _vector_analysis_context(payload: Dict[str, Any]):
@@ -341,14 +380,27 @@ def _empty_sample_message(
     raster_metadata: Dict[str, Any],
     threshold: Any,
     threshold_operator: str,
+    sample_radius_m: Optional[float],
+    radius_aggregation: str,
 ) -> str:
-    diagnostics = sampling_diagnostics(raster_path, candidates, raster_metadata)
+    diagnostics = sampling_diagnostics(
+        raster_path,
+        candidates,
+        raster_metadata,
+        sample_radius_m=sample_radius_m,
+        radius_aggregation=radius_aggregation,
+    )
     sampled = int(diagnostics.get("sampled_count") or 0)
     nodata = diagnostics.get("nodata")
     nodata_count = int(diagnostics.get("nodata_count") or 0)
     non_nodata_count = int(diagnostics.get("non_nodata_count") or 0)
     value_counts = diagnostics.get("value_counts") or {}
     value_copy = ", ".join(f"{key}: {value}" for key, value in value_counts.items()) or "no readable values"
+    sample_scope = (
+        f"within {sample_radius_m:g} m of each candidate location using {radius_aggregation} aggregation"
+        if sample_radius_m is not None
+        else "at those exact locations"
+    )
 
     if sampled and nodata_count == sampled:
         return (
@@ -357,7 +409,7 @@ def _empty_sample_message(
         )
     if sampled and non_nodata_count == 0:
         return (
-            f"Candidate locations were inside the raster bounding box, but no valid pixels were found at those exact locations. "
+            f"Candidate locations were inside the raster bounding box, but no valid pixels were found {sample_scope}. "
             f"Sampled values: {value_copy}."
         )
     if threshold is not None:

@@ -9,12 +9,15 @@ import tempfile
 import time
 import uuid
 import zipfile
+from io import BytesIO
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 
 import duckdb
-from flask import Flask, jsonify, request, send_from_directory
+import numpy as np
+from flask import Flask, Response, jsonify, request, send_from_directory
+from PIL import Image
 from werkzeug.utils import secure_filename
 
 
@@ -22,8 +25,9 @@ VECTOR_EXTENSIONS = {".gpkg", ".shp", ".shx", ".dbf", ".prj", ".cpg", ".zip", ".
 RASTER_EXTENSIONS = {".tif", ".tiff"}
 SHAPEFILE_REQUIRED_EXTENSIONS = {".shp", ".shx", ".dbf"}
 RASTER_PREVIEW_MAX_SIZE = int(os.environ.get("ADD_LAYER_RASTER_PREVIEW_MAX_SIZE", "4096"))
+MAX_RASTER_TILE_ZOOM = int(os.environ.get("ADD_LAYER_MAX_TILE_ZOOM", "12"))
 MAX_VECTOR_FEATURES = int(os.environ.get("ADD_LAYER_MAX_VECTOR_FEATURES", "15000"))
-MAX_LAYER_UPLOAD_BYTES = int(os.environ.get("ADD_LAYER_MAX_UPLOAD_BYTES", str(2 * 1024 ** 3)))
+MAX_LAYER_UPLOAD_BYTES = int(os.environ.get("ADD_LAYER_MAX_UPLOAD_BYTES", str(6 * 1024 ** 3)))
 MAX_EXTRACTED_FILES = 48
 NUMERIC_FIELD_TYPES = {
     "integer",
@@ -215,11 +219,24 @@ def register_layer_upload_routes(app: Flask) -> None:
         if layer.get("kind") != "raster":
             return jsonify({"error": "Tiles are only available for raster layers."}), 400
 
-        tile_dir = Path(str(layer["tile_dir"]))
-        tile_path = tile_dir / str(z) / str(x) / f"{y}.png"
-        if not tile_path.is_file():
-            return ("", 204)
-        return send_from_directory(tile_path.parent, tile_path.name)
+        colormap = str(request.args.get("colormap", "")).strip() or None
+
+        cog_path = layer.get("cog_path") or ""
+        if cog_path:
+            png_bytes = _render_tile_on_demand(cog_path, z, x, y, colormap)
+            if png_bytes is None:
+                return ("", 204)
+            return Response(png_bytes, mimetype="image/png",
+                            headers={"Cache-Control": "public, max-age=3600"})
+
+        tile_dir = layer.get("tile_dir")
+        if tile_dir:
+            tile_path = Path(str(tile_dir)) / str(z) / str(x) / f"{y}.png"
+            if not tile_path.is_file():
+                return ("", 204)
+            return send_from_directory(tile_path.parent, tile_path.name)
+
+        return ("", 204)
 
     @app.route("/api/layers/<layer_id>/preview.png")
     def raster_preview(layer_id: str):
@@ -231,9 +248,12 @@ def register_layer_upload_routes(app: Flask) -> None:
         if layer.get("kind") != "raster":
             return jsonify({"error": "Preview is only available for raster layers."}), 400
 
-        preview_path = Path(str(layer.get("preview_path") or ""))
-        if not preview_path.is_file():
-            return jsonify({"error": "Raster preview was not found. Upload it again."}), 404
+        try:
+            preview_path = _ensure_raster_preview(layer)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 404
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 500
         return send_from_directory(preview_path.parent, preview_path.name)
 
 
@@ -762,24 +782,26 @@ def _prepare_raster_layer(layer_id: str, original_name: str, upload_path: Path, 
             "Ask the app distributor to include the GDAL folder in the Windows build."
         )
 
-    normalized_path = _normalize_raster_for_tiling(upload_path, work_dir, gdal_tools)
-    info = _run_json_command([gdal_tools["gdalinfo"], "-json", "-mm", str(normalized_path)], env=gdal_tools["env"])
+    normalized_path, norm_info = _normalize_raster_for_tiling(upload_path, work_dir, gdal_tools)
+    info = _run_json_command([gdal_tools["gdalinfo"], "-json", "-approx_stats", str(normalized_path)], env=gdal_tools["env"]) if norm_info is None else norm_info
+    # Ensure we have band statistics for byte scaling
+    if not any(b.get("computedMin") is not None or b.get("minimum") is not None for b in (info.get("bands") or [])):
+        info = _run_json_command([gdal_tools["gdalinfo"], "-json", "-approx_stats", str(normalized_path)], env=gdal_tools["env"])
     extent = _raster_extent(info)
     if not extent:
         raise ValueError("This raster does not expose a usable WGS84 extent.")
-    tile_dir, min_zoom, max_zoom = _generate_raster_tiles(normalized_path, info, work_dir, gdal_tools)
-    preview_path = _prepare_raster_preview_image(normalized_path, info, work_dir, gdal_tools)
+    cog_path, min_zoom, max_zoom = _generate_raster_tiles(normalized_path, info, work_dir, gdal_tools)
 
     return {
         "id": layer_id,
         "kind": "raster",
         "name": Path(original_name or upload_path.name).name,
         "tile_url": f"/api/layers/{layer_id}/tiles/{{z}}/{{x}}/{{y}}.png",
-        "tile_dir": str(tile_dir),
+        "cog_path": str(cog_path),
         "min_zoom": min_zoom,
         "max_zoom": max_zoom,
         "raster_path": str(normalized_path),
-        "preview_path": str(preview_path),
+        "preview_path": "",
         "source_upload_path": str(upload_path),
         "work_dir": str(work_dir),
         "extent": extent,
@@ -792,49 +814,179 @@ def _prepare_raster_layer(layer_id: str, original_name: str, upload_path: Path, 
     }
 
 
+def _native_zoom_level(info: Dict[str, Any]) -> int:
+    """Estimate the native tile zoom level from the pixel resolution."""
+    gt = info.get("geoTransform")
+    if gt and len(gt) >= 2 and gt[1] > 0:
+        pixel_deg = gt[1]
+    else:
+        size = info.get("size") or []
+        extent = _raster_extent(info)
+        if extent and len(size) >= 1 and int(size[0]) > 0:
+            pixel_deg = (extent["max_lon"] - extent["min_lon"]) / int(size[0])
+        else:
+            return 12
+    return max(0, int(math.log2(360.0 / (pixel_deg * 256))))
+
+
 def _generate_raster_tiles(
     raster_path: Path, info: Dict[str, Any], work_dir: Path, gdal_tools: Dict[str, Any]
 ) -> Tuple[Path, int, int]:
-    """Create a Byte-scaled TIF and generate XYZ map tiles via gdal2tiles."""
-    display_tif = work_dir / "display_tiles.tif"
-    tile_dir = work_dir / "tiles"
+    """Create a Byte-scaled local tile source for on-demand raster rendering."""
+    display_tif = work_dir / "display_cog.tif"
+
+    native_zoom = _native_zoom_level(info)
+    max_zoom = min(native_zoom, MAX_RASTER_TILE_ZOOM)
+
+    size = info.get("size") or []
+    src_w = int(size[0]) if len(size) >= 1 else 0
+    src_h = int(size[1]) if len(size) >= 2 else 0
+    # Downsample when capping zoom to avoid processing unnecessary pixels
+    if native_zoom > max_zoom and src_w > 0 and src_h > 0:
+        scale = 2 ** (max_zoom - native_zoom)
+        out_w = max(256, int(src_w * scale))
+        out_h = max(256, int(src_h * scale))
+        outsize_args = ["-outsize", str(out_w), str(out_h)]
+    else:
+        outsize_args = []
 
     command = [
         gdal_tools["gdal_translate"],
         "-of", "GTiff",
         "-ot", "Byte",
         "-co", "TILED=YES",
-        "-co", "COMPRESS=DEFLATE",
     ]
+    command.extend(outsize_args)
     command.extend(_display_scale_arguments(info))
-    nodata = _first_band_nodata(info)
-    if nodata is not None:
-        command.extend(["-a_nodata", "0"])
+    # Data is scaled to 1-255; always mark 0 as nodata for proper tile transparency
+    command.extend(["-a_nodata", "0"])
     command.extend([str(raster_path), str(display_tif)])
+    print(f"[GDAL] gdal_translate: {src_w}x{src_h} -> {outsize_args or 'native'}, zoom cap {max_zoom}")
     _run_command(command, env=gdal_tools["env"], label="gdal_translate tile source")
+    print(f"[GDAL] tile source ready for on-demand tiles (zoom 0-{max_zoom})")
 
-    _run_command([
-        gdal_tools["gdal2tiles"],
-        "--xyz",
-        "-w", "none",
-        "-r", "average",
-        str(display_tif),
-        str(tile_dir),
-    ], env=gdal_tools["env"], label="gdal2tiles")
-
-    zoom_levels = sorted(
-        int(d.name) for d in tile_dir.iterdir()
-        if d.is_dir() and d.name.isdigit()
-    )
-    min_zoom = zoom_levels[0] if zoom_levels else 0
-    max_zoom = zoom_levels[-1] if zoom_levels else 18
-    return tile_dir, min_zoom, max_zoom
+    return display_tif, 0, max_zoom
 
 
-def _normalize_raster_for_tiling(upload_path: Path, work_dir: Path, gdal_tools: Dict[str, Any]) -> Path:
-    info = _run_json_command([gdal_tools["gdalinfo"], "-json", str(upload_path)], env=gdal_tools["env"])
+_TILE_CACHE: Dict[tuple, bytes] = {}
+_TILE_CACHE_MAX = 2048
+_TILE_CACHE_LOCK = Lock()
+_COLORMAP_LUT_CACHE: Dict[str, np.ndarray] = {}
+
+
+def _build_colormap_lut(name: str) -> np.ndarray:
+    """Build a 256x3 uint8 lookup table from a COLOR_MAPS palette."""
+    if name in _COLORMAP_LUT_CACHE:
+        return _COLORMAP_LUT_CACHE[name]
+    palette = COLOR_MAPS.get(name) or COLOR_MAPS["hazard"]
+    n_stops = len(palette)
+    lut = np.zeros((256, 3), dtype=np.uint8)
+    for i in range(256):
+        if i == 0:
+            continue
+        ratio = (i - 1) / 254.0
+        pos = ratio * (n_stops - 1)
+        lo = int(math.floor(pos))
+        hi = min(lo + 1, n_stops - 1)
+        frac = pos - lo
+        c_lo = _hex_to_rgb(palette[lo])
+        c_hi = _hex_to_rgb(palette[hi])
+        lut[i] = [int(c_lo[j] + (c_hi[j] - c_lo[j]) * frac) for j in range(3)]
+    _COLORMAP_LUT_CACHE[name] = lut
+    return lut
+
+
+def _render_tile_on_demand(cog_path: str, z: int, x: int, y: int, colormap: Optional[str] = None) -> Optional[bytes]:
+    """Render a single XYZ tile from a COG with overviews."""
+    cache_key = (cog_path, z, x, y, colormap)
+    with _TILE_CACHE_LOCK:
+        cached = _TILE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    from osgeo import gdal as _gdal
+    _gdal.UseExceptions()
+    tile_size = 256
+
+    # XYZ tile bounds in EPSG:3857
+    earth = 20037508.342789244
+    n = 2 ** z
+    res = 2 * earth / n
+    xmin = -earth + x * res
+    xmax = xmin + res
+    ymax = earth - y * res
+    ymin = ymax - res
+
+    ds = _gdal.Open(cog_path)
+    if ds is None:
+        return None
+
+    try:
+        warp_ds = _gdal.Warp(
+            "", ds,
+            format="MEM",
+            dstSRS="EPSG:3857",
+            outputBounds=(xmin, ymin, xmax, ymax),
+            width=tile_size,
+            height=tile_size,
+            resampleAlg=_gdal.GRA_Average,
+            srcNodata=0,
+            dstAlpha=True,
+        )
+    except Exception:
+        return None
+    finally:
+        ds = None
+
+    if warp_ds is None:
+        return None
+
+    band_count = warp_ds.RasterCount
+    # dstAlpha=True appends an alpha band as the last band
+    data_bands = band_count - 1
+    bands_data = []
+    for i in range(1, min(data_bands, 3) + 1):
+        bands_data.append(warp_ds.GetRasterBand(i).ReadAsArray())
+    alpha = warp_ds.GetRasterBand(band_count).ReadAsArray().astype(np.uint8)
+    warp_ds = None
+
+    if not bands_data or bands_data[0] is None:
+        return None
+
+    if data_bands == 1:
+        gray = bands_data[0].astype(np.uint8, copy=False)
+        alpha = alpha.copy()
+        # The display TIFF reserves 0 for nodata and maps the source minimum to 1.
+        # Treat that lowest display bucket as transparent so low-value background does
+        # not render as a solid colored tile over the basemap.
+        alpha[gray <= 1] = 0
+        if colormap and colormap in COLOR_MAPS:
+            lut = _build_colormap_lut(colormap)
+            rgb = lut[gray]
+            img = Image.fromarray(rgb, mode="RGB")
+        else:
+            img = Image.fromarray(gray, mode="L").convert("RGB")
+        img.putalpha(Image.fromarray(alpha))
+    else:
+        r, g, b = bands_data[0], bands_data[1], bands_data[2] if len(bands_data) >= 3 else bands_data[0]
+        img = Image.merge("RGBA", [Image.fromarray(c) for c in (r, g, b)] + [Image.fromarray(alpha)])
+
+    buf = BytesIO()
+    img.save(buf, format="PNG", compress_level=1)
+    png_bytes = buf.getvalue()
+
+    with _TILE_CACHE_LOCK:
+        if len(_TILE_CACHE) >= _TILE_CACHE_MAX:
+            _TILE_CACHE.clear()
+        _TILE_CACHE[cache_key] = png_bytes
+
+    return png_bytes
+
+
+def _normalize_raster_for_tiling(upload_path: Path, work_dir: Path, gdal_tools: Dict[str, Any]) -> Tuple[Path, Optional[Dict[str, Any]]]:
+    info = _run_json_command([gdal_tools["gdalinfo"], "-json", "-approx_stats", str(upload_path)], env=gdal_tools["env"])
     if _raster_extent(info) and _has_real_georeference(info):
-        return upload_path
+        return upload_path, info
 
     sidecar_extent = _extent_from_world_file(upload_path, info)
     if sidecar_extent is None:
@@ -857,7 +1009,7 @@ def _normalize_raster_for_tiling(upload_path: Path, work_dir: Path, gdal_tools: 
         str(upload_path),
         str(normalized_path),
     ], env=gdal_tools["env"], label="gdal_translate")
-    return normalized_path
+    return normalized_path, None
 
 
 def _prepare_raster_preview_image(
@@ -866,7 +1018,7 @@ def _prepare_raster_preview_image(
     work_dir: Path,
     gdal_tools: Dict[str, Any],
 ) -> Path:
-    display_tif = work_dir / f"{raster_path.stem}_display_byte.tif"
+    """Generate a small PNG preview. Reads from the COG (with overviews) for speed."""
     preview_png = work_dir / "preview.png"
     size = info.get("size") or []
     width = int(size[0] or RASTER_PREVIEW_MAX_SIZE) if len(size) >= 1 else RASTER_PREVIEW_MAX_SIZE
@@ -875,35 +1027,38 @@ def _prepare_raster_preview_image(
     out_width = max(1, int(width * scale))
     out_height = max(1, int(height * scale))
 
-    command = [
-        gdal_tools["gdal_translate"],
-        "-of",
-        "GTiff",
-        "-ot",
-        "Byte",
-        "-outsize",
-        str(out_width),
-        str(out_height),
-        "-co",
-        "TILED=YES",
-        "-co",
-        "COMPRESS=DEFLATE",
-    ]
-    command.extend(_display_scale_arguments(info))
-    nodata = _first_band_nodata(info)
-    if nodata is not None:
-        command.extend(["-a_nodata", "0"])
-    command.extend([str(raster_path), str(display_tif)])
-    _run_command(command, env=gdal_tools["env"], label="gdal_translate display raster")
-
     _run_command([
         gdal_tools["gdal_translate"],
-        "-of",
-        "PNG",
-        str(display_tif),
+        "-of", "PNG",
+        "-outsize", str(out_width), str(out_height),
+        str(raster_path),
         str(preview_png),
     ], env=gdal_tools["env"], label="gdal_translate raster preview")
     return preview_png
+
+
+def _ensure_raster_preview(layer: Dict[str, Any]) -> Path:
+    preview_value = str(layer.get("preview_path") or "").strip()
+    if preview_value:
+        preview_path = Path(preview_value)
+        if preview_path.is_file():
+            return preview_path
+
+    raster_value = str(layer.get("cog_path") or layer.get("raster_path") or "").strip()
+    work_dir_value = str(layer.get("work_dir") or "").strip()
+    raster_path = Path(raster_value) if raster_value else None
+    work_dir = Path(work_dir_value) if work_dir_value else None
+    if raster_path is None or work_dir is None or not raster_path.is_file() or not work_dir.is_dir():
+        raise ValueError("Raster preview was not found. Upload it again.")
+
+    gdal_tools = _find_gdal_tools()
+    if not gdal_tools:
+        raise RuntimeError("Raster preview needs GDAL tools bundled with this app.")
+
+    info = _run_json_command([gdal_tools["gdalinfo"], "-json", str(raster_path)], env=gdal_tools["env"])
+    preview_path = _prepare_raster_preview_image(raster_path, info, work_dir, gdal_tools)
+    layer["preview_path"] = str(preview_path)
+    return preview_path
 
 
 def _image_coordinates(extent: Dict[str, float]) -> List[List[float]]:
@@ -1035,6 +1190,10 @@ def _candidate_gdal_roots() -> List[Path]:
         if meipass:
             roots.append(Path(meipass) / "gdal")
 
+    # conda / venv: GDAL lives under sys.prefix (Windows conda)
+    prefix = Path(sys.prefix)
+    roots.append(prefix)
+
     app_dir = Path(__file__).resolve().parent
     roots.extend([
         app_dir / "gdal",
@@ -1059,6 +1218,7 @@ def _tools_from_gdal_root(root: Path) -> Optional[Dict[str, Any]]:
         root,
         root / "bin",
         root / "apps",
+        root / "Scripts",
         root / "Library" / "bin",
     ]
     print(f"[GDAL] Checking root: {root}")
@@ -1186,6 +1346,7 @@ def _public_layer_metadata(layer: Dict[str, Any]) -> Dict[str, Any]:
         if key not in {
             "cache_path",
             "tile_dir",
+            "cog_path",
             "raster_path",
             "preview_path",
             "source_upload_path",

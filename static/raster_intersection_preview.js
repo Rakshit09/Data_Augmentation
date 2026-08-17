@@ -39,6 +39,7 @@
         ${metric(valueLabel(summary, "min"), formatNumber(summary.raster_value_min))}
         ${metric(valueLabel(summary, "mean"), formatNumber(summary.raster_value_mean))}
         ${metric(valueLabel(summary, "max"), formatNumber(summary.raster_value_max))}
+        ${metric("Sampling", samplingLabel(summary))}
         ${metric("Threshold matches", summary.count_matching_threshold == null ? "n/a" : formatInteger(summary.count_matching_threshold))}
         ${metric("Total SI", summary.total_si == null ? "n/a" : formatNumber(summary.total_si))}
         ${metric("SI field", summary.si_field || "n/a")}
@@ -77,7 +78,26 @@
     if (summary.source_type === "vector_database" || summary.source_type === "vector_exposure") {
       return ` · Field ${summary.vector_field || "feature_id"}`;
     }
-    return ` · Band ${summary.raster_band || 1}`;
+    const radiusText = summary.sample_radius_m == null ? "Point" : `Radius ${formatNumber(summary.sample_radius_m)} m`;
+    const aggregation = summary.sample_radius_m == null ? "" : ` · ${samplingAggregationLabel(summary)}`;
+    return ` · Band ${summary.raster_band || 1} · ${radiusText}${aggregation}`;
+  }
+
+  function samplingLabel(summary) {
+    if (summary.source_type === "vector_database" || summary.source_type === "vector_exposure") {
+      return "n/a";
+    }
+    if (summary.sample_radius_m == null) {
+      return "Point";
+    }
+    return `${formatNumber(summary.sample_radius_m)} m ${samplingAggregationLabel(summary)}`;
+  }
+
+  function samplingAggregationLabel(summary) {
+    const value = String(summary.sample_radius_aggregation || "mean").toLowerCase();
+    if (value === "max") return "Max";
+    if (value === "min") return "Min";
+    return "Mean";
   }
 
   function valueLabel(summary, statistic) {

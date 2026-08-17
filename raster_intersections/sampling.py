@@ -3,6 +3,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .radius_sampling import DEFAULT_RADIUS_AGGREGATION, raw_radius_sample_values, sample_candidates_with_radius
 from .utils import find_gdal_tool, safe_json_value, threshold_matches
 
 
@@ -15,10 +16,29 @@ def sample_candidates(
     metadata: Dict[str, Any],
     threshold: Optional[float],
     threshold_operator: str,
+    sample_radius_m: Optional[float] = None,
+    radius_aggregation: str = DEFAULT_RADIUS_AGGREGATION,
     chunk_size: int = DEFAULT_SAMPLE_CHUNK_SIZE,
 ) -> List[Dict[str, Any]]:
     if not candidates:
         return []
+
+    if sample_radius_m is not None and float(sample_radius_m) > 0:
+        try:
+            return sample_candidates_with_radius(
+                raster_path=raster_path,
+                candidates=candidates,
+                metadata=metadata,
+                threshold=threshold,
+                threshold_operator=threshold_operator,
+                radius_m=sample_radius_m,
+                aggregation=radius_aggregation,
+                chunk_size=chunk_size,
+            )
+        except ImportError as exc:
+            raise ValueError(
+                "Radius sampling needs rasterio and pyproj in the app environment."
+            ) from exc
 
     try:
         return _sample_with_rasterio(
@@ -44,10 +64,18 @@ def sampling_diagnostics(
     raster_path: Path,
     candidates: List[Dict[str, Any]],
     metadata: Dict[str, Any],
+    sample_radius_m: Optional[float] = None,
+    radius_aggregation: str = DEFAULT_RADIUS_AGGREGATION,
     limit: int = 10000,
 ) -> Dict[str, Any]:
     sample_rows = candidates[: max(1, min(limit, len(candidates)))]
-    values = _raw_sample_values(raster_path, sample_rows, metadata)
+    values = _raw_sample_values(
+        raster_path,
+        sample_rows,
+        metadata,
+        sample_radius_m=sample_radius_m,
+        radius_aggregation=radius_aggregation,
+    )
     nodata = metadata.get("nodata")
     nodata_value = None
     try:
@@ -85,7 +113,20 @@ def _raw_sample_values(
     raster_path: Path,
     candidates: List[Dict[str, Any]],
     metadata: Dict[str, Any],
+    sample_radius_m: Optional[float] = None,
+    radius_aggregation: str = DEFAULT_RADIUS_AGGREGATION,
 ) -> List[Optional[float]]:
+    if sample_radius_m is not None and float(sample_radius_m) > 0:
+        try:
+            return raw_radius_sample_values(
+                raster_path=raster_path,
+                candidates=candidates,
+                metadata=metadata,
+                radius_m=sample_radius_m,
+                aggregation=radius_aggregation,
+            )
+        except ImportError:
+            return []
     try:
         return _raw_sample_values_rasterio(raster_path, candidates, metadata)
     except ImportError:

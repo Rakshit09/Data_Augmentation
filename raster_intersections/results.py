@@ -63,6 +63,8 @@ def build_summary(
     si_field: Optional[str],
     elapsed_seconds: float,
     raster_band: int,
+    sample_radius_m: Optional[float],
+    sample_radius_aggregation: Optional[str],
     bounds: Dict[str, float],
 ) -> Dict[str, Any]:
     values = [_float_or_none(row.get("raster_value")) for row in rows]
@@ -105,6 +107,8 @@ def build_summary(
         "si_above_threshold": si_matching_threshold,
         "elapsed_seconds": round(elapsed_seconds, 3),
         "raster_band": raster_band,
+        "sample_radius_m": sample_radius_m,
+        "sample_radius_aggregation": sample_radius_aggregation,
         "bounds": bounds,
         "preview_row_limit": PREVIEW_LIMIT,
         "map_feature_limit": MAP_FEATURE_LIMIT,
@@ -146,6 +150,8 @@ def build_vector_summary(
         "si_above_threshold": None,
         "elapsed_seconds": round(elapsed_seconds, 3),
         "raster_band": None,
+        "sample_radius_m": None,
+        "sample_radius_aggregation": None,
         "vector_field": field or "feature_id",
         "bounds": bounds,
         "preview_row_limit": PREVIEW_LIMIT,

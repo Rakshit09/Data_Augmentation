@@ -7,7 +7,11 @@
   const siFieldSelect = document.getElementById("rasterIntersectionSiField");
   const thresholdOperator = document.getElementById("rasterThresholdOperator");
   const thresholdValue = document.getElementById("rasterThresholdValue");
+  const radiusInput = document.getElementById("rasterSampleRadius");
+  const aggregationSelect = document.getElementById("rasterSampleAggregation");
   const thresholdRow = document.querySelector(".raster-threshold-row");
+  const radiusLabel = radiusInput?.closest("label");
+  const aggregationLabel = aggregationSelect?.closest("label");
   const exposureButton = document.getElementById("intersectExposureRaster");
   const databaseButton = document.getElementById("intersectDatabaseRaster");
   const message = document.getElementById("rasterIntersectionMessage");
@@ -15,7 +19,7 @@
   let activeLayer = window.currentAddedMapLayer || null;
   let running = false;
 
-  if (!controls || !bandSelect || !siFieldSelect || !exposureButton || !databaseButton) return;
+  if (!controls || !bandSelect || !siFieldSelect || !exposureButton || !databaseButton || !radiusInput || !aggregationSelect) return;
 
   exposureButton.addEventListener("click", () => runIntersection("exposure"));
   databaseButton.addEventListener("click", () => runIntersection("database"));
@@ -36,6 +40,8 @@
     databaseButton.disabled = running || !isIntersectable;
     bandLabel?.classList.toggle("hidden", !isRaster);
     thresholdRow?.classList.toggle("hidden", !isRaster);
+    radiusLabel?.classList.toggle("hidden", !isRaster);
+    aggregationLabel?.classList.toggle("hidden", !isRaster);
     syncSiFieldOptions(Array.isArray(exposureState.columns) ? exposureState.columns : []);
 
     if (!isIntersectable) {
@@ -81,6 +87,7 @@
 
     const isRaster = activeLayer.kind === "raster";
     const threshold = thresholdValue.value.trim();
+    const radiusText = radiusInput.value.trim();
     running = true;
     syncLayerState({ updateMessage: false });
     setMessage(sourceType === "exposure" ? "Intersecting exposure points..." : "Intersecting building centroids...");
@@ -96,6 +103,14 @@
         payload.band_index = Number(bandSelect.value || 1);
         payload.threshold = threshold === "" ? null : Number(threshold);
         payload.threshold_operator = thresholdOperator.value || ">";
+        if (radiusText !== "") {
+          const radius = Number(radiusText);
+          if (!Number.isFinite(radius) || radius <= 0) {
+            throw new Error("Radius must be greater than 0 metres.");
+          }
+          payload.sample_radius_m = radius;
+          payload.sample_radius_aggregation = aggregationSelect.value || "mean";
+        }
       } else {
         payload.field = activeLayer.field || activeLayer.default_field || "";
       }

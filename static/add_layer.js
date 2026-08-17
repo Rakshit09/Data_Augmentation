@@ -67,7 +67,11 @@
   colormapSelect.addEventListener("change", () => {
     if (!state.layer) return;
     state.layer.colormap = colormapSelect.value;
-    scheduleVectorRefresh({ immediate: true });
+    if (state.layer.kind === "raster") {
+      reloadRasterTiles();
+    } else {
+      scheduleVectorRefresh({ immediate: true });
+    }
   });
   transparencyInput.addEventListener("input", updateLayerOpacity);
 
@@ -80,6 +84,8 @@
 
     if (typeof dismissCriticalNote === "function") dismissCriticalNote();
     uploadButton.disabled = true;
+    const originalLabel = uploadButton.textContent;
+    uploadButton.innerHTML = '<span class="spinner"></span> Uploading\u2026';
     if (typeof statusEl !== "undefined") statusEl.textContent = "Adding layer";
     setMessage("Preparing layer for smooth map rendering...");
 
@@ -133,6 +139,7 @@
       if (typeof statusEl !== "undefined") statusEl.textContent = "Error";
     } finally {
       uploadButton.disabled = false;
+      uploadButton.textContent = originalLabel;
     }
   }
 
@@ -225,9 +232,9 @@
 
   function activateRasterLayer(layer) {
     clearVectorSource();
-    populateFieldOptions([], "");
+    fieldSelect.innerHTML = '<option value="">Raster values</option>';
     fieldSelect.disabled = true;
-    colormapSelect.disabled = true;
+    colormapSelect.disabled = false;
     removeRasterLayer();
 
     if (layer.render_mode === "image" && layer.image_url && layer.image_coordinates) {
@@ -250,9 +257,10 @@
     const bounds = layer.extent
       ? [layer.extent.min_lon, layer.extent.min_lat, layer.extent.max_lon, layer.extent.max_lat]
       : undefined;
+    const tileUrl = rasterTileUrl(layer);
     map.addSource(rasterSourceId, {
       type: "raster",
-      tiles: [layer.tile_url],
+      tiles: [tileUrl],
       tileSize: 256,
       minzoom: layer.min_zoom || 0,
       maxzoom: layer.max_zoom || 18,
@@ -266,6 +274,18 @@
         "raster-opacity": activeOpacity(1)
       }
     }, layerBeforeId());
+  }
+
+  function rasterTileUrl(layer) {
+    const cm = (layer || state.layer || {}).colormap || colormapSelect.value || "hazard";
+    const base = (layer || state.layer || {}).tile_url || "";
+    return base + (base.includes("?") ? "&" : "?") + "colormap=" + encodeURIComponent(cm);
+  }
+
+  function reloadRasterTiles() {
+    if (!state.layer || state.layer.kind !== "raster") return;
+    removeRasterLayer();
+    activateRasterLayer(state.layer);
   }
 
   function populateFieldOptions(fields, selectedField) {
