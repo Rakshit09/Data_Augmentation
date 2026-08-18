@@ -126,16 +126,16 @@
         result = sourceType === "exposure"
           ? await window.rasterIntersectionApi.intersectExposure(payload)
           : await window.rasterIntersectionApi.intersectDatabase(payload);
+        await pollRasterIntersectionProgress(result.job_id);
       } else {
         result = sourceType === "exposure"
           ? await window.rasterIntersectionApi.intersectVectorExposure(payload)
           : await window.rasterIntersectionApi.intersectVectorDatabase(payload);
+        window.rasterIntersectionPreview.render(result);
+        window.rasterIntersectionLayers.render(result.map_features);
+        setMessage(`Done: ${formatInteger(result.summary?.matched_count)} matched locations.`, "success");
+        if (typeof statusEl !== "undefined") statusEl.textContent = "Done";
       }
-
-      window.rasterIntersectionPreview.render(result);
-      window.rasterIntersectionLayers.render(result.map_features);
-      setMessage(`Done: ${formatInteger(result.summary?.matched_count)} matched locations.`, "success");
-      if (typeof statusEl !== "undefined") statusEl.textContent = "Done";
     } catch (error) {
       setMessage(error.message, "error");
       if (typeof statusEl !== "undefined") statusEl.textContent = "Error";
@@ -177,6 +177,51 @@
     message.textContent = text || "";
     message.classList.toggle("error", type === "error");
     message.classList.toggle("success", type === "success");
+  }
+
+  function setMessageHtml(html, type = "") {
+    if (!message) return;
+    message.innerHTML = html || "";
+    message.classList.toggle("error", type === "error");
+    message.classList.toggle("success", type === "success");
+  }
+
+  async function pollRasterIntersectionProgress(jobId) {
+    while (true) {
+      const payload = await window.rasterIntersectionApi.progress(jobId);
+      if (payload.status === "complete") {
+        window.rasterIntersectionPreview.render(payload);
+        window.rasterIntersectionLayers.render(payload.map_features);
+        setMessage(`Done: ${formatInteger(payload.summary?.matched_count)} matched locations.`, "success");
+        if (typeof statusEl !== "undefined") statusEl.textContent = "Done";
+        return;
+      }
+
+      if (payload.status === "error") {
+        throw new Error(payload.error || "Raster intersection failed");
+      }
+
+      renderProgressMessage(payload);
+      await wait(1500);
+    }
+  }
+
+  function renderProgressMessage(payload) {
+    const percent = Math.max(0, Math.min(100, Number(payload.percent || 0)));
+    const phase = escapeHtml(payload.phase || payload.status || "Working");
+    const detail = payload.detail
+      ? `<div class="progress-copy">${escapeHtml(payload.detail)}</div>`
+      : "";
+    setMessageHtml(`
+      <div class="progress-copy">${phase}</div>
+      ${detail}
+      <div class="progress-track"><div class="progress-fill" style="width:${percent}%"></div></div>
+      <div class="progress-copy">${percent.toFixed(0)}%</div>
+    `);
+  }
+
+  function wait(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
   }
 
   function formatInteger(value) {

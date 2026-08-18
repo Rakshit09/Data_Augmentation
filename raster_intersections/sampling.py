@@ -1,13 +1,14 @@
 import math
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .radius_sampling import DEFAULT_RADIUS_AGGREGATION, raw_radius_sample_values, sample_candidates_with_radius
 from .utils import find_gdal_tool, safe_json_value, threshold_matches
 
 
 DEFAULT_SAMPLE_CHUNK_SIZE = 10000
+ProgressCallback = Optional[Callable[[str, int, Optional[str]], None]]
 
 
 def sample_candidates(
@@ -19,6 +20,7 @@ def sample_candidates(
     sample_radius_m: Optional[float] = None,
     radius_aggregation: str = DEFAULT_RADIUS_AGGREGATION,
     chunk_size: int = DEFAULT_SAMPLE_CHUNK_SIZE,
+    progress_callback: ProgressCallback = None,
 ) -> List[Dict[str, Any]]:
     if not candidates:
         return []
@@ -34,6 +36,7 @@ def sample_candidates(
                 radius_m=sample_radius_m,
                 aggregation=radius_aggregation,
                 chunk_size=chunk_size,
+                progress_callback=progress_callback,
             )
         except ImportError as exc:
             raise ValueError(
@@ -48,6 +51,7 @@ def sample_candidates(
             threshold=threshold,
             threshold_operator=threshold_operator,
             chunk_size=chunk_size,
+            progress_callback=progress_callback,
         )
     except ImportError:
         return _sample_with_gdal(
@@ -57,6 +61,7 @@ def sample_candidates(
             threshold=threshold,
             threshold_operator=threshold_operator,
             chunk_size=chunk_size,
+            progress_callback=progress_callback,
         )
 
 
@@ -207,6 +212,7 @@ def _sample_with_rasterio(
     threshold: Optional[float],
     threshold_operator: str,
     chunk_size: int,
+    progress_callback: ProgressCallback,
 ) -> List[Dict[str, Any]]:
     try:
         import rasterio
@@ -216,6 +222,7 @@ def _sample_with_rasterio(
 
     band_index = int(metadata.get("band_index") or 1)
     output: List[Dict[str, Any]] = []
+    total = len(candidates)
 
     with rasterio.open(raster_path) as dataset:
         if not dataset.crs:
@@ -226,7 +233,8 @@ def _sample_with_rasterio(
 
         nodata = dataset.nodatavals[band_index - 1] if dataset.nodatavals else metadata.get("nodata")
         for start in range(0, len(candidates), chunk_size):
-            chunk = candidates[start:start + chunk_size]
+            end = min(start + chunk_size, total)
+            chunk = candidates[start:end]
             lon_lat = [(float(row["lon"]), float(row["lat"])) for row in chunk]
             if transformer:
                 xs, ys = transformer.transform(
@@ -243,6 +251,13 @@ def _sample_with_rasterio(
                     continue
                 output.append(_sampled_row(candidate, value))
 
+            _emit_progress(
+                progress_callback,
+                phase="Sampling raster values",
+                percent=int(round(end * 100 / max(total, 1))),
+                detail=f"Processed {end:,} of {total:,} candidate locations.",
+            )
+
     return output
 
 
@@ -253,6 +268,7 @@ def _sample_with_gdal(
     threshold: Optional[float],
     threshold_operator: str,
     chunk_size: int,
+    progress_callback: ProgressCallback,
 ) -> List[Dict[str, Any]]:
     gdallocationinfo, env = find_gdal_tool("gdallocationinfo")
     if not gdallocationinfo:
@@ -264,9 +280,11 @@ def _sample_with_gdal(
     band_index = str(int(metadata.get("band_index") or 1))
     nodata = metadata.get("nodata")
     output: List[Dict[str, Any]] = []
+    total = len(candidates)
 
     for start in range(0, len(candidates), chunk_size):
-        chunk = candidates[start:start + chunk_size]
+        end = min(start + chunk_size, total)
+        chunk = candidates[start:end]
         input_text = "\n".join(f"{float(row['lon'])} {float(row['lat'])}" for row in chunk) + "\n"
         result = subprocess.run(
             [gdallocationinfo, "-valonly", "-wgs84", "-b", band_index, str(raster_path)],
@@ -287,7 +305,26 @@ def _sample_with_gdal(
                 continue
             output.append(_sampled_row(candidate, value))
 
+        _emit_progress(
+            progress_callback,
+            phase="Sampling raster values",
+            percent=int(round(end * 100 / max(total, 1))),
+            detail=f"Processed {end:,} of {total:,} candidate locations.",
+        )
+
     return output
+
+
+def _emit_progress(
+    progress_callback: ProgressCallback,
+    *,
+    phase: str,
+    percent: int,
+    detail: Optional[str] = None,
+) -> None:
+    if progress_callback is None:
+        return
+    progress_callback(phase, max(0, min(100, int(percent))), detail)
 
 
 def _sample_to_float(sample: Any, nodata: Any) -> Optional[float]:

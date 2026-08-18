@@ -489,6 +489,8 @@
       map.on("mouseenter", layerId, () => { map.getCanvas().style.cursor = "pointer"; });
       map.on("mouseleave", layerId, () => { map.getCanvas().style.cursor = ""; });
     }
+
+    window.applyOverlayLayerOrder?.();
   }
 
   function activateVectorLayer(layer) {
@@ -496,6 +498,7 @@
     populateFieldOptions(layer.fields || [], layer.default_field || "");
     fieldSelect.disabled = !((layer.fields || []).length);
     colormapSelect.disabled = false;
+    window.applyOverlayLayerOrder?.();
     scheduleVectorRefresh({ immediate: true });
   }
 
@@ -520,6 +523,7 @@
           "raster-opacity": activeOpacity(1)
         }
       }, layerBeforeId());
+      window.applyOverlayLayerOrder?.();
       return;
     }
 
@@ -543,6 +547,7 @@
         "raster-opacity": activeOpacity(1)
       }
     }, layerBeforeId());
+    window.applyOverlayLayerOrder?.();
   }
 
   function rasterTileUrl(layer) {

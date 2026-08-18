@@ -8,7 +8,7 @@ import duckdb
 EXPOSURE_BIN_VERSION = "3"
 EXPOSURE_ROW_TABLE_VERSION = "1"
 EXPOSURE_BIN_ZOOMS: Tuple[int, ...] = (6, 8, 10, 12, 14, 16)
-RAW_POINT_ZOOM = 11
+RAW_POINT_ZOOM = 12.0
 DUPLICATE_SPREAD_ZOOM = 18.0
 MAX_MERCATOR_LAT = 85.05112878
 EARTH_RADIUS_EQUATOR_PX = 156543.03392
@@ -352,18 +352,18 @@ def _view_grid(width: int, height: int, max_features: int) -> Tuple[int, int]:
     safe_width = max(320, min(3840, int(width or 1200)))
     safe_height = max(240, min(2160, int(height or 800)))
     safe_max = max(500, int(max_features or 12000))
+    safe_max = min(safe_max, 3500)
 
-    # Keep the overview payload bounded by screen density. A 12 px cell is
-    # visually dense for the existing circles and substantially cheaper to
-    # serialize, transfer, and rebuild in MapLibre than the former 8 px grid.
-    cols = max(24, min(260, math.ceil(safe_width / 12)))
-    rows = max(18, min(200, math.ceil(safe_height / 12)))
+    # Keep the overview visibly aggregated. A coarser 18 px cell and a lower
+    # feature cap stop low-zoom views from looking like the raw point layer.
+    cols = max(18, min(180, math.ceil(safe_width / 18)))
+    rows = max(14, min(140, math.ceil(safe_height / 18)))
     cell_count = cols * rows
 
     if cell_count > safe_max:
         scale = math.sqrt(safe_max / cell_count)
-        cols = max(24, int(cols * scale))
-        rows = max(18, int(rows * scale))
+        cols = max(18, int(cols * scale))
+        rows = max(14, int(rows * scale))
 
     return cols, rows
 

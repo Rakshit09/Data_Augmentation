@@ -20,6 +20,44 @@ JOBS: Dict[str, Dict[str, Any]] = {}
 JOBS_LOCK = Lock()
 
 
+def create_pending_job(
+    source_type: str,
+    layer_name: str,
+    *,
+    phase: str = "Queued",
+    percent: int = 0,
+    detail: Optional[str] = None,
+) -> Dict[str, Any]:
+    job_id = uuid.uuid4().hex
+    job = {
+        "job_id": job_id,
+        "source_type": source_type,
+        "layer_name": layer_name,
+        "created_at": time.time(),
+        "status": "queued",
+        "phase": phase,
+        "percent": max(0, min(99, int(percent))),
+        "detail": detail,
+        "error": None,
+        "columns": [],
+        "preview_rows": [],
+        "summary": {},
+        "paths": {},
+        "download_urls": {},
+        "map_features": {
+            "type": "FeatureCollection",
+            "features": [],
+            "returned_count": 0,
+            "truncated": False,
+            "total_count": 0,
+        },
+    }
+    with JOBS_LOCK:
+        JOBS[job_id] = job
+        _prune_locked()
+        return dict(job)
+
+
 def create_result_job(
     source_type: str,
     layer_name: str,
@@ -28,6 +66,34 @@ def create_result_job(
     summary: Dict[str, Any],
 ) -> Dict[str, Any]:
     job_id = uuid.uuid4().hex
+    return complete_result_job(job_id, source_type, layer_name, columns, rows, summary)
+
+
+def update_job(job_id: str, **updates: Any) -> Dict[str, Any]:
+    with JOBS_LOCK:
+        job = JOBS.setdefault(job_id, {"job_id": job_id, "created_at": time.time()})
+        job.update(updates)
+        if "percent" in updates and updates.get("percent") is not None:
+            try:
+                percent = int(updates["percent"])
+            except (TypeError, ValueError):
+                percent = int(job.get("percent") or 0)
+            max_percent = 99 if str(job.get("status") or "").lower() in {"queued", "running"} else 100
+            job["percent"] = max(0, min(max_percent, percent))
+        _prune_locked()
+        return dict(job)
+
+
+def complete_result_job(
+    job_id: str,
+    source_type: str,
+    layer_name: str,
+    columns: List[str],
+    rows: List[Dict[str, Any]],
+    summary: Dict[str, Any],
+    *,
+    detail: Optional[str] = None,
+) -> Dict[str, Any]:
     job_dir = runtime_dir("raster_intersections") / job_id
     paths = write_exports(job_dir, columns, rows)
     download_urls = {
@@ -36,22 +102,41 @@ def create_result_job(
         if path is not None
     }
 
-    job = {
-        "job_id": job_id,
-        "source_type": source_type,
-        "layer_name": layer_name,
-        "created_at": time.time(),
-        "columns": columns,
-        "preview_rows": rows[:PREVIEW_LIMIT],
-        "summary": summary,
-        "paths": {key: str(path) for key, path in paths.items() if path is not None},
-        "download_urls": download_urls,
-        "map_features": make_map_features(rows, MAP_FEATURE_LIMIT),
-    }
     with JOBS_LOCK:
+        created_at = float((JOBS.get(job_id) or {}).get("created_at") or time.time())
+        job = {
+            "job_id": job_id,
+            "source_type": source_type,
+            "layer_name": layer_name,
+            "created_at": created_at,
+            "completed_at": time.time(),
+            "status": "complete",
+            "phase": "Complete",
+            "percent": 100,
+            "detail": detail or "Intersection complete.",
+            "error": None,
+            "columns": columns,
+            "preview_rows": rows[:PREVIEW_LIMIT],
+            "summary": summary,
+            "paths": {key: str(path) for key, path in paths.items() if path is not None},
+            "download_urls": download_urls,
+            "map_features": make_map_features(rows, MAP_FEATURE_LIMIT),
+        }
         JOBS[job_id] = job
         _prune_locked()
-    return job
+        return dict(job)
+
+
+def fail_job(job_id: str, error: str, *, phase: str = "Error", detail: Optional[str] = None) -> Dict[str, Any]:
+    return update_job(
+        job_id,
+        status="error",
+        phase=phase,
+        percent=100,
+        error=error,
+        detail=detail or error,
+        completed_at=time.time(),
+    )
 
 
 def build_summary(
@@ -270,10 +355,15 @@ def _float_or_none(value: Any) -> Optional[float]:
 
 
 def _prune_locked() -> None:
-    if len(JOBS) <= MAX_RETAINED_JOBS:
+    completed = [
+        job
+        for job in JOBS.values()
+        if str(job.get("status") or "").lower() in {"complete", "error"}
+    ]
+    if len(completed) <= MAX_RETAINED_JOBS:
         return
-    stale = sorted(JOBS.values(), key=lambda job: float(job.get("created_at") or 0))
-    for job in stale[: max(0, len(JOBS) - MAX_RETAINED_JOBS)]:
+    stale = sorted(completed, key=lambda job: float(job.get("completed_at") or job.get("created_at") or 0))
+    for job in stale[: max(0, len(completed) - MAX_RETAINED_JOBS)]:
         JOBS.pop(str(job.get("job_id")), None)
         first_path = next(iter((job.get("paths") or {}).values()), "")
         if first_path:

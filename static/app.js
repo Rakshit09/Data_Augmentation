@@ -264,7 +264,27 @@ const BASEMAPS = {
   }
 };
 const BASEMAP_STORAGE_KEY = "dataAugmentationBasemap";
+const OVERLAY_ORDER_STORAGE_KEY = "dataAugmentationOverlayOrder";
+const OVERLAY_ORDER_IMPORTED_TOP = "imported-top";
+const OVERLAY_ORDER_EXPOSURE_TOP = "exposure-top";
+const EXPOSURE_POINT_LAYER_IDS = [
+  "exposure-points-halo",
+  "exposure-points-circle",
+  "exposure-points-count"
+];
+const IMPORTED_LAYER_IDS = [
+  "user-added-vector-fill",
+  "user-added-vector-outline",
+  "user-added-vector-line",
+  "user-added-vector-point",
+  "user-added-raster-layer"
+];
 const defaultBasemapId = getStoredBasemapId();
+let overlayLayerOrder = getStoredOverlayLayerOrder();
+let overlayOrderButton = null;
+let overlayOrderSelect = null;
+let exposureRefreshButton = null;
+let exposureRefreshBusy = false;
 
 function basemapSourceId(id) {
   return `basemap-source-${id}`;
@@ -280,6 +300,15 @@ function getStoredBasemapId() {
     return stored && BASEMAPS[stored] ? stored : "osm";
   } catch (_error) {
     return "osm";
+  }
+}
+
+function getStoredOverlayLayerOrder() {
+  try {
+    const stored = window.localStorage?.getItem(OVERLAY_ORDER_STORAGE_KEY);
+    return stored === OVERLAY_ORDER_EXPOSURE_TOP ? OVERLAY_ORDER_EXPOSURE_TOP : OVERLAY_ORDER_IMPORTED_TOP;
+  } catch (_error) {
+    return OVERLAY_ORDER_IMPORTED_TOP;
   }
 }
 
@@ -347,6 +376,97 @@ class BasemapControl {
   }
 }
 
+class OverlayOrderControl {
+  onAdd(mapInstance) {
+    this.map = mapInstance;
+    this.container = document.createElement("div");
+    this.container.className = "maplibregl-ctrl maplibregl-ctrl-group layer-order-control";
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "layer-order-control-button";
+    button.innerHTML = '<span aria-hidden="true"></span>';
+
+    const select = document.createElement("select");
+    select.className = "layer-order-control-select";
+    select.setAttribute("aria-label", "Map layer order");
+
+    const importedOption = document.createElement("option");
+    importedOption.value = OVERLAY_ORDER_IMPORTED_TOP;
+    importedOption.textContent = "Imports above exposure";
+    select.appendChild(importedOption);
+
+    const exposureOption = document.createElement("option");
+    exposureOption.value = OVERLAY_ORDER_EXPOSURE_TOP;
+    exposureOption.textContent = "Exposure above imports";
+    select.appendChild(exposureOption);
+
+    select.addEventListener("change", () => setOverlayLayerOrder(select.value));
+
+    button.addEventListener("click", () => {
+      this.container.classList.toggle("open");
+      select.focus();
+    });
+    select.addEventListener("blur", () => {
+      window.setTimeout(() => this.container.classList.remove("open"), 120);
+    });
+
+    this.container.addEventListener("mousedown", (event) => event.stopPropagation());
+    this.container.addEventListener("dblclick", (event) => event.stopPropagation());
+    this.container.append(button, select);
+    this.button = button;
+    this.select = select;
+    overlayOrderButton = button;
+    overlayOrderSelect = select;
+    syncOverlayOrderButton();
+    return this.container;
+  }
+
+  onRemove() {
+    if (overlayOrderButton === this.button) {
+      overlayOrderButton = null;
+    }
+    if (overlayOrderSelect === this.select) {
+      overlayOrderSelect = null;
+    }
+    this.container?.parentNode?.removeChild(this.container);
+    this.map = undefined;
+  }
+}
+
+class ExposureRefreshControl {
+  onAdd(mapInstance) {
+    this.map = mapInstance;
+    this.container = document.createElement("div");
+    this.container.className = "maplibregl-ctrl maplibregl-ctrl-group exposure-refresh-control";
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "exposure-refresh-control-button";
+    button.innerHTML = '<span aria-hidden="true"></span>';
+    button.addEventListener("click", () => {
+      if (!activeExposureMap || exposureRefreshBusy) return;
+      refreshExposurePoints({ manual: true });
+    });
+
+    this.container.addEventListener("mousedown", (event) => event.stopPropagation());
+    this.container.addEventListener("dblclick", (event) => event.stopPropagation());
+    this.container.append(button);
+    this.button = button;
+    exposureRefreshButton = button;
+    syncExposureRefreshControl();
+    return this.container;
+  }
+
+  onRemove() {
+    if (exposureRefreshButton === this.button) {
+      exposureRefreshButton = null;
+    }
+    this.container?.parentNode?.removeChild(this.container);
+    this.map = undefined;
+  }
+}
+
 const map = new maplibregl.Map({
   container: "map",
   style: {
@@ -379,6 +499,11 @@ const map = new maplibregl.Map({
 
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-left");
 map.addControl(new BasemapControl(), "top-left");
+map.addControl(new OverlayOrderControl(), "top-left");
+map.addControl(new ExposureRefreshControl(), "top-left");
+
+window.getOverlayLayerOrder = () => overlayLayerOrder;
+window.applyOverlayLayerOrder = applyOverlayLayerOrder;
 
 lookupTab.addEventListener("click", () => switchMode("lookup"));
 exposureTab.addEventListener("click", () => switchMode("exposure"));
@@ -652,7 +777,68 @@ map.on("load", () => {
       "line-width": 3
     }
   });
+
+  applyOverlayLayerOrder();
 });
+
+function setOverlayLayerOrder(order) {
+  const nextOrder = order === OVERLAY_ORDER_EXPOSURE_TOP ? OVERLAY_ORDER_EXPOSURE_TOP : OVERLAY_ORDER_IMPORTED_TOP;
+  overlayLayerOrder = nextOrder;
+  syncOverlayOrderButton();
+  applyOverlayLayerOrder();
+  try {
+    window.localStorage?.setItem(OVERLAY_ORDER_STORAGE_KEY, nextOrder);
+  } catch (_error) {
+    // Ignore private browsing/storage restrictions.
+  }
+}
+
+function syncOverlayOrderButton() {
+  if (!overlayOrderButton) return;
+  const exposureTop = overlayLayerOrder === OVERLAY_ORDER_EXPOSURE_TOP;
+  if (overlayOrderSelect) {
+    overlayOrderSelect.value = overlayLayerOrder;
+  }
+  overlayOrderButton.classList.toggle("is-exposure-top", exposureTop);
+  overlayOrderButton.setAttribute("aria-pressed", exposureTop ? "true" : "false");
+  overlayOrderButton.setAttribute(
+    "aria-label",
+    exposureTop
+      ? "Exposure dots are above imported layers. Click to choose a different layer order."
+      : "Imported layers are above exposure dots. Click to choose a different layer order."
+  );
+  overlayOrderButton.setAttribute(
+    "title",
+    exposureTop
+      ? "Layer order: exposure above imports"
+      : "Layer order: imports above exposure"
+  );
+}
+
+function applyOverlayLayerOrder() {
+  if (typeof map === "undefined" || !map.isStyleLoaded()) return;
+
+  const exposureLayers = EXPOSURE_POINT_LAYER_IDS.filter((layerId) => map.getLayer(layerId));
+  const importedLayers = IMPORTED_LAYER_IDS.filter((layerId) => map.getLayer(layerId));
+  if (!exposureLayers.length || !importedLayers.length) return;
+
+  if (overlayLayerOrder === OVERLAY_ORDER_EXPOSURE_TOP) {
+    const anchorLayerId = exposureLayers[0];
+    for (const layerId of importedLayers) {
+      if (layerId !== anchorLayerId && map.getLayer(layerId) && map.getLayer(anchorLayerId)) {
+        map.moveLayer(layerId, anchorLayerId);
+      }
+    }
+    return;
+  }
+
+  const anchorLayerId = importedLayers[0];
+  for (const layerId of exposureLayers) {
+    if (layerId !== anchorLayerId && map.getLayer(layerId) && map.getLayer(anchorLayerId)) {
+      map.moveLayer(layerId, anchorLayerId);
+    }
+  }
+}
 
 map.on("moveend", () => {
   if (activeViewFilter) {
@@ -1405,6 +1591,7 @@ async function activateExposureMap() {
       extent: payload.extent
     };
     exposureMapRequestId += 1;
+    syncExposureRefreshControl();
 
     updateExposureMapPanel({
       visible_count: 0,
@@ -1468,7 +1655,7 @@ function requestExposurePointRefresh() {
   refreshExposurePoints({ silent: true });
 }
 
-async function refreshExposurePoints({ silent = false } = {}) {
+async function refreshExposurePoints({ silent = false, manual = false } = {}) {
   if (!activeExposureMap || !map.isStyleLoaded()) return;
 
   const requestId = ++exposureMapRequestId;
@@ -1495,6 +1682,13 @@ async function refreshExposurePoints({ silent = false } = {}) {
   }
   const controller = new AbortController();
   exposureMapFetchController = controller;
+  if (manual) {
+    setExposureMapRefreshState(true);
+    updateExposureMapPanel({
+      ...activeExposureMap,
+      mode: "loading"
+    });
+  }
   if (!silent) {
     statusEl.textContent = "Loading points";
   }
@@ -1554,6 +1748,9 @@ async function refreshExposurePoints({ silent = false } = {}) {
     if (exposureMapFetchController === controller) {
       exposureMapFetchController = null;
     }
+    if (manual) {
+      setExposureMapRefreshState(false);
+    }
   }
 }
 
@@ -1596,10 +1793,43 @@ function clearActiveExposureMap({ keepControls = false } = {}) {
   exposureMapPanel?.classList.add("hidden");
   exposureMapPanel?.classList.remove("error");
   if (exposureMapStats) exposureMapStats.textContent = "";
+  setExposureMapRefreshState(false);
   if (!keepControls) setExposureMapMessage("");
   if (statusEl.textContent === "Loading points" || statusEl.textContent === "Preparing map") {
     statusEl.textContent = "Ready";
   }
+}
+
+function setExposureMapRefreshState(isRefreshing) {
+  exposureRefreshBusy = Boolean(isRefreshing);
+  syncExposureRefreshControl();
+}
+
+function syncExposureRefreshControl() {
+  if (!exposureRefreshButton) return;
+
+  const hasExposureMap = Boolean(activeExposureMap);
+  const isDisabled = !hasExposureMap || exposureRefreshBusy;
+  exposureRefreshButton.disabled = isDisabled;
+  exposureRefreshButton.classList.toggle("is-active", hasExposureMap);
+  exposureRefreshButton.classList.toggle("is-busy", exposureRefreshBusy);
+  exposureRefreshButton.setAttribute("aria-disabled", isDisabled ? "true" : "false");
+  exposureRefreshButton.setAttribute(
+    "aria-label",
+    exposureRefreshBusy
+      ? "Refreshing exposure map points."
+      : hasExposureMap
+      ? "Refresh exposure map points."
+      : "Refresh exposure map points. Load an exposure map first."
+  );
+  exposureRefreshButton.setAttribute(
+    "title",
+    exposureRefreshBusy
+      ? "Refreshing exposure map points"
+      : hasExposureMap
+      ? "Refresh exposure map points"
+      : "Load an exposure map first"
+  );
 }
 
 function setExposureMapMessage(message, type = "") {

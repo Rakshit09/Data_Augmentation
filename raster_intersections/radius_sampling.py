@@ -1,6 +1,6 @@
 import math
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -10,6 +10,7 @@ from .utils import safe_json_value, threshold_matches
 DEFAULT_RADIUS_AGGREGATION = "mean"
 SUPPORTED_RADIUS_AGGREGATIONS = {"mean", "max", "min"}
 DEFAULT_RADIUS_CHUNK_SIZE = 1000
+ProgressCallback = Optional[Callable[[str, int, Optional[str]], None]]
 
 
 def sample_candidates_with_radius(
@@ -21,6 +22,7 @@ def sample_candidates_with_radius(
     radius_m: float,
     aggregation: str = DEFAULT_RADIUS_AGGREGATION,
     chunk_size: int = DEFAULT_RADIUS_CHUNK_SIZE,
+    progress_callback: ProgressCallback = None,
 ) -> List[Dict[str, Any]]:
     values = raw_radius_sample_values(
         raster_path=raster_path,
@@ -29,6 +31,7 @@ def sample_candidates_with_radius(
         radius_m=radius_m,
         aggregation=aggregation,
         chunk_size=chunk_size,
+        progress_callback=progress_callback,
     )
 
     rows: List[Dict[str, Any]] = []
@@ -46,6 +49,7 @@ def raw_radius_sample_values(
     radius_m: float,
     aggregation: str = DEFAULT_RADIUS_AGGREGATION,
     chunk_size: int = DEFAULT_RADIUS_CHUNK_SIZE,
+    progress_callback: ProgressCallback = None,
 ) -> List[Optional[float]]:
     if not candidates:
         return []
@@ -74,8 +78,11 @@ def raw_radius_sample_values(
         radius_context = _build_radius_context(dataset_crs)
         nodata = dataset.nodatavals[band_index - 1] if dataset.nodatavals else metadata.get("nodata")
 
-        for start in range(0, len(candidates), max(1, int(chunk_size or DEFAULT_RADIUS_CHUNK_SIZE))):
-            chunk = candidates[start:start + max(1, int(chunk_size or DEFAULT_RADIUS_CHUNK_SIZE))]
+        step = max(1, int(chunk_size or DEFAULT_RADIUS_CHUNK_SIZE))
+        total = len(candidates)
+        for start in range(0, len(candidates), step):
+            end = min(start + step, total)
+            chunk = candidates[start:end]
             lon_lat = [(float(row["lon"]), float(row["lat"])) for row in chunk]
             if transformer:
                 xs, ys = transformer.transform(
@@ -99,6 +106,13 @@ def raw_radius_sample_values(
                         radius_context=radius_context,
                     )
                 )
+
+            _emit_progress(
+                progress_callback,
+                phase="Sampling raster values",
+                percent=int(round(end * 100 / max(total, 1))),
+                detail=f"Processed {end:,} of {total:,} candidate locations.",
+            )
 
     return results
 
@@ -284,3 +298,15 @@ def _sampled_row(candidate: Dict[str, Any], value: float) -> Dict[str, Any]:
     row["raster_sample_lat"] = safe_json_value(candidate.get("lat"))
     row["raster_value"] = value
     return row
+
+
+def _emit_progress(
+    progress_callback: ProgressCallback,
+    *,
+    phase: str,
+    percent: int,
+    detail: Optional[str] = None,
+) -> None:
+    if progress_callback is None:
+        return
+    progress_callback(phase, max(0, min(100, int(percent))), detail)

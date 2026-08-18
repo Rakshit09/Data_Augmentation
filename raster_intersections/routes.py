@@ -1,5 +1,6 @@
 import time
 from pathlib import Path
+from threading import Thread
 from typing import Any, Callable, Dict, Optional
 
 import duckdb
@@ -14,7 +15,16 @@ from .duckdb_queries import (
     query_exposure_candidates,
 )
 from .raster_metadata import read_raster_metadata
-from .results import build_summary, build_vector_summary, create_result_job, get_job
+from .results import (
+    build_summary,
+    build_vector_summary,
+    complete_result_job,
+    create_pending_job,
+    create_result_job,
+    fail_job,
+    get_job,
+    update_job,
+)
 from .sampling import sample_candidates, sampling_diagnostics
 from .utils import finite_float, intersect_bounds, normalized_bounds, parse_threshold, safe_json_value, sql_string
 
@@ -32,7 +42,6 @@ def register_raster_intersection_routes(
 ) -> None:
     @app.route("/api/raster-intersections/exposure", methods=["POST"])
     def raster_intersect_exposure():
-        started_at = time.perf_counter()
         try:
             payload = request.get_json(silent=True) or {}
             layer, raster_path, band_index, bounds, threshold, threshold_operator, sample_radius_m, radius_aggregation = _analysis_context(payload)
@@ -48,44 +57,101 @@ def register_raster_intersection_routes(
             upload_path = find_upload(upload_dir, upload_id)
             if upload_path is None:
                 raise ValueError("The uploaded exposure file was not found. Upload it again.")
-
-            cache_path, _metadata = prepare_exposure_map_cache(upload_path, upload_id, lat_col, lon_col)
-            raster_metadata = read_raster_metadata(raster_path, layer, band_index)
-            candidates, candidate_count = query_exposure_candidates(cache_path, bounds, MAX_CANDIDATES)
-            if not candidates:
-                raise ValueError("No exposure points are inside the selected raster/map area.")
-
-            sampled = sample_candidates(
-                raster_path,
-                candidates,
-                raster_metadata,
-                threshold,
-                threshold_operator,
-                sample_radius_m=sample_radius_m,
-                radius_aggregation=radius_aggregation,
+            layer_name = str(layer.get("name") or "Raster")
+            job = create_pending_job(
+                "exposure",
+                layer_name,
+                phase="Queued",
+                percent=1,
+                detail="Waiting for raster sampling worker.",
             )
-            if not sampled:
-                raise ValueError(_empty_sample_message(candidates, raster_path, raster_metadata, threshold, threshold_operator, sample_radius_m, radius_aggregation))
+            job_id = str(job["job_id"])
 
-            columns, rows, source_warning = append_exposure_source_columns(upload_path, sampled)
-            summary = build_summary(
-                rows=rows,
-                source_type="exposure",
-                candidate_count=candidate_count,
-                threshold=threshold,
-                threshold_operator=threshold_operator,
-                si_field=si_field or None,
-                elapsed_seconds=time.perf_counter() - started_at,
-                raster_band=band_index,
-                sample_radius_m=sample_radius_m,
-                sample_radius_aggregation=radius_aggregation,
-                bounds=bounds,
-            )
-            if source_warning:
-                summary["warning"] = source_warning
+            def run_job() -> None:
+                started_at = time.perf_counter()
+                sampling_phase = "Sampling depth values" if sample_radius_m is not None else "Sampling raster values"
+                try:
+                    update_job(
+                        job_id,
+                        status="running",
+                        phase="Preparing raster analysis",
+                        percent=5,
+                        detail="Loading raster metadata and exposure inputs.",
+                    )
+                    cache_path, _metadata = prepare_exposure_map_cache(upload_path, upload_id, lat_col, lon_col)
+                    raster_metadata = read_raster_metadata(raster_path, layer, band_index)
 
-            job = create_result_job("exposure", str(layer.get("name") or "Raster"), columns, rows, summary)
-            return jsonify(_job_payload(job))
+                    update_job(
+                        job_id,
+                        status="running",
+                        phase="Loading candidate locations",
+                        percent=18,
+                        detail="Selecting exposure points inside the analysis area.",
+                    )
+                    candidates, candidate_count = query_exposure_candidates(cache_path, bounds, MAX_CANDIDATES)
+                    if not candidates:
+                        raise ValueError("No exposure points are inside the selected raster/map area.")
+
+                    update_job(
+                        job_id,
+                        status="running",
+                        phase=sampling_phase,
+                        percent=35,
+                        detail=f"Sampling {len(candidates):,} candidate locations.",
+                    )
+                    sampled = sample_candidates(
+                        raster_path,
+                        candidates,
+                        raster_metadata,
+                        threshold,
+                        threshold_operator,
+                        sample_radius_m=sample_radius_m,
+                        radius_aggregation=radius_aggregation,
+                        progress_callback=_scaled_sampling_progress(job_id, sampling_phase, 35, 90),
+                    )
+                    if not sampled:
+                        raise ValueError(_empty_sample_message(candidates, raster_path, raster_metadata, threshold, threshold_operator, sample_radius_m, radius_aggregation))
+
+                    update_job(
+                        job_id,
+                        status="running",
+                        phase="Preparing results",
+                        percent=93,
+                        detail="Building preview, summary, and downloads.",
+                    )
+                    columns, rows, source_warning = append_exposure_source_columns(upload_path, sampled)
+                    summary = build_summary(
+                        rows=rows,
+                        source_type="exposure",
+                        candidate_count=candidate_count,
+                        threshold=threshold,
+                        threshold_operator=threshold_operator,
+                        si_field=si_field or None,
+                        elapsed_seconds=time.perf_counter() - started_at,
+                        raster_band=band_index,
+                        sample_radius_m=sample_radius_m,
+                        sample_radius_aggregation=radius_aggregation,
+                        bounds=bounds,
+                    )
+                    if source_warning:
+                        summary["warning"] = source_warning
+
+                    complete_result_job(
+                        job_id,
+                        "exposure",
+                        layer_name,
+                        columns,
+                        rows,
+                        summary,
+                        detail="Raster intersection complete.",
+                    )
+                except ValueError as exc:
+                    fail_job(job_id, str(exc))
+                except Exception as exc:
+                    fail_job(job_id, f"Could not intersect exposure with raster: {exc}")
+
+            Thread(target=run_job, daemon=True).start()
+            return jsonify({"ok": True, "job_id": job_id, "status": "queued"}), 202
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
         except Exception as exc:
@@ -93,7 +159,6 @@ def register_raster_intersection_routes(
 
     @app.route("/api/raster-intersections/database", methods=["POST"])
     def raster_intersect_database():
-        started_at = time.perf_counter()
         try:
             payload = request.get_json(silent=True) or {}
             layer, raster_path, band_index, bounds, threshold, threshold_operator, sample_radius_m, radius_aggregation = _analysis_context(payload)
@@ -102,44 +167,100 @@ def register_raster_intersection_routes(
                 raise ValueError("No building database is selected.")
             if not Path(db_path).is_file():
                 raise ValueError("The selected building database was not found.")
-
-            raster_metadata = read_raster_metadata(raster_path, layer, band_index)
-            con = open_db(db_path, True)
-            try:
-                candidates, candidate_count, _selected_columns = query_database_candidates(con, bounds, MAX_CANDIDATES)
-            finally:
-                con.close()
-
-            if not candidates:
-                raise ValueError("No building centroids are inside the selected raster/map area.")
-
-            rows = sample_candidates(
-                raster_path,
-                candidates,
-                raster_metadata,
-                threshold,
-                threshold_operator,
-                sample_radius_m=sample_radius_m,
-                radius_aggregation=radius_aggregation,
+            layer_name = str(layer.get("name") or "Raster")
+            job = create_pending_job(
+                "database",
+                layer_name,
+                phase="Queued",
+                percent=1,
+                detail="Waiting for raster sampling worker.",
             )
-            if not rows:
-                raise ValueError(_empty_sample_message(candidates, raster_path, raster_metadata, threshold, threshold_operator, sample_radius_m, radius_aggregation))
+            job_id = str(job["job_id"])
 
-            columns = _columns_from_rows(rows)
-            summary = build_summary(
-                rows=rows,
-                source_type="database",
-                candidate_count=candidate_count,
-                threshold=threshold,
-                threshold_operator=threshold_operator,
-                elapsed_seconds=time.perf_counter() - started_at,
-                raster_band=band_index,
-                sample_radius_m=sample_radius_m,
-                sample_radius_aggregation=radius_aggregation,
-                bounds=bounds,
-            )
-            job = create_result_job("database", str(layer.get("name") or "Raster"), columns, rows, summary)
-            return jsonify(_job_payload(job))
+            def run_job() -> None:
+                started_at = time.perf_counter()
+                sampling_phase = "Sampling depth values" if sample_radius_m is not None else "Sampling raster values"
+                try:
+                    update_job(
+                        job_id,
+                        status="running",
+                        phase="Preparing raster analysis",
+                        percent=5,
+                        detail="Loading raster metadata and building candidates.",
+                    )
+                    raster_metadata = read_raster_metadata(raster_path, layer, band_index)
+                    update_job(
+                        job_id,
+                        status="running",
+                        phase="Loading candidate locations",
+                        percent=18,
+                        detail="Selecting building centroids inside the analysis area.",
+                    )
+                    con = open_db(db_path, True)
+                    try:
+                        candidates, candidate_count, _selected_columns = query_database_candidates(con, bounds, MAX_CANDIDATES)
+                    finally:
+                        con.close()
+
+                    if not candidates:
+                        raise ValueError("No building centroids are inside the selected raster/map area.")
+
+                    update_job(
+                        job_id,
+                        status="running",
+                        phase=sampling_phase,
+                        percent=35,
+                        detail=f"Sampling {len(candidates):,} candidate locations.",
+                    )
+                    rows = sample_candidates(
+                        raster_path,
+                        candidates,
+                        raster_metadata,
+                        threshold,
+                        threshold_operator,
+                        sample_radius_m=sample_radius_m,
+                        radius_aggregation=radius_aggregation,
+                        progress_callback=_scaled_sampling_progress(job_id, sampling_phase, 35, 90),
+                    )
+                    if not rows:
+                        raise ValueError(_empty_sample_message(candidates, raster_path, raster_metadata, threshold, threshold_operator, sample_radius_m, radius_aggregation))
+
+                    update_job(
+                        job_id,
+                        status="running",
+                        phase="Preparing results",
+                        percent=93,
+                        detail="Building preview, summary, and downloads.",
+                    )
+                    columns = _columns_from_rows(rows)
+                    summary = build_summary(
+                        rows=rows,
+                        source_type="database",
+                        candidate_count=candidate_count,
+                        threshold=threshold,
+                        threshold_operator=threshold_operator,
+                        elapsed_seconds=time.perf_counter() - started_at,
+                        raster_band=band_index,
+                        sample_radius_m=sample_radius_m,
+                        sample_radius_aggregation=radius_aggregation,
+                        bounds=bounds,
+                    )
+                    complete_result_job(
+                        job_id,
+                        "database",
+                        layer_name,
+                        columns,
+                        rows,
+                        summary,
+                        detail="Raster intersection complete.",
+                    )
+                except ValueError as exc:
+                    fail_job(job_id, str(exc))
+                except Exception as exc:
+                    fail_job(job_id, f"Could not intersect database with raster: {exc}")
+
+            Thread(target=run_job, daemon=True).start()
+            return jsonify({"ok": True, "job_id": job_id, "status": "queued"}), 202
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
         except Exception as exc:
@@ -250,6 +371,13 @@ def register_raster_intersection_routes(
         if job is None:
             return jsonify({"ok": False, "error": "Intersection job was not found."}), 404
         return jsonify({"ok": True, "job_id": job_id, "summary": job.get("summary", {})})
+
+    @app.route("/api/raster-intersections/progress/<job_id>")
+    def raster_intersection_progress(job_id: str):
+        job = get_job(job_id)
+        if job is None:
+            return jsonify({"ok": False, "error": "Intersection job was not found."}), 404
+        return jsonify(_job_payload(job))
 
     @app.route("/api/raster-intersections/<job_id>/download.<extension>")
     def raster_intersection_download(job_id: str, extension: str):
@@ -424,13 +552,39 @@ def _empty_sample_message(
 
 
 def _job_payload(job: Dict[str, Any]) -> Dict[str, Any]:
-    return {
+    payload = {
         "ok": True,
         "job_id": job["job_id"],
+        "status": job.get("status", "complete"),
+        "phase": job.get("phase", "Complete"),
+        "percent": job.get("percent", 100),
+        "detail": job.get("detail"),
+        "error": job.get("error"),
         "source_type": job["source_type"],
-        "summary": job["summary"],
-        "columns": job["columns"],
-        "rows": job["preview_rows"],
-        "download_urls": job["download_urls"],
-        "map_features": job["map_features"],
     }
+    if str(job.get("status") or "").lower() == "complete":
+        payload.update({
+            "summary": job["summary"],
+            "columns": job["columns"],
+            "rows": job["preview_rows"],
+            "download_urls": job["download_urls"],
+            "map_features": job["map_features"],
+        })
+    return payload
+
+
+def _scaled_sampling_progress(job_id: str, phase: str, start_percent: int, end_percent: int):
+    span = max(0, end_percent - start_percent)
+
+    def report(_sampling_phase: str, percent: int, detail: Optional[str] = None) -> None:
+        bounded = max(0, min(100, int(percent)))
+        overall = start_percent + int(round(span * bounded / 100.0))
+        update_job(
+            job_id,
+            status="running",
+            phase=phase,
+            percent=min(end_percent, overall),
+            detail=detail,
+        )
+
+    return report
