@@ -1953,7 +1953,7 @@ function resetEtlUi() {
   delete etlOutputParquet.dataset.userEdited;
   delete etlLookupDbFile.dataset.userEdited;
   resetBoundaryFileSelection();
-  updateEtlOutputPlaceholders();
+  updateEtlOutputDefaults();
   setExpandedEtlWorkflow(null);
   runEtlBtn.disabled = false;
   etlStatusEl.classList.add("hidden");
@@ -2365,10 +2365,10 @@ async function loadEtlCountries() {
       throw new Error(payload.error || "Could not load country catalog");
     }
 
-    const options = ['<option value="">Use uploaded boundary or default Germany boundary</option>'];
+    const options = ['<option value="" data-code="">Use uploaded boundary or default Germany boundary</option>'];
     for (const country of payload.countries || []) {
       options.push(
-        `<option value="${escapeHtml(country.key || "")}">${escapeHtml(country.label || country.name || "")}</option>`
+        `<option value="${escapeHtml(country.key || "")}" data-code="${escapeHtml(country.code || "")}">${escapeHtml(country.label || country.name || "")}</option>`
       );
     }
 
@@ -2386,6 +2386,7 @@ etlCountrySelect?.addEventListener("change", () => {
     dismissCriticalNote();
     resetBoundaryFileSelection();
   }
+  updateEtlOutputDefaults();
 });
 
 loadEtlCountries();
@@ -2404,24 +2405,37 @@ boundaryFile.addEventListener("change", () => {
   } else {
     boundaryFileName.classList.add("hidden");
   }
+  updateEtlOutputDefaults();
 });
 
-function updateEtlOutputPlaceholders() {
+function getEtlSuffix() {
+  const selectedOption = etlCountrySelect?.selectedOptions?.[0];
+  const countryCode = selectedOption?.dataset?.code;
+  if (countryCode) return countryCode;
+  if (boundaryFile.files.length) {
+    const stem = boundaryFile.files[0].name.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9]/g, "");
+    return (stem.slice(0, 3) || "CUS").toUpperCase();
+  }
+  return "";
+}
+
+function updateEtlOutputDefaults() {
   const dir = etlOutputDir.value.trim() || "./etl_output";
+  const suffix = getEtlSuffix();
+  const tag = suffix ? `_${suffix}` : "";
   if (!etlOutputParquet.dataset.userEdited) {
-    etlOutputParquet.placeholder = `${dir}/buildings_cleaned.parquet`;
+    etlOutputParquet.value = `${dir}/buildings_cleaned${tag}.parquet`;
   }
   if (!etlLookupDbFile.dataset.userEdited) {
-    etlLookupDbFile.placeholder = `${dir}/building_lookup.duckdb`;
+    etlLookupDbFile.value = `${dir}/building_lookup${tag}.duckdb`;
   }
 }
 
-// Auto-fill Parquet / DuckDB paths when output dir changes
-etlOutputDir.addEventListener("input", updateEtlOutputPlaceholders);
+etlOutputDir.addEventListener("input", () => { updateEtlOutputDefaults(); });
 
 etlOutputParquet.addEventListener("input", () => { etlOutputParquet.dataset.userEdited = "1"; });
 etlLookupDbFile.addEventListener("input", () => { etlLookupDbFile.dataset.userEdited = "1"; });
-updateEtlOutputPlaceholders();
+updateEtlOutputDefaults();
 
 browseOutputDir.addEventListener("click", async () => {
   dismissCriticalNote();
@@ -2442,7 +2456,7 @@ browseOutputDir.addEventListener("click", async () => {
     }
 
     etlOutputDir.value = payload.path || "";
-    updateEtlOutputPlaceholders();
+    updateEtlOutputDefaults();
     showEtlStatus("info", "Output folder selected.");
   } catch (error) {
     showEtlStatus("error", error.message);
@@ -2466,8 +2480,8 @@ runEtlBtn.addEventListener("click", async () => {
 
   const dir = etlOutputDir.value.trim() || "./etl_output";
   formData.append("output_dir", dir);
-  formData.append("output_parquet", etlOutputParquet.value.trim() || `${dir}/buildings_cleaned.parquet`);
-  formData.append("lookup_db_file", etlLookupDbFile.value.trim() || `${dir}/building_lookup.duckdb`);
+  formData.append("output_parquet", etlOutputParquet.value.trim());
+  formData.append("lookup_db_file", etlLookupDbFile.value.trim());
   const requestId = ++etlProgressRequestId;
   try {
     const response = await fetch("api/etl/create-database", {
