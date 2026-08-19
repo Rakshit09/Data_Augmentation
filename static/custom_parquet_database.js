@@ -22,6 +22,7 @@
   };
   const optionalMappings = new Set(["height", "year_built", "construction", "roof_type", "basement"]);
   let inspectedColumns = [];
+  let progressRequestId = 0;
 
   addFieldButton.addEventListener("click", () => {
     if (extraFieldCount() >= maxExtraFields) return;
@@ -80,6 +81,7 @@
   });
 
   runButton.addEventListener("click", async () => {
+    const requestId = ++progressRequestId;
     runButton.disabled = true;
     statusEl.textContent = "Creating database";
     showStatus("info", "Submitting Parquet lookup database job...");
@@ -99,8 +101,10 @@
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Could not create database");
-      pollProgress(payload.job_id);
+      if (requestId !== progressRequestId) return;
+      pollProgress(payload.job_id, requestId);
     } catch (error) {
+      if (requestId !== progressRequestId) return;
       statusEl.textContent = "Error";
       showStatus("error", error.message);
       runButton.disabled = false;
@@ -179,10 +183,11 @@
     addFieldButton.disabled = !inspectedColumns.length || extraFieldCount() >= maxExtraFields;
   }
 
-  async function pollProgress(jobId) {
+  async function pollProgress(jobId, requestId) {
     try {
       const response = await fetch(`api/custom-parquet/progress/${jobId}`);
       const payload = await response.json();
+      if (requestId !== progressRequestId) return;
       if (!response.ok) throw new Error(payload.error || "Could not read database progress");
 
       const percent = Math.max(0, Math.min(100, Number(payload.percent || 0)));
@@ -206,8 +211,9 @@
       }
 
       if (payload.status === "error") throw new Error(payload.error || "Database creation failed");
-      window.setTimeout(() => pollProgress(jobId), 1500);
+      window.setTimeout(() => pollProgress(jobId, requestId), 1500);
     } catch (error) {
+      if (requestId !== progressRequestId) return;
       statusEl.textContent = "Error";
       showStatus("error", error.message);
       runButton.disabled = false;
@@ -221,5 +227,27 @@
     customStatus.innerHTML = html;
   }
 
+  function resetCustomParquetUi() {
+    progressRequestId += 1;
+    inspectedColumns = [];
+    document.getElementById("customParquetForm")?.reset();
+    mappingsPanel.classList.add("hidden");
+    Object.values(selectors).forEach((select) => {
+      select.innerHTML = "";
+    });
+    renderExtraFieldRows();
+    updateAddFieldButton();
+    browseButton.disabled = false;
+    inspectButton.disabled = false;
+    runButton.disabled = false;
+    customStatus.classList.add("hidden");
+    customStatus.classList.remove("etl-status--error", "etl-status--success");
+    customStatus.innerHTML = "";
+  }
+
   updateAddFieldButton();
+
+  window.customParquetUi = {
+    reset: resetCustomParquetUi
+  };
 })();

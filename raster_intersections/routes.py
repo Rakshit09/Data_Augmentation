@@ -16,6 +16,7 @@ from .duckdb_queries import (
 )
 from .raster_metadata import read_raster_metadata
 from .results import (
+    PREVIEW_LIMIT,
     build_summary,
     build_vector_summary,
     complete_result_job,
@@ -358,7 +359,7 @@ def register_raster_intersection_routes(
         if job is None:
             return jsonify({"ok": False, "error": "Intersection job was not found."}), 404
         try:
-            limit = max(1, min(2000, int(request.args.get("limit", 500))))
+            limit = max(1, min(2000, int(request.args.get("limit", PREVIEW_LIMIT))))
             offset = max(0, int(request.args.get("offset", 0)))
         except ValueError:
             return jsonify({"ok": False, "error": "Preview limit and offset must be numbers."}), 400

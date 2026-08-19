@@ -5,6 +5,7 @@ import argparse
 import codecs
 import csv
 import hashlib
+import ssl
 from genericpath import exists
 from html import escape
 import json
@@ -293,6 +294,23 @@ def json_safe(value: Any) -> Any:
     return value
 
 
+def _build_ssl_context() -> ssl.SSLContext:
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    # Load Windows certs individually to skip malformed entries
+    for store_name in ("CA", "ROOT"):
+        try:
+            certs = ssl.enum_certificates(store_name)
+        except PermissionError:
+            continue
+        for cert_bytes, encoding, _trust in certs:
+            if encoding == "x509_asn":
+                try:
+                    ctx.load_verify_locations(cadata=ssl.DER_cert_to_PEM_cert(cert_bytes))
+                except ssl.SSLError:
+                    pass
+    return ctx
+
+
 def fetch_geocoder_json(url: str, user_agent: str) -> Any:
     req = urllib.request.Request(
         url,
@@ -301,7 +319,8 @@ def fetch_geocoder_json(url: str, user_agent: str) -> Any:
             "Accept": "application/json",
         },
     )
-    with urllib.request.urlopen(req, timeout=10) as response:
+    ctx = _build_ssl_context()
+    with urllib.request.urlopen(req, timeout=10, context=ctx) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -1504,6 +1523,38 @@ def create_app(
             MAX_RETAINED_EXPOSURE_RESULTS,
         )
 
+    def remove_exposure_upload(upload_id: str) -> bool:
+        normalized_upload_id = str(upload_id or "").strip()
+        if not normalized_upload_id:
+            return False
+
+        with jobs_lock:
+            has_running_job = any(
+                str(job.get("upload_id") or "") == normalized_upload_id
+                and job.get("status") in {"queued", "running"}
+                for job in jobs.values()
+            )
+        if has_running_job:
+            raise RuntimeError("This exposure upload is still being used by a running enrichment job.")
+
+        removed = False
+        upload_dir = Path(app.config["UPLOAD_DIR"])
+        for path in upload_dir.glob(f"{normalized_upload_id}_*"):
+            if path.is_file() and path.suffix.lower() in SUPPORTED_EXPOSURE_UPLOAD_EXTENSIONS:
+                path.unlink(missing_ok=True)
+                removed = True
+
+        close_cached_exposure_map_connection()
+        for cache_path in local_runtime_dir("exposure_map_cache").glob(f"{normalized_upload_id}_*.duckdb"):
+            unlink_duckdb_file(cache_path)
+            removed = True
+
+        if latest_upload_id[0] == normalized_upload_id:
+            latest_upload_id[0] = None
+
+        cleanup_exposure_runtime()
+        return removed
+
     @app.route("/")
     def index():
         return render_template(
@@ -1904,6 +1955,17 @@ def create_app(
             "columns": columns,
             "rows": rows,
         })
+
+    @app.route("/api/exposure/upload/<upload_id>", methods=["DELETE"])
+    def delete_exposure_upload(upload_id: str):
+        try:
+            removed = remove_exposure_upload(upload_id)
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 409
+
+        if not removed:
+            return jsonify({"error": "Uploaded exposure file was not found."}), 404
+        return ("", 204)
 
     @app.route("/api/exposure/map-points")
     def exposure_map_points():

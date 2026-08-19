@@ -379,6 +379,23 @@ input[type=number] {
   gap: 8px;
 }
 
+.panel-actions button {
+  white-space: nowrap;
+}
+
+.panel-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  height: auto;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: none;
+}
+
 .eyebrow {
   margin: 0 0 4px;
   color: var(--muted);
@@ -697,6 +714,7 @@ h2 {
 .data-source button,
 .upload-form button,
 .mapping button,
+.panel-actions button,
 .preview-map-actions button,
 .download {
   border: 2px solid var(--button-primary);
@@ -716,6 +734,7 @@ h2 {
 .data-source button,
 .upload-form button,
 .mapping button,
+.panel-actions button,
 .preview-map-actions button {
   height: 44px;
   padding: 0 16px;
@@ -738,6 +757,7 @@ h2 {
 .data-source button:hover,
 .upload-form button:hover,
 .mapping button:hover,
+.panel-actions button:hover,
 .preview-map-actions button:hover,
 .download:hover {
   border-color: var(--button-primary-hover);
@@ -749,6 +769,7 @@ h2 {
 
 .mapping button:disabled,
 .data-source button:disabled,
+.panel-actions button:disabled,
 .preview-map-actions button:disabled {
   border-color: var(--button-disabled);
   background: var(--button-disabled);
@@ -760,6 +781,7 @@ h2 {
 .data-source-header button,
 .data-source .path-picker-row button,
 .etl-fieldset .path-picker-row button,
+.secondary-action-button,
 .etl-tab-button {
   border-color: var(--brand);
   background: var(--button-secondary);
@@ -770,11 +792,34 @@ h2 {
 .data-source-header button:hover,
 .data-source .path-picker-row button:hover,
 .etl-fieldset .path-picker-row button:hover,
+.secondary-action-button:hover,
 .etl-tab-button:hover {
   border-color: var(--button-primary-hover);
   background: var(--button-secondary-hover);
   color: var(--button-text);
   transform: none;
+  box-shadow: none;
+}
+
+.panel-actions .panel-action-button {
+  min-height: 30px;
+  height: auto;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: none;
+}
+
+.panel-actions .panel-action-button:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.secondary-action-button:disabled {
+  border-color: var(--button-disabled);
+  background: var(--button-disabled);
+  color: #fff;
   box-shadow: none;
 }
 
@@ -1237,6 +1282,26 @@ button:focus-visible,
   color: var(--muted);
   font-size: 13px;
   line-height: 1.4;
+}
+
+.upload-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: -4px;
+}
+
+.upload-inline-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  height: auto;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: none;
 }
 
 .empty {

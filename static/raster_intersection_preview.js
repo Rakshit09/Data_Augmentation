@@ -1,12 +1,25 @@
 (function () {
   function render(payload) {
     if (typeof switchMode === "function") switchMode("exposure");
+    const summary = payload.summary || {};
+    const columns = Array.isArray(payload.columns) ? payload.columns : [];
+    const rows = Array.isArray(payload.rows) ? payload.rows : [];
     if (typeof renderPreview === "function") {
-      renderPreview(payload.columns || [], payload.rows || []);
+      renderPreview(columns, formatPreviewRows(rows, summary));
+    }
+    if (typeof setUploadSummary === "function") {
+      setUploadSummary(resultSummaryText(rows.length, summary));
     }
     const panel = ensurePanel();
     panel.classList.remove("hidden");
     panel.innerHTML = resultHtml(payload);
+  }
+
+  function clear() {
+    const panel = document.getElementById("rasterIntersectionResultPanel");
+    if (!panel) return;
+    panel.classList.add("hidden");
+    panel.innerHTML = "";
   }
 
   function ensurePanel() {
@@ -36,9 +49,9 @@
       </div>
       <div class="raster-summary-grid">
         ${metric("Matched", formatInteger(summary.matched_count))}
-        ${metric(valueLabel(summary, "min"), formatNumber(summary.raster_value_min))}
-        ${metric(valueLabel(summary, "mean"), formatNumber(summary.raster_value_mean))}
-        ${metric(valueLabel(summary, "max"), formatNumber(summary.raster_value_max))}
+        ${metric(valueLabel(summary, "min"), formatSampleValue(summary.raster_value_min))}
+        ${metric(valueLabel(summary, "mean"), formatSampleValue(summary.raster_value_mean))}
+        ${metric(valueLabel(summary, "max"), formatSampleValue(summary.raster_value_max))}
         ${metric("Sampling", samplingLabel(summary))}
         ${metric("Threshold matches", summary.count_matching_threshold == null ? "n/a" : formatInteger(summary.count_matching_threshold))}
         ${metric("Total SI", summary.total_si == null ? "n/a" : formatNumber(summary.total_si))}
@@ -100,6 +113,29 @@
     return "Mean";
   }
 
+  function formatPreviewRows(rows, summary) {
+    if (summary.source_type === "vector_database" || summary.source_type === "vector_exposure") {
+      return rows;
+    }
+    return rows.map((row) => {
+      if (!row || typeof row !== "object" || !("raster_value" in row)) {
+        return row;
+      }
+      return {
+        ...row,
+        raster_value: formatSampleValue(row.raster_value)
+      };
+    });
+  }
+
+  function resultSummaryText(rowCount, summary) {
+    const matchedCount = Number(summary.matched_count);
+    if (Number.isFinite(matchedCount) && matchedCount > rowCount) {
+      return `Showing ${formatInteger(rowCount)} of ${formatInteger(matchedCount)} result rows.`;
+    }
+    return `Showing ${formatInteger(rowCount)} result rows.`;
+  }
+
   function valueLabel(summary, statistic) {
     const prefix = summary.source_type === "vector_database" || summary.source_type === "vector_exposure"
       ? "Value"
@@ -117,6 +153,12 @@
     return number.toLocaleString(undefined, { maximumFractionDigits: 4 });
   }
 
+  function formatSampleValue(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return "n/a";
+    return number.toLocaleString(undefined, { maximumSignificantDigits: 4 });
+  }
+
   function escapeHtml(value) {
     return String(value ?? "")
       .replaceAll("&", "&amp;")
@@ -126,5 +168,5 @@
       .replaceAll("'", "&#039;");
   }
 
-  window.rasterIntersectionPreview = { render };
+  window.rasterIntersectionPreview = { render, clear };
 })();

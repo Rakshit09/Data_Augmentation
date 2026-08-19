@@ -56,17 +56,18 @@
 
     <aside class="panel" aria-live="polite">
       <nav class="tabs" aria-label="Application mode">
-        <button id="lookupTab" class="tab active" type="button">Building Lookup</button>
-        <button id="exposureTab" class="tab" type="button">Enrich Exposure</button>
-        <button id="etlTab" class="tab" type="button">Create OBM Database</button>
+          <button id="lookupTab" class="tab active" type="button">Spatial Explorer</button>
+          <button id="exposureTab" class="tab" type="button">Exposure Analytics</button>
+          <button id="etlTab" class="tab" type="button">Create Database</button>
       </nav>
 
       <header class="panel-header">
         <div>
           <p id="modeEyebrow" class="eyebrow">Germany</p>
-          <h1 id="modeTitle">Building Lookup</h1>
+            <h1 id="modeTitle">Spatial Explorer</h1>
         </div>
         <div class="panel-actions">
+          <button id="clearAllState" class="secondary-action-button panel-action-button" type="button">Clear All</button>
           <span id="status" class="status">Ready</span>
           <a id="openReadmeHelp" class="header-help-button" href="/help/readme" target="_blank" rel="noopener">Help</a>
         </div>
@@ -80,7 +81,7 @@
         <label>
           <span class="field-label-row">
             <span>Lookup database</span>
-            <span class="field-tip" tabindex="0" data-tooltip="Path to the lookup database used by Building Lookup and Enrich Exposure. Select a .duckdb file that already contains the buildings table.">i</span>
+            <span class="field-tip" tabindex="0" data-tooltip="Path to the lookup database used by Spatial Explorer and Exposure Analytics. Select a .duckdb file that already contains the buildings table.">i</span>
           </span>
           <span class="path-picker-row">
             <input id="activeDbPath" type="text" list="dbFileOptions" placeholder="etl_output/building_lookup.duckdb">
@@ -301,6 +302,9 @@
               <span id="csvDropzoneSubtitle" class="dropzone-subtitle">CSV or Excel (.xlsx) with latitude, longitude, and other columns</span>
             </label>
             <input id="csvFile" class="file-input" type="file" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" tabindex="-1" aria-hidden="true" onchange="const name=this.files&&this.files[0]?this.files[0].name:''; const titleEl=document.getElementById('csvDropzoneTitle'); const subtitleEl=document.getElementById('csvDropzoneSubtitle'); if(titleEl){titleEl.textContent=name||'Choose Exposure File';} if(subtitleEl){subtitleEl.textContent=name?'Click to choose a different file':'CSV or Excel (.xlsx) with latitude, longitude, and other columns';}">
+            <div id="exposureUploadActions" class="upload-form-actions hidden">
+              <button id="clearExposureUpload" class="secondary-action-button upload-inline-action" type="button">Clear upload</button>
+            </div>
           </form>
 
           <div id="mappingControls" class="mapping hidden">
@@ -368,7 +372,7 @@
             <button id="etlWorkflowToggle" class="etl-workflow-toggle" type="button" aria-expanded="false" aria-controls="etlWorkflowBody">
               <span class="etl-workflow-header">
                 <span class="eyebrow">Workflow 1</span>
-                <span class="etl-workflow-title">Create OBM Database</span>
+                <span class="etl-workflow-title">Create Database</span>
                 <span class="etl-workflow-copy">Download buildings from OpenBuildingMap, clip them to your selected extent, and generate fresh Parquet and DuckDB outputs.</span>
               </span>
             </button>
@@ -424,7 +428,7 @@
                   <label>
                     <span class="field-label-row">
                       <span>DuckDB lookup table</span>
-                      <span class="field-tip" tabindex="0" data-tooltip="Final DuckDB lookup database used by the app for building lookup and exposure enrichment.">i</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Final DuckDB lookup database used by the app for Spatial Explorer and Exposure Analytics.">i</span>
                     </span>
                     <input id="etlLookupDbFile" type="text" placeholder="building_lookup.duckdb">
                   </label>

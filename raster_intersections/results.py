@@ -13,7 +13,7 @@ from .utils import runtime_dir, safe_json_value, threshold_matches
 
 
 MAX_RETAINED_JOBS = 8
-PREVIEW_LIMIT = 500
+PREVIEW_LIMIT = 50
 MAP_FEATURE_LIMIT = 5000
 
 JOBS: Dict[str, Dict[str, Any]] = {}

@@ -84,7 +84,7 @@
   function formatNumber(value) {
     const number = Number(value);
     if (!Number.isFinite(number)) return "n/a";
-    return number.toLocaleString(undefined, { maximumFractionDigits: 4 });
+    return number.toLocaleString(undefined, { maximumSignificantDigits: 4 });
   }
 
   function escapeHtml(value) {

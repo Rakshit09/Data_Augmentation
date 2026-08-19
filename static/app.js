@@ -36,6 +36,7 @@ const uploadForm = document.getElementById("uploadForm");
 const csvFile = document.getElementById("csvFile");
 const csvDropzoneTitle = document.getElementById("csvDropzoneTitle");
 const csvDropzoneSubtitle = document.getElementById("csvDropzoneSubtitle");
+const exposureUploadActions = document.getElementById("exposureUploadActions");
 const mappingControls = document.getElementById("mappingControls");
 const latColumn = document.getElementById("latColumn");
 const lonColumn = document.getElementById("lonColumn");
@@ -56,6 +57,9 @@ const statsPanel = document.getElementById("statsPanel");
 const statsGrid = document.getElementById("statsGrid");
 const criticalNote = document.getElementById("criticalNote");
 const criticalNoteClose = document.getElementById("criticalNoteClose");
+const clearAllStateButton = document.getElementById("clearAllState");
+const clearExposureUpload = document.getElementById("clearExposureUpload");
+const etlForm = document.getElementById("etlForm");
 
 let currentUploadId = null;
 let currentUploadFilename = null;
@@ -70,6 +74,16 @@ let viewFilterFetchController = null;
 let activeExposureMap = null;
 let exposureMapFetchController = null;
 let exposureMapRequestId = 0;
+let exposureUploadRequestId = 0;
+let exposureActivationRequestId = 0;
+let enrichmentProgressRequestId = 0;
+let etlProgressRequestId = 0;
+
+const defaultEmptyStateHtml = emptyEl?.innerHTML || "<p>Select a building footprint on the map.</p>";
+const defaultUploadSummaryText = uploadSummary?.textContent?.trim() || "Upload an exposure to preview";
+const defaultFilterViewMessage = "Choose a column and value to color polygons in the current view.";
+const defaultMatchModeValue = matchMode?.value || "inside_nearest";
+const defaultMaxDistanceValue = maxDistance?.value || "50";
 
 function exposureUploadState() {
   return {
@@ -512,6 +526,9 @@ refreshSources.addEventListener("click", () => {
   dismissCriticalNote();
   loadDataSources();
 });
+clearAllStateButton?.addEventListener("click", () => {
+  void clearAllState();
+});
 applyDataSource.addEventListener("click", () => {
   dismissCriticalNote();
   applySelectedDataSource();
@@ -540,9 +557,9 @@ function switchMode(mode) {
   dataSourcePanel.classList.toggle("hidden", isEtl);
 
   modeEyebrow.textContent = isLookup ? "Germany" : " ";
-  modeTitle.textContent = isLookup ? "Building Lookup"
-    : isExposure ? "Enrich Exposure"
-    : "Create Lookup Database";
+  modeTitle.textContent = isLookup ? "Spatial Explorer"
+    : isExposure ? "Exposure Analytics"
+    : "Create Database";
 
   if (isLookup) {
     window.setTimeout(() => map.resize(), 50);
@@ -1488,14 +1505,20 @@ showExposureOnMap?.addEventListener("click", () => {
   activateExposureMap();
 });
 
+clearExposureUpload?.addEventListener("click", () => {
+  void clearExposureWorkflow();
+});
+
 clearExposureMap?.addEventListener("click", () => {
   clearActiveExposureMap();
 });
 
 async function uploadSelectedCsv() {
+  const requestId = ++exposureUploadRequestId;
   if (!csvFile.files.length) {
     setUploadedCsvName("");
     setUploadSummary("Choose a CSV or Excel (.xlsx) file first.");
+    exposureUploadActions?.classList.add("hidden");
     exposureMapControls?.classList.add("hidden");
     return;
   }
@@ -1505,6 +1528,7 @@ async function uploadSelectedCsv() {
   const formData = new FormData();
   formData.append("file", csvFile.files[0]);
   setUploadedCsvName(csvFile.files[0].name);
+  exposureUploadActions?.classList.remove("hidden");
   clearActiveExposureMap({ keepControls: true });
   setExposureMapMessage("");
   exposureMapControls?.classList.add("hidden");
@@ -1523,6 +1547,7 @@ async function uploadSelectedCsv() {
     if (!response.ok) {
       throw new Error(payload.error || "Upload failed");
     }
+    if (requestId !== exposureUploadRequestId) return;
 
     currentUploadId = payload.upload_id;
     currentUploadFilename = payload.filename;
@@ -1538,6 +1563,7 @@ async function uploadSelectedCsv() {
     renderFileSummary(payload.filename, payload.rows.length);
     statusEl.textContent = "Ready";
   } catch (error) {
+    if (requestId !== exposureUploadRequestId) return;
     statusEl.textContent = "Error";
     currentUploadColumns = [];
     setUploadSummary(error.message);
@@ -1547,6 +1573,7 @@ async function uploadSelectedCsv() {
 }
 
 async function activateExposureMap() {
+  const requestId = ++exposureActivationRequestId;
   if (!currentUploadId) {
     setExposureMapMessage("Upload a file first.", "error");
     return;
@@ -1559,6 +1586,7 @@ async function activateExposureMap() {
     return;
   }
 
+  clearActiveExposureMap({ keepControls: true });
   showExposureOnMap.disabled = true;
   statusEl.textContent = "Preparing map";
   setExposureMapMessage("Preparing map points...");
@@ -1575,6 +1603,7 @@ async function activateExposureMap() {
     if (!response.ok) {
       throw new Error(payload.error || "Could not prepare map points");
     }
+    if (requestId !== exposureActivationRequestId) return;
 
     const validRows = Number(payload.valid_rows || 0);
     if (!validRows || !payload.extent) {
@@ -1608,6 +1637,7 @@ async function activateExposureMap() {
       fitMapToExposureExtent(activeExposureMap.extent);
     }, 80);
   } catch (error) {
+    if (requestId !== exposureActivationRequestId) return;
     clearActiveExposureMap({ keepControls: true });
     statusEl.textContent = "Error";
     setExposureMapMessage(error.message, "error");
@@ -1839,6 +1869,118 @@ function setExposureMapMessage(message, type = "") {
   exposureMapMessage.classList.toggle("success", type === "success");
 }
 
+async function deleteExposureUpload(uploadId) {
+  if (!uploadId) return;
+
+  try {
+    const response = await fetch(`api/exposure/upload/${encodeURIComponent(uploadId)}`, {
+      method: "DELETE",
+      keepalive: true
+    });
+    if (response.ok || response.status === 404 || response.status === 409) {
+      return;
+    }
+  } catch (_error) {
+    // Client-side reset is already complete.
+  }
+}
+
+async function clearExposureWorkflow({ preserveStatus = false } = {}) {
+  const uploadId = currentUploadId;
+
+  exposureUploadRequestId += 1;
+  exposureActivationRequestId += 1;
+  enrichmentProgressRequestId += 1;
+  currentUploadId = null;
+  currentUploadFilename = null;
+  currentUploadColumns = [];
+  publishExposureUploadState();
+
+  clearActiveExposureMap({ keepControls: false });
+  window.rasterIntersectionController?.reset?.();
+  window.rasterIntersectionPreview?.clear?.();
+  window.rasterIntersectionLayers?.clear?.();
+
+  try {
+    uploadForm?.reset();
+  } catch (_error) {
+    try {
+      csvFile.value = "";
+    } catch (_innerError) {
+      // Ignore browsers that do not allow clearing a file input here.
+    }
+  }
+
+  setUploadedCsvName("");
+  setUploadSummary(defaultUploadSummaryText);
+  previewTable.classList.add("hidden");
+  previewTable.innerHTML = "";
+  exposureUploadActions?.classList.add("hidden");
+  mappingControls.classList.add("hidden");
+  exposureMapControls?.classList.add("hidden");
+  statsPanel.classList.add("hidden");
+  statsGrid.innerHTML = "";
+  releaseStatsDownload();
+  downloadLink.classList.add("hidden");
+  downloadLink.removeAttribute("href");
+  downloadLink.removeAttribute("download");
+  latColumn.innerHTML = "";
+  lonColumn.innerHTML = "";
+  matchMode.value = defaultMatchModeValue;
+  maxDistance.value = defaultMaxDistanceValue;
+  runEnrichment.disabled = false;
+  setExposureMapMessage("");
+
+  if (!preserveStatus) {
+    statusEl.textContent = "Ready";
+  }
+
+  await deleteExposureUpload(uploadId);
+}
+
+function resetLookupUi() {
+  clearSelection();
+  emptyEl.innerHTML = defaultEmptyStateHtml;
+  hideSearchResults();
+  searchForm?.reset();
+  clearViewFilter(defaultFilterViewMessage);
+  filterViewColor.value = "#ff6b6b";
+}
+
+function resetEtlUi() {
+  etlProgressRequestId += 1;
+  etlForm?.reset();
+  delete etlOutputParquet.dataset.userEdited;
+  delete etlLookupDbFile.dataset.userEdited;
+  resetBoundaryFileSelection();
+  updateEtlOutputPlaceholders();
+  setExpandedEtlWorkflow(null);
+  runEtlBtn.disabled = false;
+  etlStatusEl.classList.add("hidden");
+  etlStatusEl.classList.remove("etl-status--error", "etl-status--success");
+  etlStatusEl.innerHTML = "";
+  window.customParquetUi?.reset?.();
+}
+
+async function clearAllState() {
+  clearAllStateButton.disabled = true;
+  statusEl.textContent = "Clearing";
+
+  try {
+    dismissCriticalNote();
+    dbPicker.classList.add("hidden");
+    setDataSourceMessage("");
+    resetLookupUi();
+    await clearExposureWorkflow({ preserveStatus: true });
+    window.addedMapLayerController?.reset?.();
+    window.rasterIntersectionController?.reset?.();
+    resetEtlUi();
+    statusEl.textContent = "Ready";
+  } finally {
+    clearAllStateButton.disabled = false;
+  }
+}
+
 runEnrichment.addEventListener("click", async () => {
   dismissCriticalNote();
 
@@ -1853,6 +1995,7 @@ runEnrichment.addEventListener("click", async () => {
   downloadLink.classList.add("hidden");
   statsPanel.classList.add("hidden");
   releaseStatsDownload();
+  const requestId = ++enrichmentProgressRequestId;
 
   try {
     const response = await fetch("api/exposure/enrich", {
@@ -1874,19 +2017,22 @@ runEnrichment.addEventListener("click", async () => {
     if (!response.ok) {
       throw new Error(payload.error || "Enrichment failed");
     }
+    if (requestId !== enrichmentProgressRequestId) return;
 
-    pollEnrichmentProgress(payload.job_id);
+    pollEnrichmentProgress(payload.job_id, requestId);
   } catch (error) {
+    if (requestId !== enrichmentProgressRequestId) return;
     statusEl.textContent = "Error";
     setUploadSummary(error.message);
     runEnrichment.disabled = false;
   }
 });
 
-async function pollEnrichmentProgress(jobId) {
+async function pollEnrichmentProgress(jobId, requestId) {
   try {
     const response = await fetch(`api/exposure/progress/${jobId}`);
     const payload = await response.json();
+    if (requestId !== enrichmentProgressRequestId) return;
 
     if (!response.ok) {
       throw new Error(payload.error || "Could not read progress");
@@ -1910,8 +2056,9 @@ async function pollEnrichmentProgress(jobId) {
       throw new Error(payload.error || "Enrichment failed");
     }
 
-    window.setTimeout(() => pollEnrichmentProgress(jobId), 1500);
+    window.setTimeout(() => pollEnrichmentProgress(jobId, requestId), 1500);
   } catch (error) {
+    if (requestId !== enrichmentProgressRequestId) return;
     statusEl.textContent = "Error";
     setUploadSummary(error.message);
     runEnrichment.disabled = false;
@@ -2321,6 +2468,7 @@ runEtlBtn.addEventListener("click", async () => {
   formData.append("output_dir", dir);
   formData.append("output_parquet", etlOutputParquet.value.trim() || `${dir}/buildings_cleaned.parquet`);
   formData.append("lookup_db_file", etlLookupDbFile.value.trim() || `${dir}/building_lookup.duckdb`);
+  const requestId = ++etlProgressRequestId;
   try {
     const response = await fetch("api/etl/create-database", {
       method: "POST",
@@ -2331,19 +2479,22 @@ runEtlBtn.addEventListener("click", async () => {
     if (!response.ok) {
       throw new Error(payload.error || "ETL submission failed");
     }
+    if (requestId !== etlProgressRequestId) return;
 
-    pollEtlProgress(payload.job_id);
+    pollEtlProgress(payload.job_id, requestId);
   } catch (error) {
+    if (requestId !== etlProgressRequestId) return;
     statusEl.textContent = "Error";
     showEtlStatus("error", error.message);
     runEtlBtn.disabled = false;
   }
 });
 
-async function pollEtlProgress(jobId) {
+async function pollEtlProgress(jobId, requestId) {
   try {
     const response = await fetch(`api/etl/progress/${jobId}`);
     const payload = await response.json();
+    if (requestId !== etlProgressRequestId) return;
 
     if (!response.ok) throw new Error(payload.error || "Could not read ETL progress");
 
@@ -2376,8 +2527,9 @@ async function pollEtlProgress(jobId) {
       throw new Error(payload.error || "ETL failed");
     }
 
-    window.setTimeout(() => pollEtlProgress(jobId), 3000);
+    window.setTimeout(() => pollEtlProgress(jobId, requestId), 3000);
   } catch (error) {
+    if (requestId !== etlProgressRequestId) return;
     statusEl.textContent = "Error";
     showEtlStatus("error", error.message);
     runEtlBtn.disabled = false;

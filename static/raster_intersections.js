@@ -18,6 +18,7 @@
 
   let activeLayer = window.currentAddedMapLayer || null;
   let running = false;
+  let requestCycle = 0;
 
   if (!controls || !bandSelect || !siFieldSelect || !exposureButton || !databaseButton || !radiusInput || !aggregationSelect) return;
 
@@ -74,6 +75,7 @@
   }
 
   async function runIntersection(sourceType) {
+    const cycle = ++requestCycle;
     if (!activeLayer || !["raster", "vector"].includes(activeLayer.kind)) {
       setMessage("Upload a GeoTIFF, GeoPackage, shapefile, or GeoJSON layer first.", "error");
       return;
@@ -126,23 +128,42 @@
         result = sourceType === "exposure"
           ? await window.rasterIntersectionApi.intersectExposure(payload)
           : await window.rasterIntersectionApi.intersectDatabase(payload);
-        await pollRasterIntersectionProgress(result.job_id);
+        if (cycle !== requestCycle) return;
+        await pollRasterIntersectionProgress(result.job_id, cycle);
       } else {
         result = sourceType === "exposure"
           ? await window.rasterIntersectionApi.intersectVectorExposure(payload)
           : await window.rasterIntersectionApi.intersectVectorDatabase(payload);
+        if (cycle !== requestCycle) return;
         window.rasterIntersectionPreview.render(result);
         window.rasterIntersectionLayers.render(result.map_features);
         setMessage(`Done: ${formatInteger(result.summary?.matched_count)} matched locations.`, "success");
         if (typeof statusEl !== "undefined") statusEl.textContent = "Done";
       }
     } catch (error) {
+      if (cycle !== requestCycle) return;
       setMessage(error.message, "error");
       if (typeof statusEl !== "undefined") statusEl.textContent = "Error";
     } finally {
-      running = false;
-      syncLayerState({ updateMessage: false });
+      if (cycle === requestCycle) {
+        running = false;
+        syncLayerState({ updateMessage: false });
+      }
     }
+  }
+
+  function reset() {
+    requestCycle += 1;
+    running = false;
+    areaSelect.value = "visible";
+    thresholdOperator.value = ">";
+    thresholdValue.value = "";
+    radiusInput.value = "";
+    aggregationSelect.value = "mean";
+    siFieldSelect.value = "";
+    window.rasterIntersectionPreview?.clear?.();
+    window.rasterIntersectionLayers?.clear?.();
+    syncLayerState();
   }
 
   function currentBounds() {
@@ -186,9 +207,10 @@
     message.classList.toggle("success", type === "success");
   }
 
-  async function pollRasterIntersectionProgress(jobId) {
-    while (true) {
+  async function pollRasterIntersectionProgress(jobId, cycle) {
+    while (cycle === requestCycle) {
       const payload = await window.rasterIntersectionApi.progress(jobId);
+      if (cycle !== requestCycle) return;
       if (payload.status === "complete") {
         window.rasterIntersectionPreview.render(payload);
         window.rasterIntersectionLayers.render(payload.map_features);
@@ -236,4 +258,6 @@
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#039;");
   }
+
+  window.rasterIntersectionController = { reset };
 })();

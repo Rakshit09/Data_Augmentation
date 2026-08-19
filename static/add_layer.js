@@ -31,7 +31,8 @@
     refreshRunning: false,
     refreshQueued: false,
     requestId: 0,
-    popup: null
+    popup: null,
+    importCycle: 0
   };
   const defaultLayerTitle = "Choose Layer File";
   const defaultLayerSubtitle = "GeoPackage, zipped shapefile, shapefile (.shp), GeoJSON, or GeoTIFF";
@@ -148,7 +149,7 @@
     } catch (error) {
       setMessage(error.message, "error");
     } finally {
-      if (!activeImportJobId) {
+      if (importCycle === state.importCycle && !activeImportJobId) {
         uploadButton.disabled = false;
         uploadButton.textContent = originalLabel;
       }
@@ -161,6 +162,7 @@
       return;
     }
 
+    const importCycle = ++state.importCycle;
     if (typeof dismissCriticalNote === "function") dismissCriticalNote();
     uploadButton.disabled = true;
     const originalLabel = uploadButton.textContent;
@@ -182,12 +184,14 @@
       if (!response.ok) {
         throw new Error(payload.error || "Could not import layer");
       }
+      if (importCycle !== state.importCycle) return;
 
       activeImportJobId = payload.job_id || "";
       showImportProgress(payload);
       setMessage(payload.phase || "Importing layer...");
-      pollLayerImport(activeImportJobId, originalLabel);
+      pollLayerImport(activeImportJobId, originalLabel, importCycle);
     } catch (error) {
+      if (importCycle !== state.importCycle) return;
       activeImportJobId = "";
       uploadButton.disabled = false;
       uploadButton.textContent = originalLabel;
@@ -215,6 +219,7 @@
     }
 
     if (typeof dismissCriticalNote === "function") dismissCriticalNote();
+    const importCycle = ++state.importCycle;
     uploadButton.disabled = true;
     const originalLabel = uploadButton.textContent;
     uploadButton.innerHTML = '<span class="spinner"></span> Uploading\u2026';
@@ -241,7 +246,9 @@
         throw new Error(payload.error || "Could not add layer");
       }
 
-      clearLayer({ silent: true, cleanupServer: false });
+      if (importCycle !== state.importCycle) return;
+
+      clearLayer({ silent: true, cleanupServer: false, invalidatePending: false });
       state.layer = {
         ...payload,
         field: payload.default_field || "",
@@ -264,21 +271,25 @@
       }
       if (typeof statusEl !== "undefined") statusEl.textContent = "Ready";
     } catch (error) {
+      if (importCycle !== state.importCycle) return;
       if (state.layer && state.layer.id !== previousLayerId) {
         clearLayer({ silent: true });
       }
       setMessage(error.message, "error");
       if (typeof statusEl !== "undefined") statusEl.textContent = "Error";
     } finally {
-      uploadButton.disabled = false;
-      uploadButton.textContent = originalLabel;
+      if (importCycle === state.importCycle) {
+        uploadButton.disabled = false;
+        uploadButton.textContent = originalLabel;
+      }
     }
   }
 
-  async function pollLayerImport(jobId, originalLabel) {
+  async function pollLayerImport(jobId, originalLabel, importCycle) {
     try {
       const response = await fetch(`api/layers/import-jobs/${encodeURIComponent(jobId)}`);
       const payload = await response.json();
+      if (importCycle !== state.importCycle) return;
       if (!response.ok) {
         throw new Error(payload.error || "Could not check layer import status");
       }
@@ -298,8 +309,9 @@
         throw new Error(payload.error || "Layer import failed");
       }
 
-      window.setTimeout(() => pollLayerImport(jobId, originalLabel), 1500);
+      window.setTimeout(() => pollLayerImport(jobId, originalLabel, importCycle), 1500);
     } catch (error) {
+      if (importCycle !== state.importCycle) return;
       activeImportJobId = "";
       uploadButton.disabled = false;
       uploadButton.textContent = originalLabel;
@@ -337,7 +349,7 @@
   }
 
   function applyLoadedLayer(payload) {
-    clearLayer({ silent: true, cleanupServer: false });
+    clearLayer({ silent: true, cleanupServer: false, invalidatePending: false });
     state.layer = {
       ...payload,
       field: payload.default_field || "",
@@ -712,8 +724,12 @@
       : undefined;
   }
 
-  function clearLayer({ silent = false, cleanupServer = true } = {}) {
+  function clearLayer({ silent = false, cleanupServer = true, invalidatePending = true } = {}) {
     const layerId = state.layer?.id || "";
+    if (invalidatePending) {
+      activeImportJobId = "";
+      state.importCycle += 1;
+    }
     state.layer = null;
     state.requestId += 1;
     state.refreshQueued = false;
@@ -733,6 +749,26 @@
       deleteLayerOnServer(layerId);
     }
     if (!silent) setMessage("Layer cleared.");
+  }
+
+  function resetLayerUi() {
+    clearLayer({ silent: true });
+    selectedLocalPath = "";
+    uploadAfterPick = false;
+    try {
+      layerFile.value = "";
+    } catch (_error) {
+      // Ignore browsers that do not allow clearing a file input here.
+    }
+    layerFileTitle.textContent = defaultLayerTitle;
+    layerFileSubtitle.textContent = defaultLayerSubtitle;
+    fieldSelect.innerHTML = "";
+    colormapSelect.value = "hazard";
+    transparencyInput.value = "55";
+    hideImportStatus();
+    setMessage("Upload a layer to display it over buildings and exposure points.");
+    uploadButton.disabled = false;
+    uploadButton.textContent = "Import layer";
   }
 
   async function deleteLayerOnServer(layerId) {
@@ -801,4 +837,9 @@
     if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
     return `${bytes} bytes`;
   }
+
+  window.addedMapLayerController = {
+    clear: clearLayer,
+    reset: resetLayerUi
+  };
 })();
