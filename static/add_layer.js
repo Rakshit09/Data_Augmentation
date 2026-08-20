@@ -114,6 +114,7 @@
 
   async function chooseLocalLayer(autoImport) {
     if (activeImportJobId) return;
+    const selectionCycle = state.importCycle;
     uploadButton.disabled = true;
     const originalLabel = uploadButton.textContent;
     uploadButton.innerHTML = '<span class="spinner"></span> Selecting...';
@@ -142,6 +143,7 @@
         return;
       }
       if (autoImport) {
+        uploadButton.textContent = originalLabel;
         await importLocalLayer();
       } else {
         setMessage("Layer selected. Click Import layer to load it.", "success");
@@ -149,7 +151,7 @@
     } catch (error) {
       setMessage(error.message, "error");
     } finally {
-      if (importCycle === state.importCycle && !activeImportJobId) {
+      if (selectionCycle === state.importCycle && !activeImportJobId) {
         uploadButton.disabled = false;
         uploadButton.textContent = originalLabel;
       }

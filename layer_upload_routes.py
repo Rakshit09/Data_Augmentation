@@ -1318,6 +1318,42 @@ def _find_gdal_tools() -> Optional[Dict[str, Any]]:
     return None
 
 
+_GDAL_DLL_DIR_HANDLES: List[Any] = []
+_GDAL_RUNTIME_READY = False
+
+
+def _apply_gdal_runtime_env(bin_dirs: List[Path], env: Dict[str, str]) -> None:
+    global _GDAL_RUNTIME_READY
+    if _GDAL_RUNTIME_READY:
+        return
+
+    path_value = str(env.get("PATH") or "").strip()
+    if path_value:
+        os.environ["PATH"] = path_value
+
+    for key in ("GDAL_DATA", "PROJ_LIB"):
+        value = str(env.get(key) or "").strip()
+        if value:
+            os.environ[key] = value
+
+    add_dll_directory = getattr(os, "add_dll_directory", None)
+    if add_dll_directory:
+        seen_dirs = set()
+        for directory in bin_dirs:
+            if not directory.is_dir():
+                continue
+            resolved = str(directory.resolve())
+            if resolved in seen_dirs:
+                continue
+            seen_dirs.add(resolved)
+            try:
+                _GDAL_DLL_DIR_HANDLES.append(add_dll_directory(resolved))
+            except OSError:
+                continue
+
+    _GDAL_RUNTIME_READY = True
+
+
 def _candidate_gdal_roots() -> List[Path]:
     roots: List[Path] = []
     env_root = os.environ.get("DATA_AUGMENTATION_GDAL_DIR", "").strip()
@@ -1401,6 +1437,7 @@ def _tools_from_gdal_root(root: Path) -> Optional[Dict[str, Any]]:
         env.setdefault("GDAL_DATA", str(gdal_data))
     if proj_lib:
         env.setdefault("PROJ_LIB", str(proj_lib))
+    _apply_gdal_runtime_env(bin_dirs, env)
     
     print(f"[GDAL]   GDAL_DATA: {gdal_data}")
     print(f"[GDAL]   PROJ_LIB: {proj_lib}")
