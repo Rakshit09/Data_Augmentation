@@ -3489,7 +3489,7 @@ def lookup_inside_polygon(
             AND ? BETWEEN b.bbox_xmin AND b.bbox_xmax
             AND ? BETWEEN b.bbox_ymin AND b.bbox_ymax
             AND ST_Intersects(b.geom, point.pt)
-        ORDER BY b.footprint_area_m2 ASC NULLS LAST
+        ORDER BY b.footprint_area_m2 DESC NULLS LAST
         LIMIT 1;
     """, [lon, lat, lon, lat]).fetchone()
 
@@ -3702,7 +3702,7 @@ def chunk_lookup_sql(
                     AND e.__lon BETWEEN b.bbox_xmin AND b.bbox_xmax
                     AND e.__lat BETWEEN b.bbox_ymin AND b.bbox_ymax
                     AND ST_Intersects(b.geom, e.__pt)
-                ORDER BY b.footprint_area_m2 ASC NULLS LAST
+                ORDER BY b.footprint_area_m2 DESC NULLS LAST
                 LIMIT 1
             ) m ON TRUE
             ORDER BY e.__exposure_row_id
@@ -3739,7 +3739,7 @@ def chunk_lookup_sql(
                 AND e.__lon BETWEEN b.bbox_xmin AND b.bbox_xmax
                 AND e.__lat BETWEEN b.bbox_ymin AND b.bbox_ymax
                 AND ST_Intersects(b.geom, e.__pt)
-            ORDER BY b.footprint_area_m2 ASC NULLS LAST
+            ORDER BY b.footprint_area_m2 DESC NULLS LAST
             LIMIT 1
         ) i ON TRUE
         LEFT JOIN LATERAL (
@@ -3975,7 +3975,7 @@ def enrichment_select_sql(
                     e.__exposure_row_id,
                     ROW_NUMBER() OVER (
                         PARTITION BY e.__exposure_row_id
-                        ORDER BY b.footprint_area_m2 ASC NULLS LAST
+                        ORDER BY b.footprint_area_m2 DESC NULLS LAST
                     ) AS rn,
                     {b_select("b", working_building_columns)}
                 FROM exposure e
@@ -4009,7 +4009,7 @@ def enrichment_select_sql(
                 e.__exposure_row_id,
                 ROW_NUMBER() OVER (
                     PARTITION BY e.__exposure_row_id
-                    ORDER BY b.footprint_area_m2 ASC NULLS LAST
+                    ORDER BY b.footprint_area_m2 DESC NULLS LAST
                 ) AS rn,
                 {b_select("b", working_building_columns)}
             FROM exposure e
@@ -4129,7 +4129,7 @@ def find_building(
             AND b.bbox_ymin <= ?
             AND b.bbox_ymax >= ?
             AND ST_Intersects(b.geom, pt)
-        ORDER BY b.footprint_area_m2 ASC NULLS LAST
+        ORDER BY b.footprint_area_m2 DESC NULLS LAST
         LIMIT 1;
     """, [lon, lat, lon, lon, lat, lat]).fetchone()
 

@@ -39,3 +39,5 @@ tzdata==2026.2
 urllib3==2.6.3
 Werkzeug==3.1.8
 wheel==0.47.0
+pillow
+psutil

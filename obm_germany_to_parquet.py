@@ -64,6 +64,12 @@ class ETLConfig:
     metres_per_storey: float = 3.0
     usable_floor_factor: float = 1.0
 
+    # Overlap resolution: when a smaller footprint is substantially covered by a
+    # larger one (e.g. a nested/duplicate polygon), drop the smaller footprint
+    # and keep only the larger one.
+    dedup_overlapping_footprints: bool = True
+    overlap_area_ratio_threshold: float = 0.5
+
     # Behaviour
     force: bool = False
     sample_only: bool = False
@@ -588,6 +594,34 @@ class OpenBuildingMapGermanyETL:
         if self.cfg.sample_only:
             sample_limit_sql = f"LIMIT {int(self.cfg.sample_limit)}"
 
+        if self.cfg.dedup_overlapping_footprints:
+            dedup_filtered_cte = f"""
+            dedup_filtered AS (
+                SELECT s.*
+                FROM sized s
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM sized o
+                    WHERE o.id <> s.id
+                        AND o.bbox.xmin <= s.bbox.xmax AND o.bbox.xmax >= s.bbox.xmin
+                        AND o.bbox.ymin <= s.bbox.ymax AND o.bbox.ymax >= s.bbox.ymin
+                        AND (
+                            o.footprint_area_m2 > s.footprint_area_m2
+                            OR (o.footprint_area_m2 = s.footprint_area_m2 AND o.id > s.id)
+                        )
+                        AND COALESCE(TRY(ST_Intersects(o.geom, s.geom)), FALSE)
+                        AND COALESCE(TRY(
+                            ST_Area(ST_Intersection(o.geom_3035, s.geom_3035))
+                                / NULLIF(s.footprint_area_m2, 0)
+                        ), 0) >= {self.cfg.overlap_area_ratio_threshold}
+                )
+            ),
+            """
+            enriched_source = "dedup_filtered"
+        else:
+            dedup_filtered_cte = ""
+            enriched_source = "sized"
+
         query = f"""
         COPY (
             WITH candidates AS (
@@ -654,17 +688,22 @@ class OpenBuildingMapGermanyETL:
             measured AS (
                 SELECT
                     *,
-                    ST_Area(
-                        ST_Transform(
-                            geom,
-                            'EPSG:4326',
-                            'EPSG:3035',
-                            always_xy := true
-                        )
-                    ) AS footprint_area_m2
+                    ST_Transform(
+                        geom,
+                        'EPSG:4326',
+                        'EPSG:3035',
+                        always_xy := true
+                    ) AS geom_3035
                 FROM height_parsed
             ),
 
+            sized AS (
+                SELECT
+                    *,
+                    ST_Area(geom_3035) AS footprint_area_m2
+                FROM measured
+            ),
+            {dedup_filtered_cte}
             enriched AS (
                 SELECT
                     -- Stable identifiers
@@ -772,7 +811,7 @@ class OpenBuildingMapGermanyETL:
                         ELSE NULL
                     END AS floorspace_est_m2
 
-                FROM measured
+                FROM {enriched_source}
             )
 
             SELECT

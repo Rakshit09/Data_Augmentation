@@ -100,6 +100,12 @@ class ETLConfig:
     metres_per_storey: float = 3.0
     usable_floor_factor: float = 1.0
 
+    # Overlap resolution: when a smaller footprint is substantially covered by a
+    # larger one (e.g. a nested/duplicate polygon), drop the smaller footprint
+    # and keep only the larger one.
+    dedup_overlapping_footprints: bool = True
+    overlap_area_ratio_threshold: float = 0.5
+
     # Behaviour
     force: bool = False
     sample_only: bool = False
@@ -969,6 +975,66 @@ class OpenBuildingMapCountryETL:
                 continue
 
             # -----------------------------------------------------------
+            # STEP 2.5: Resolve overlapping footprints, keeping the larger
+            # polygon whenever a smaller footprint is mostly covered by it.
+            # -----------------------------------------------------------
+            self.con.execute("DROP TABLE IF EXISTS _tmp_country_sized;")
+            self.con.execute("""
+                CREATE TEMP TABLE _tmp_country_sized AS
+                SELECT
+                    *,
+                    ST_Transform(geom, 'OGC:CRS84', 'EPSG:3035', always_xy := true) AS geom_3035
+                FROM _tmp_country;
+            """)
+            self.con.execute("ALTER TABLE _tmp_country_sized ADD COLUMN footprint_area_m2 DOUBLE;")
+            self.con.execute("UPDATE _tmp_country_sized SET footprint_area_m2 = ST_Area(geom_3035);")
+            self.con.execute("DROP TABLE IF EXISTS _tmp_country;")
+
+            self.con.execute("DROP TABLE IF EXISTS _tmp_country_deduped;")
+            if self.cfg.dedup_overlapping_footprints:
+                self.con.execute(f"""
+                    CREATE TEMP TABLE _tmp_country_deduped AS
+                    SELECT s.*
+                    FROM _tmp_country_sized s
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM _tmp_country_sized o
+                        WHERE o.id <> s.id
+                            AND o.bbox.xmin <= s.bbox.xmax AND o.bbox.xmax >= s.bbox.xmin
+                            AND o.bbox.ymin <= s.bbox.ymax AND o.bbox.ymax >= s.bbox.ymin
+                            AND (
+                                o.footprint_area_m2 > s.footprint_area_m2
+                                OR (o.footprint_area_m2 = s.footprint_area_m2 AND o.id > s.id)
+                            )
+                            AND COALESCE(TRY(ST_Intersects(o.geom, s.geom)), FALSE)
+                            AND COALESCE(TRY(
+                                ST_Area(ST_Intersection(o.geom_3035, s.geom_3035))
+                                    / NULLIF(s.footprint_area_m2, 0)
+                            ), 0) >= {self.cfg.overlap_area_ratio_threshold}
+                    );
+                """)
+            else:
+                self.con.execute("""
+                    CREATE TEMP TABLE _tmp_country_deduped AS
+                    SELECT * FROM _tmp_country_sized;
+                """)
+            self.con.execute("DROP TABLE IF EXISTS _tmp_country_sized;")
+
+            deduped_count = self.con.execute(
+                "SELECT COUNT(*) FROM _tmp_country_deduped;"
+            ).fetchone()[0]
+            dropped_count = country_count - deduped_count
+            logger.info(
+                "Chunk %d: dropped %d smaller overlapping footprint(s), %d remain",
+                chunk_idx + 1, dropped_count, deduped_count,
+            )
+            self._report_progress(
+                "Resolving overlapping footprints",
+                self._chunk_progress_percent(chunk_idx, len(chunks), 0.76),
+                f"{chunk_label}: dropped {dropped_count:,} overlapping footprint(s), {deduped_count:,} remain",
+            )
+
+            # -----------------------------------------------------------
             # STEP 3: Enrich and write to chunk Parquet file.
             # -----------------------------------------------------------
             chunk_output_sql = chunk_file.as_posix().replace("'", "''")
@@ -999,19 +1065,13 @@ class OpenBuildingMapCountryETL:
                             AS INTEGER
                         ) AS stories_max_parsed
 
-                    FROM _tmp_country
+                    FROM _tmp_country_deduped
                 ),
 
                 measured AS (
                     SELECT
                         *,
-                        ST_Centroid(geom) AS centroid_geom,
-                        ST_Transform(
-                            geom,
-                            'OGC:CRS84',
-                            'EPSG:3035',
-                            always_xy := true
-                        ) AS geom_3035
+                        ST_Centroid(geom) AS centroid_geom
                     FROM height_parsed
                 ),
 
@@ -1034,7 +1094,7 @@ class OpenBuildingMapCountryETL:
                         bbox.xmax AS bbox_xmax,
                         bbox.ymax AS bbox_ymax,
 
-                        ST_Area(geom_3035) AS footprint_area_m2,
+                        footprint_area_m2,
 
                         height AS height_raw,
                         occupancy AS occupancy_raw,
@@ -1135,7 +1195,7 @@ class OpenBuildingMapCountryETL:
             );
             """)
 
-            self.con.execute("DROP TABLE IF EXISTS _tmp_country;")
+            self.con.execute("DROP TABLE IF EXISTS _tmp_country_deduped;")
             chunk_files.append(chunk_file.as_posix())
             logger.info("Chunk %d written: %s", chunk_idx + 1, chunk_file)
             self._report_progress(
