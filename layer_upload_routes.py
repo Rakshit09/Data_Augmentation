@@ -1130,7 +1130,12 @@ def _render_tile_on_demand(cog_path: str, z: int, x: int, y: int, colormap: Opti
 
 def _normalize_raster_for_tiling(upload_path: Path, work_dir: Path, gdal_tools: Dict[str, Any]) -> Tuple[Path, Optional[Dict[str, Any]]]:
     info = _run_json_command([gdal_tools["gdalinfo"], "-json", "-approx_stats", str(upload_path)], env=gdal_tools["env"])
-    if _raster_extent(info) and _has_real_georeference(info):
+    if not _raster_extent(info):
+        raise ValueError(
+            "The raster CRS is missing or incompatible with the exposure CRS (EPSG:4326). "
+            "Reproject the raster to EPSG:4326 and upload it again as a georeferenced GeoTIFF."
+        )
+    if _has_real_georeference(info):
         return upload_path, info
 
     sidecar_extent = _extent_from_world_file(upload_path, info)
