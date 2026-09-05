@@ -2700,16 +2700,17 @@ def prepare_exposure_map_cache(
             if lat_col not in columns or lon_col not in columns:
                 raise ValueError("Selected latitude/longitude columns were not found in the uploaded file.")
 
-            lat_sql = f"source.{sql_identifier(lat_col)}"
-            lon_sql = f"source.{sql_identifier(lon_col)}"
+            build_exposure_row_table(con, upload_path, columns, scan_options_sql=scan_options_sql)
+            lat_sql = sql_identifier(f"c{columns.index(lat_col)}")
+            lon_sql = sql_identifier(f"c{columns.index(lon_col)}")
 
             con.execute(f"""
                 CREATE TABLE source_points AS
                 SELECT
-                    row_number() OVER () AS row_id,
+                    row_id,
                     TRY_CAST(NULLIF(TRIM(CAST({lon_sql} AS VARCHAR)), '') AS DOUBLE) AS lon,
                     TRY_CAST(NULLIF(TRIM(CAST({lat_sql} AS VARCHAR)), '') AS DOUBLE) AS lat
-                FROM {source_from_sql} AS source;
+                FROM csv_rows;
             """)
 
             total_rows, valid_rows, min_lon, min_lat, max_lon, max_lat = con.execute("""
@@ -2737,7 +2738,6 @@ def prepare_exposure_map_cache(
             con.execute("DROP TABLE source_points;")
             con.execute("CREATE INDEX points_lon_idx ON points(lon);")
             con.execute("CREATE INDEX points_lat_idx ON points(lat);")
-            build_exposure_row_table(con, upload_path, columns, scan_options_sql=scan_options_sql)
             build_exposure_multires_tables(con)
             con.execute("CREATE TABLE metadata(key VARCHAR PRIMARY KEY, value VARCHAR);")
 

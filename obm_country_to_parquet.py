@@ -983,6 +983,7 @@ class OpenBuildingMapCountryETL:
                 CREATE TEMP TABLE _tmp_country_sized AS
                 SELECT
                     *,
+                    ROW_NUMBER() OVER () AS __overlap_row_id,
                     ST_Transform(geom, 'OGC:CRS84', 'EPSG:3035', always_xy := true) AS geom_3035
                 FROM _tmp_country;
             """)
@@ -992,31 +993,46 @@ class OpenBuildingMapCountryETL:
 
             self.con.execute("DROP TABLE IF EXISTS _tmp_country_deduped;")
             if self.cfg.dedup_overlapping_footprints:
-                self.con.execute(f"""
-                    CREATE TEMP TABLE _tmp_country_deduped AS
-                    SELECT s.*
+                self.con.execute("DROP TABLE IF EXISTS _tmp_country_overlap_candidates;")
+                self.con.execute("DROP TABLE IF EXISTS _tmp_country_overlapped;")
+                self.con.execute("""
+                    CREATE TEMP TABLE _tmp_country_overlap_candidates AS
+                    SELECT
+                        s.__overlap_row_id AS smaller_row_id,
+                        o.__overlap_row_id AS larger_row_id
                     FROM _tmp_country_sized s
-                    WHERE NOT EXISTS (
-                        SELECT 1
-                        FROM _tmp_country_sized o
-                        WHERE o.id <> s.id
-                            AND o.bbox.xmin <= s.bbox.xmax AND o.bbox.xmax >= s.bbox.xmin
-                            AND o.bbox.ymin <= s.bbox.ymax AND o.bbox.ymax >= s.bbox.ymin
-                            AND (
-                                o.footprint_area_m2 > s.footprint_area_m2
-                                OR (o.footprint_area_m2 = s.footprint_area_m2 AND o.id > s.id)
-                            )
-                            AND COALESCE(TRY(ST_Intersects(o.geom, s.geom)), FALSE)
-                            AND COALESCE(TRY(
-                                ST_Area(ST_Intersection(o.geom_3035, s.geom_3035))
-                                    / NULLIF(s.footprint_area_m2, 0)
-                            ), 0) >= {self.cfg.overlap_area_ratio_threshold}
-                    );
+                    JOIN _tmp_country_sized o
+                        ON ST_Intersects(o.geom, s.geom);
                 """)
+                self.con.execute(f"""
+                    CREATE TEMP TABLE _tmp_country_overlapped AS
+                    SELECT DISTINCT s.__overlap_row_id
+                    FROM _tmp_country_overlap_candidates c
+                    JOIN _tmp_country_sized s ON s.__overlap_row_id = c.smaller_row_id
+                    JOIN _tmp_country_sized o ON o.__overlap_row_id = c.larger_row_id
+                    WHERE o.id <> s.id
+                        AND (
+                            o.footprint_area_m2 > s.footprint_area_m2
+                            OR (o.footprint_area_m2 = s.footprint_area_m2 AND o.id > s.id)
+                        )
+                        AND COALESCE(TRY(
+                            ST_Area(ST_Intersection(o.geom_3035, s.geom_3035))
+                                / NULLIF(s.footprint_area_m2, 0)
+                        ), 0) >= {self.cfg.overlap_area_ratio_threshold};
+                """)
+                self.con.execute("DROP TABLE IF EXISTS _tmp_country_overlap_candidates;")
+                self.con.execute("""
+                    CREATE TEMP TABLE _tmp_country_deduped AS
+                    SELECT s.* EXCLUDE (__overlap_row_id)
+                    FROM _tmp_country_sized s
+                    ANTI JOIN _tmp_country_overlapped d
+                        ON d.__overlap_row_id = s.__overlap_row_id;
+                """)
+                self.con.execute("DROP TABLE IF EXISTS _tmp_country_overlapped;")
             else:
                 self.con.execute("""
                     CREATE TEMP TABLE _tmp_country_deduped AS
-                    SELECT * FROM _tmp_country_sized;
+                    SELECT * EXCLUDE (__overlap_row_id) FROM _tmp_country_sized;
                 """)
             self.con.execute("DROP TABLE IF EXISTS _tmp_country_sized;")
 
