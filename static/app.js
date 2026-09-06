@@ -119,7 +119,6 @@ const viewFilter3dLayerId = "view-filter-buildings-extrusion";
 const viewFilterSourceLayer = "buildings";
 const building3dSourceId = "buildings-3d";
 const building3dLayerId = "buildings-3d-extrusion";
-const selectedBuilding3dLayerId = "selected-building-3d-extrusion";
 const mapElement = document.getElementById("map");
 const viewFilterMinZoom = Number(mapElement?.dataset.filterViewMinZoom || 15);
 const viewFilterMaxTileZoom = Number(mapElement?.dataset.filterViewMaxTileZoom || 17);
@@ -356,6 +355,15 @@ function buildingExtrusionHeight() {
   return ["min", 500, ["max", 3, ["to-number", ["get", "height_m"], 3]]];
 }
 
+function buildingExtrusionColor(defaultColor) {
+  return [
+    "case",
+    ["boolean", ["feature-state", "selected"], false],
+    "#ffb703",
+    defaultColor
+  ];
+}
+
 function building3dTileUrl() {
   const params = new URLSearchParams({
     column: "building_id",
@@ -373,14 +381,22 @@ function refreshBuilding3dTiles() {
 }
 
 function setSelectedBuildingFeatureId(buildingId) {
-  selectedBuildingFeatureId = buildingId ?? null;
-  const exclusionFilter = selectedBuildingFeatureId === null
-    ? null
-    : ["!=", ["get", "building_id"], selectedBuildingFeatureId];
-  for (const layerId of [building3dLayerId, viewFilter3dLayerId]) {
-    if (map.getLayer(layerId)) {
-      map.setFilter(layerId, exclusionFilter);
+  const updateState = (sourceId, featureId, selected) => {
+    if (featureId === null || featureId === undefined || !map.getSource(sourceId)) return;
+    const target = { source: sourceId, sourceLayer: viewFilterSourceLayer, id: featureId };
+    if (selected) {
+      map.setFeatureState(target, { selected: true });
+    } else {
+      map.removeFeatureState(target, "selected");
     }
+  };
+
+  for (const sourceId of [building3dSourceId, viewFilterSourceId]) {
+    updateState(sourceId, selectedBuildingFeatureId, false);
+  }
+  selectedBuildingFeatureId = buildingId ?? null;
+  for (const sourceId of [building3dSourceId, viewFilterSourceId]) {
+    updateState(sourceId, selectedBuildingFeatureId, true);
   }
 }
 
@@ -394,7 +410,6 @@ function syncBuildingDimensionLayers() {
 
   visibility(building3dLayerId, is3d && !activeViewFilter);
   visibility(viewFilter3dLayerId, is3d && Boolean(activeViewFilter));
-  visibility(selectedBuilding3dLayerId, is3d);
   visibility(viewFilterFillLayerId, !is3d);
   visibility(viewFilterOutlineLayerId, !is3d);
   visibility("selected-building-fill", !is3d);
@@ -839,7 +854,8 @@ map.on("load", () => {
     type: "vector",
     tiles: [building3dTileUrl()],
     minzoom: viewFilterMinZoom,
-    maxzoom: viewFilterMaxTileZoom
+    maxzoom: viewFilterMaxTileZoom,
+    promoteId: "building_id"
   });
 
   map.addLayer({
@@ -852,11 +868,11 @@ map.on("load", () => {
       visibility: buildingDimensionMode === "3d" ? "visible" : "none"
     },
     paint: {
-      "fill-extrusion-color": "#78909c",
+      "fill-extrusion-color": buildingExtrusionColor("#78909c"),
       "fill-extrusion-height": buildingExtrusionHeight(),
       "fill-extrusion-base": 0,
-      "fill-extrusion-opacity": 0.78,
-      "fill-extrusion-vertical-gradient": true
+      "fill-extrusion-opacity": 1,
+      "fill-extrusion-vertical-gradient": false
     }
   });
 
@@ -952,22 +968,6 @@ map.on("load", () => {
   });
 
   map.addLayer({
-    id: selectedBuilding3dLayerId,
-    type: "fill-extrusion",
-    source: "selected-building",
-    layout: {
-      visibility: buildingDimensionMode === "3d" ? "visible" : "none"
-    },
-    paint: {
-      "fill-extrusion-color": "#ffb703",
-      "fill-extrusion-height": buildingExtrusionHeight(),
-      "fill-extrusion-base": 0,
-      "fill-extrusion-opacity": 1,
-      "fill-extrusion-vertical-gradient": false
-    }
-  });
-
-  map.addLayer({
     id: "selected-building-outline",
     type: "line",
     source: "selected-building",
@@ -1047,6 +1047,16 @@ map.on("moveend", () => {
   requestExposurePointRefresh();
 });
 
+function rendered3dBuilding(point) {
+  if (buildingDimensionMode !== "3d" || !map.isStyleLoaded()) return null;
+  const layers = [viewFilter3dLayerId, building3dLayerId]
+    .filter((layerId) => map.getLayer(layerId));
+  if (!layers.length) return null;
+
+  return map.queryRenderedFeatures(point, { layers })
+    .find((item) => item.properties?.building_id !== null && item.properties?.building_id !== undefined) || null;
+}
+
 map.on("click", async (event) => {
   if (event.defaultPrevented) return;
 
@@ -1066,7 +1076,22 @@ map.on("click", async (event) => {
   statusEl.textContent = "Searching";
 
   try {
-    const response = await fetch(`api/building-at?lon=${lng}&lat=${lat}`);
+    const renderedBuilding = rendered3dBuilding(event.point);
+    const featureBuildingId = renderedBuilding?.properties?.building_id;
+    const buildingId = featureBuildingId === null || featureBuildingId === undefined
+      ? ""
+      : String(featureBuildingId).trim();
+    if (buildingId) {
+      setSelectedBuildingFeatureId(featureBuildingId);
+    }
+    const quadkeyPrefix = String(renderedBuilding?.properties?.__quadkey_prefix || "").trim();
+    const locationHint = quadkeyPrefix
+      ? `&quadkey_prefix=${encodeURIComponent(quadkeyPrefix)}`
+      : "";
+    const lookupUrl = buildingId
+      ? `api/building-at?building_id=${encodeURIComponent(buildingId)}${locationHint}`
+      : `api/building-at?lon=${lng}&lat=${lat}`;
+    const response = await fetch(lookupUrl);
     const payload = await response.json();
 
     if (!response.ok) {
@@ -1472,7 +1497,8 @@ function viewFilterTileUrl() {
 
   const params = new URLSearchParams({
     column: activeViewFilter.column,
-    value: activeViewFilter.value
+    value: activeViewFilter.value,
+    tile_schema: "2"
   });
 
   if (!activeViewFilter.all && activeViewFilter.color) {
@@ -1495,7 +1521,8 @@ function renderViewFilterLayer(tileUrl) {
     type: "vector",
     tiles: [tileUrl],
     minzoom: viewFilterMinZoom,
-    maxzoom: viewFilterMaxTileZoom
+    maxzoom: viewFilterMaxTileZoom,
+    promoteId: "building_id"
   });
 
   map.addLayer({
@@ -1551,7 +1578,7 @@ function renderViewFilterLayer(tileUrl) {
       visibility: buildingDimensionMode === "3d" ? "visible" : "none"
     },
     paint: {
-      "fill-extrusion-color": ["coalesce", ["get", "__color"], "#64748b"],
+      "fill-extrusion-color": buildingExtrusionColor(["coalesce", ["get", "__color"], "#64748b"]),
       "fill-extrusion-height": buildingExtrusionHeight(),
       "fill-extrusion-base": 0,
       "fill-extrusion-opacity": 1,
@@ -1582,7 +1609,7 @@ function applyViewFilterLegendColors(legend) {
     map.setPaintProperty(
       viewFilter3dLayerId,
       "fill-extrusion-color",
-      colorExpression
+      buildingExtrusionColor(colorExpression)
     );
   }
 }
@@ -2492,6 +2519,7 @@ function clearSelection() {
 
 function labelForMatch(matchType, confidence) {
   if (matchType === "inside_polygon") return "Inside";
+  if (matchType === "selected_3d") return "Selected in 3D";
   if (matchType === "nearest") return `Nearest · ${confidence}`;
   return "None";
 }

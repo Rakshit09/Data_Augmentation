@@ -1676,14 +1676,17 @@ def create_app(
 
     @app.route("/api/building-at")
     def building_at():
-        try:
-            lon = float(request.args["lon"])
-            lat = float(request.args["lat"])
-        except (KeyError, ValueError):
-            return jsonify({"error": "Valid lon and lat query parameters are required."}), 400
+        building_id = str(request.args.get("building_id", "")).strip()
+        quadkey_prefix = str(request.args.get("quadkey_prefix", "")).strip()
+        if not building_id:
+            try:
+                lon = float(request.args["lon"])
+                lat = float(request.args["lat"])
+            except (KeyError, ValueError):
+                return jsonify({"error": "Valid lon and lat query parameters are required."}), 400
 
-        if not (-180 <= lon <= 180 and -90 <= lat <= 90):
-            return jsonify({"error": "Coordinates are out of range."}), 400
+            if not (-180 <= lon <= 180 and -90 <= lat <= 90):
+                return jsonify({"error": "Coordinates are out of range."}), 400
 
 
         db_path = app.config.get("DB_PATH") or ""
@@ -1697,7 +1700,16 @@ def create_app(
 
         con = cached_readonly_db_cursor(db_path)
         try:
-            result = find_building(con, lon, lat, app.config["NEAREST_RADIUS_M"])
+            if building_id:
+                _available_columns, quadkey_config = cached_filter_view_metadata(db_path, con)
+                result = find_building_by_id(
+                    con,
+                    building_id,
+                    quadkey_prefix=quadkey_prefix,
+                    quadkey_config=quadkey_config,
+                )
+            else:
+                result = find_building(con, lon, lat, app.config["NEAREST_RADIUS_M"])
         finally:
             con.close()
 
@@ -4174,6 +4186,43 @@ def find_building(
     return row_to_response(nearest, display_columns)
 
 
+def find_building_by_id(
+    con: duckdb.DuckDBPyConnection,
+    building_id: str,
+    quadkey_prefix: str = "",
+    quadkey_config: Optional[Tuple[str, int, bool]] = None,
+) -> Optional[Dict[str, Any]]:
+    display_columns = lookup_display_columns(con)
+    display_select = ",\n            ".join(sql_identifier(column) for column in display_columns)
+    quadkey_filter = "TRUE"
+    query_params: List[Any] = [building_id]
+    prefix_column, prefix_zoom, _allow_null_prefix = (
+        quadkey_config or enrichment_quadkey_config(con)
+    )
+    if len(quadkey_prefix) == prefix_zoom and set(quadkey_prefix) <= {"0", "1", "2", "3"}:
+        quadkey_filter = f"b.{sql_identifier(prefix_column)} = ?"
+        query_params = [quadkey_prefix, building_id]
+
+    def query(filter_sql: str, params: List[Any]) -> Optional[tuple]:
+        return con.execute(f"""
+            SELECT
+                'selected_3d' AS match_type,
+                NULL::DOUBLE AS distance_m,
+                'high' AS confidence,
+                {display_select},
+                ST_AsGeoJSON(geom) AS geometry
+            FROM buildings AS b
+            WHERE {filter_sql}
+                AND CAST(building_id AS VARCHAR) = ?
+            LIMIT 1;
+        """, params).fetchone()
+
+    row = query(quadkey_filter, query_params)
+    if row is None and quadkey_filter != "TRUE":
+        row = query("TRUE", [building_id])
+    return row_to_response(row, display_columns) if row else None
+
+
 def lookup_display_columns(con: duckdb.DuckDBPyConnection) -> List[str]:
     columns = con.execute("""
         SELECT column_name, data_type
@@ -4410,6 +4459,7 @@ def lookup_buildings_mvt(
     quadkey_prefix_column, quadkey_prefix_zoom, allow_null_quadkey_prefix = (
         quadkey_config or enrichment_quadkey_config(con)
     )
+    quadkey_prefix_sql = f"b.{sql_identifier(quadkey_prefix_column)}"
     qk_filter = _tile_quadkey_filter(
         x,
         y,
@@ -4456,6 +4506,7 @@ def lookup_buildings_mvt(
                 ) AS geom,
                 b.building_id,
                 {height_sql} AS height_m,
+                {quadkey_prefix_sql} AS __quadkey_prefix,
                 CAST({column_sql} AS VARCHAR) AS filter_value,
                 {color_sql} AS __color
             FROM buildings AS b, envelope
@@ -4471,7 +4522,7 @@ def lookup_buildings_mvt(
         )
         SELECT ST_AsMVT(tile_rows, 'buildings', 4096, 'geom')
         FROM (
-            SELECT geom, building_id, height_m, filter_value, __color
+            SELECT geom, building_id, height_m, __quadkey_prefix, filter_value, __color
             FROM filtered
             WHERE geom IS NOT NULL
         ) AS tile_rows;
