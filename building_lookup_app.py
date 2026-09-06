@@ -4402,6 +4402,11 @@ def lookup_buildings_mvt(
     min_lon, min_lat, max_lon, max_lat = tile_to_bounds(x, y, z)
     tolerance = 360.0 / (4096.0 * (1 << z))
     column_sql = sql_identifier(column)
+    height_sql = (
+        "TRY_CAST(b.height_m AS DOUBLE)"
+        if "height_m" in available_columns
+        else "NULL::DOUBLE"
+    )
     quadkey_prefix_column, quadkey_prefix_zoom, allow_null_quadkey_prefix = (
         quadkey_config or enrichment_quadkey_config(con)
     )
@@ -4450,6 +4455,7 @@ def lookup_buildings_mvt(
                     true
                 ) AS geom,
                 b.building_id,
+                {height_sql} AS height_m,
                 CAST({column_sql} AS VARCHAR) AS filter_value,
                 {color_sql} AS __color
             FROM buildings AS b, envelope
@@ -4465,7 +4471,7 @@ def lookup_buildings_mvt(
         )
         SELECT ST_AsMVT(tile_rows, 'buildings', 4096, 'geom')
         FROM (
-            SELECT geom, building_id, filter_value, __color
+            SELECT geom, building_id, height_m, filter_value, __color
             FROM filtered
             WHERE geom IS NOT NULL
         ) AS tile_rows;

@@ -115,7 +115,11 @@ const emptyFeatureCollection = {
 const viewFilterSourceId = "view-filter-buildings";
 const viewFilterFillLayerId = "view-filter-buildings-fill";
 const viewFilterOutlineLayerId = "view-filter-buildings-outline";
+const viewFilter3dLayerId = "view-filter-buildings-extrusion";
 const viewFilterSourceLayer = "buildings";
+const building3dSourceId = "buildings-3d";
+const building3dLayerId = "buildings-3d-extrusion";
+const selectedBuilding3dLayerId = "selected-building-3d-extrusion";
 const mapElement = document.getElementById("map");
 const viewFilterMinZoom = Number(mapElement?.dataset.filterViewMinZoom || 15);
 const viewFilterMaxTileZoom = Number(mapElement?.dataset.filterViewMaxTileZoom || 17);
@@ -295,6 +299,11 @@ const IMPORTED_LAYER_IDS = [
 ];
 const defaultBasemapId = getStoredBasemapId();
 let overlayLayerOrder = getStoredOverlayLayerOrder();
+let buildingDimensionMode = "2d";
+let buildingDimensionButton = null;
+let buildingDimensionSelect = null;
+let building3dSourceVersion = Date.now();
+let selectedBuildingFeatureId = null;
 let overlayOrderButton = null;
 let overlayOrderSelect = null;
 let exposureRefreshButton = null;
@@ -343,6 +352,76 @@ function setBasemap(id) {
   }
 }
 
+function buildingExtrusionHeight() {
+  return ["min", 500, ["max", 3, ["to-number", ["get", "height_m"], 3]]];
+}
+
+function building3dTileUrl() {
+  const params = new URLSearchParams({
+    column: "building_id",
+    value: window.filterViewAll?.allValue?.() || "__ALL__",
+    source_version: String(building3dSourceVersion)
+  });
+  return `${window.location.origin}/api/tiles/{z}/{x}/{y}.mvt?${params.toString()}`;
+}
+
+function refreshBuilding3dTiles() {
+  const source = map.getSource(building3dSourceId);
+  if (!source?.setTiles) return;
+  building3dSourceVersion += 1;
+  source.setTiles([building3dTileUrl()]);
+}
+
+function setSelectedBuildingFeatureId(buildingId) {
+  selectedBuildingFeatureId = buildingId ?? null;
+  const exclusionFilter = selectedBuildingFeatureId === null
+    ? null
+    : ["!=", ["get", "building_id"], selectedBuildingFeatureId];
+  for (const layerId of [building3dLayerId, viewFilter3dLayerId]) {
+    if (map.getLayer(layerId)) {
+      map.setFilter(layerId, exclusionFilter);
+    }
+  }
+}
+
+function syncBuildingDimensionLayers() {
+  const is3d = buildingDimensionMode === "3d";
+  const visibility = (layerId, visible) => {
+    if (map.getLayer(layerId)) {
+      map.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none");
+    }
+  };
+
+  visibility(building3dLayerId, is3d && !activeViewFilter);
+  visibility(viewFilter3dLayerId, is3d && Boolean(activeViewFilter));
+  visibility(selectedBuilding3dLayerId, is3d);
+  visibility(viewFilterFillLayerId, !is3d);
+  visibility(viewFilterOutlineLayerId, !is3d);
+  visibility("selected-building-fill", !is3d);
+  visibility("selected-building-outline", !is3d);
+}
+
+function setBuildingDimensionMode(mode, { animate = true } = {}) {
+  buildingDimensionMode = mode === "3d" ? "3d" : "2d";
+  const is3d = buildingDimensionMode === "3d";
+  syncBuildingDimensionLayers();
+
+  if (buildingDimensionButton) {
+    buildingDimensionButton.textContent = is3d ? "3D" : "2D";
+    buildingDimensionButton.classList.toggle("is-active", is3d);
+    buildingDimensionButton.setAttribute("aria-pressed", is3d ? "true" : "false");
+  }
+  if (buildingDimensionSelect) {
+    buildingDimensionSelect.value = buildingDimensionMode;
+  }
+
+  map.easeTo({
+    pitch: is3d ? 55 : 0,
+    bearing: is3d ? -17.5 : 0,
+    duration: animate ? 500 : 0
+  });
+}
+
 class BasemapControl {
   onAdd(mapInstance) {
     this.map = mapInstance;
@@ -385,6 +464,62 @@ class BasemapControl {
   }
 
   onRemove() {
+    this.container?.parentNode?.removeChild(this.container);
+    this.map = undefined;
+  }
+}
+
+class BuildingDimensionControl {
+  onAdd(mapInstance) {
+    this.map = mapInstance;
+    this.container = document.createElement("div");
+    this.container.className = "maplibregl-ctrl maplibregl-ctrl-group basemap-control dimension-control";
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "basemap-control-button dimension-control-button";
+    button.textContent = "2D";
+    button.setAttribute("aria-label", "Choose 2D or 3D building view");
+    button.setAttribute("title", "Choose 2D or 3D building view");
+
+    const select = document.createElement("select");
+    select.className = "basemap-control-select dimension-control-select";
+    select.setAttribute("aria-label", "Building view");
+
+    for (const [value, label] of [["2d", "2D"], ["3d", "3D"]]) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      select.appendChild(option);
+    }
+
+    select.value = buildingDimensionMode;
+    select.addEventListener("change", () => {
+      setBuildingDimensionMode(select.value);
+      this.container.classList.remove("open");
+    });
+    button.addEventListener("click", () => {
+      this.container.classList.toggle("open");
+      select.focus();
+    });
+    select.addEventListener("blur", () => {
+      window.setTimeout(() => this.container.classList.remove("open"), 120);
+    });
+
+    this.container.addEventListener("mousedown", (event) => event.stopPropagation());
+    this.container.addEventListener("dblclick", (event) => event.stopPropagation());
+    this.container.append(button, select);
+    this.button = button;
+    this.select = select;
+    buildingDimensionButton = button;
+    buildingDimensionSelect = select;
+    setBuildingDimensionMode(buildingDimensionMode, { animate: false });
+    return this.container;
+  }
+
+  onRemove() {
+    if (buildingDimensionButton === this.button) buildingDimensionButton = null;
+    if (buildingDimensionSelect === this.select) buildingDimensionSelect = null;
     this.container?.parentNode?.removeChild(this.container);
     this.map = undefined;
   }
@@ -513,6 +648,7 @@ const map = new maplibregl.Map({
 
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-left");
 map.addControl(new BasemapControl(), "top-left");
+map.addControl(new BuildingDimensionControl(), "top-left");
 map.addControl(new OverlayOrderControl(), "top-left");
 map.addControl(new ExposureRefreshControl(), "top-left");
 
@@ -586,6 +722,7 @@ async function loadDataSources() {
     await window.exposureEnrichmentFields?.load();
     await loadViewFilterFields();
     clearViewFilter("Choose a column and value to color polygons in the current view.");
+    refreshBuilding3dTiles();
     setDataSourceMessage("Choose a building lookup database.", "success");
   } catch (error) {
     setDataSourceMessage(error.message, "error");
@@ -679,6 +816,7 @@ async function applySelectedDataSource() {
     await window.exposureEnrichmentFields?.load();
     await loadViewFilterFields();
     clearViewFilter("Choose a column and value to color polygons in the current view.");
+    refreshBuilding3dTiles();
     setDataSourceMessage("Active lookup database updated.", "success");
     statusEl.textContent = "Ready";
   } catch (error) {
@@ -697,6 +835,31 @@ function setDataSourceMessage(message, type = "") {
 loadDataSources();
 
 map.on("load", () => {
+  map.addSource(building3dSourceId, {
+    type: "vector",
+    tiles: [building3dTileUrl()],
+    minzoom: viewFilterMinZoom,
+    maxzoom: viewFilterMaxTileZoom
+  });
+
+  map.addLayer({
+    id: building3dLayerId,
+    type: "fill-extrusion",
+    source: building3dSourceId,
+    "source-layer": viewFilterSourceLayer,
+    minzoom: viewFilterMinZoom,
+    layout: {
+      visibility: buildingDimensionMode === "3d" ? "visible" : "none"
+    },
+    paint: {
+      "fill-extrusion-color": "#78909c",
+      "fill-extrusion-height": buildingExtrusionHeight(),
+      "fill-extrusion-base": 0,
+      "fill-extrusion-opacity": 0.78,
+      "fill-extrusion-vertical-gradient": true
+    }
+  });
+
   map.addSource("exposure-points", {
     type: "geojson",
     data: emptyFeatureCollection,
@@ -782,6 +945,25 @@ map.on("load", () => {
     paint: {
       "fill-color": "#ffb703",
       "fill-opacity": 0.42
+    },
+    layout: {
+      visibility: buildingDimensionMode === "3d" ? "none" : "visible"
+    }
+  });
+
+  map.addLayer({
+    id: selectedBuilding3dLayerId,
+    type: "fill-extrusion",
+    source: "selected-building",
+    layout: {
+      visibility: buildingDimensionMode === "3d" ? "visible" : "none"
+    },
+    paint: {
+      "fill-extrusion-color": "#ffb703",
+      "fill-extrusion-height": buildingExtrusionHeight(),
+      "fill-extrusion-base": 0,
+      "fill-extrusion-opacity": 1,
+      "fill-extrusion-vertical-gradient": false
     }
   });
 
@@ -795,6 +977,7 @@ map.on("load", () => {
     }
   });
 
+  syncBuildingDimensionLayers();
   applyOverlayLayerOrder();
 });
 
@@ -936,6 +1119,7 @@ async function renderExposurePointDetails(feature) {
   } catch (error) {
     selectedBuilding = null;
     map.getSource("selected-building")?.setData(selectedSource);
+    setSelectedBuildingFeatureId(null);
     emptyEl.classList.add("hidden");
     detailsEl.classList.remove("hidden");
     matchTypeEl.textContent = "Exposure point";
@@ -951,6 +1135,7 @@ function renderExposureRow(payload, { csvCount = 1 } = {}) {
   const values = row.values || {};
   selectedBuilding = null;
   map.getSource("selected-building")?.setData(selectedSource);
+  setSelectedBuildingFeatureId(null);
 
   emptyEl.classList.add("hidden");
   detailsEl.classList.remove("hidden");
@@ -983,7 +1168,8 @@ function renderBuilding(payload) {
     type: "Feature",
     geometry: building.geometry,
     properties: {
-      building_id: building.building_id
+      building_id: building.building_id,
+      height_m: building.height_m
     }
   };
 
@@ -991,6 +1177,7 @@ function renderBuilding(payload) {
     type: "FeatureCollection",
     features: [feature]
   });
+  setSelectedBuildingFeatureId(building.building_id);
 
   emptyEl.classList.add("hidden");
   detailsEl.classList.remove("hidden");
@@ -1266,6 +1453,9 @@ function renderViewFilterValueOptions(values) {
 }
 
 function removeViewFilterLayer() {
+  if (map.getLayer(viewFilter3dLayerId)) {
+    map.removeLayer(viewFilter3dLayerId);
+  }
   if (map.getLayer(viewFilterFillLayerId)) {
     map.removeLayer(viewFilterFillLayerId);
   }
@@ -1350,6 +1540,27 @@ function renderViewFilterLayer(tileUrl) {
       ]
     }
   });
+
+  map.addLayer({
+    id: viewFilter3dLayerId,
+    type: "fill-extrusion",
+    source: viewFilterSourceId,
+    "source-layer": viewFilterSourceLayer,
+    minzoom: viewFilterMinZoom,
+    layout: {
+      visibility: buildingDimensionMode === "3d" ? "visible" : "none"
+    },
+    paint: {
+      "fill-extrusion-color": ["coalesce", ["get", "__color"], "#64748b"],
+      "fill-extrusion-height": buildingExtrusionHeight(),
+      "fill-extrusion-base": 0,
+      "fill-extrusion-opacity": 1,
+      "fill-extrusion-vertical-gradient": false
+    }
+  });
+
+  setSelectedBuildingFeatureId(selectedBuildingFeatureId);
+  syncBuildingDimensionLayers();
 }
 
 function applyViewFilterLegendColors(legend) {
@@ -1366,6 +1577,13 @@ function applyViewFilterLegendColors(legend) {
   map.setPaintProperty(viewFilterFillLayerId, "fill-color", colorExpression);
   if (map.getLayer(viewFilterOutlineLayerId)) {
     map.setPaintProperty(viewFilterOutlineLayerId, "line-color", colorExpression);
+  }
+  if (map.getLayer(viewFilter3dLayerId)) {
+    map.setPaintProperty(
+      viewFilter3dLayerId,
+      "fill-extrusion-color",
+      colorExpression
+    );
   }
 }
 
@@ -1472,6 +1690,7 @@ function clearViewFilterLayer() {
   }
   viewFilterTileUrlActive = "";
   removeViewFilterLayer();
+  syncBuildingDimensionLayers();
   window.filterViewAll?.clearLegend();
 }
 
@@ -2266,6 +2485,7 @@ function formatInteger(value) {
 function clearSelection() {
   selectedBuilding = null;
   map.getSource("selected-building")?.setData(selectedSource);
+  setSelectedBuildingFeatureId(null);
   detailsEl.classList.add("hidden");
   emptyEl.classList.remove("hidden");
 }

@@ -1677,6 +1677,16 @@ button:focus-visible,
   box-shadow: 0 0 0 3px var(--focus);
 }
 
+.dimension-control .dimension-control-button {
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.dimension-control .dimension-control-button.is-active {
+  background: rgba(15, 118, 110, 0.14);
+  color: #0f766e;
+}
+
 .layer-order-control {
   position: relative;
   overflow: visible;
