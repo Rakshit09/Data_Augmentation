@@ -287,8 +287,629 @@ const OVERLAY_ORDER_EXPOSURE_TOP = "exposure-top";
 const EXPOSURE_POINT_LAYER_IDS = [
   "exposure-points-halo",
   "exposure-points-circle",
-  "exposure-points-count"
+  "exposure-points-count",
+  "exposure-points-marker",
+  "exposure-points-tag"
 ];
+const EXPOSURE_ALWAYS_BELOW_LAYER_IDS = [
+  viewFilterFillLayerId,
+  viewFilterOutlineLayerId,
+  viewFilter3dLayerId,
+  "selected-building-fill",
+  "selected-building-outline"
+];
+const EXPOSURE_POINT_INTERACTIVE_LAYER_IDS = [
+  "exposure-points-circle",
+  "exposure-points-marker"
+];
+const EXPOSURE_MARKER_ICON_ID = "exposure-marker-icon";
+const EXPOSURE_MARKER_MATCH_ICON_ID = "exposure-marker-match-icon";
+const EXPOSURE_POINT_TAG_LAYER_ID = "exposure-points-tag";
+const EXPOSURE_MARKER_MIN_ZOOM = exposureRawPointZoom;
+const EXPOSURE_POINT_DISPLAY_DOT = "dot";
+const EXPOSURE_POINT_DISPLAY_MARKER = "marker";
+const EXPOSURE_POINT_STYLE_SIZE_OPTIONS = [
+  { value: "80", label: "80" },
+  { value: "100", label: "100" },
+  { value: "130", label: "130" },
+  { value: "160", label: "160" }
+];
+const EXPOSURE_POINT_STYLE_DEFAULTS = Object.freeze({
+  display: EXPOSURE_POINT_DISPLAY_DOT,
+  dotColor: "#0f766e",
+  dotSize: 100,
+  markerColor: "#ff1a1a",
+  markerSize: 100
+});
+const EXPOSURE_TAG_SIZE_OPTIONS = Array.from(
+  { length: 31 },
+  (_unused, value) => ({ value: String(value), label: String(value) })
+);
+const EXPOSURE_TAG_DEFAULTS = Object.freeze({
+  column: "",
+  color: "#063f35",
+  size: 12
+});
+const EXPOSURE_COLOR_RULE_DEFAULTS = Object.freeze({
+  column: "",
+  value: "",
+  color: "#c2410c"
+});
+const EXPOSURE_TAG_LETTER_SPACING = 0.05;
+
+function loadExposureMarkerImage(fillColor = "#ff1a1a") {
+  const markerColor = normalizeHexColor(fillColor, "#ff1a1a");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">` +
+    `<path d="M32 2C20 2 10.5 11.5 10.5 23.5C10.5 39 32 61 32 61C32 61 53.5 39 53.5 23.5C53.5 11.5 44 2 32 2Z" fill="${markerColor}" stroke="#f8fffe" stroke-width="2.5"/>` +
+    `<circle cx="32" cy="24" r="10" fill="#ffffff"/>` +
+    `</svg>`;
+  return new Promise((resolve, reject) => {
+    const image = new Image(64, 64);
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Failed to load exposure marker icon"));
+    image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+  });
+}
+
+function normalizeHexColor(value, fallback = "#0f766e") {
+  const raw = String(value || "").trim();
+  if (/^#[0-9a-f]{6}$/i.test(raw)) {
+    return raw.toLowerCase();
+  }
+  const shortHex = raw.match(/^#([0-9a-f]{3})$/i);
+  if (shortHex) {
+    const [red, green, blue] = shortHex[1].split("");
+    return `#${red}${red}${green}${green}${blue}${blue}`.toLowerCase();
+  }
+  return fallback;
+}
+
+function hexColorChannels(value, fallback = "#0f766e") {
+  const normalized = normalizeHexColor(value, fallback);
+  return {
+    red: Number.parseInt(normalized.slice(1, 3), 16),
+    green: Number.parseInt(normalized.slice(3, 5), 16),
+    blue: Number.parseInt(normalized.slice(5, 7), 16)
+  };
+}
+
+function darkenHexColor(value, amount = 0.32) {
+  const factor = Math.max(0.08, 1 - Math.max(0, Math.min(0.92, amount)));
+  const { red, green, blue } = hexColorChannels(value);
+  const scaleChannel = (channel) => Math.max(0, Math.min(255, Math.round(channel * factor)))
+    .toString(16)
+    .padStart(2, "0");
+  return `#${scaleChannel(red)}${scaleChannel(green)}${scaleChannel(blue)}`;
+}
+
+function rgbaColor(value, alpha) {
+  const numericAlpha = Number(alpha);
+  const normalizedAlpha = Number.isFinite(numericAlpha)
+    ? Math.max(0, Math.min(1, numericAlpha))
+    : 1;
+  const { red, green, blue } = hexColorChannels(value);
+  return `rgba(${red}, ${green}, ${blue}, ${normalizedAlpha})`;
+}
+
+function exposurePointSizeValue(value, fallback = 100) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? Math.round(numeric) : fallback;
+}
+
+function exposurePointSizeScale(value, fallback = 100) {
+  return exposurePointSizeValue(value, fallback) / 100;
+}
+
+function sanitizeExposurePointStyle(style) {
+  return {
+    display: style.display === EXPOSURE_POINT_DISPLAY_DOT
+      ? EXPOSURE_POINT_DISPLAY_DOT
+      : EXPOSURE_POINT_DISPLAY_MARKER,
+    dotColor: normalizeHexColor(style.dotColor, EXPOSURE_POINT_STYLE_DEFAULTS.dotColor),
+    dotSize: exposurePointSizeValue(style.dotSize, EXPOSURE_POINT_STYLE_DEFAULTS.dotSize),
+    markerColor: normalizeHexColor(style.markerColor, EXPOSURE_POINT_STYLE_DEFAULTS.markerColor),
+    markerSize: exposurePointSizeValue(style.markerSize, EXPOSURE_POINT_STYLE_DEFAULTS.markerSize)
+  };
+}
+
+let exposurePointStyle = sanitizeExposurePointStyle({ ...EXPOSURE_POINT_STYLE_DEFAULTS });
+let exposurePointStyleButton = null;
+let exposurePointStyleControls = {};
+let exposureMarkerImageRequestId = 0;
+let exposureMarkerImageColor = "";
+let exposureMarkerMatchImageColor = "";
+let exposureTagStyle = sanitizeExposureTagStyle({ ...EXPOSURE_TAG_DEFAULTS });
+let exposureTagButton = null;
+let exposureTagControls = {};
+let exposureColorRule = sanitizeExposureColorRule({ ...EXPOSURE_COLOR_RULE_DEFAULTS });
+
+function scaledCountRadiusExpression(stops, scale) {
+  const expression = ["interpolate", ["linear"], ["coalesce", ["get", "csv_count"], 1]];
+  for (const [input, output] of stops) {
+    expression.push(input, Number((output * scale).toFixed(3)));
+  }
+  return expression;
+}
+
+function exposureDotOpacityExpression(maxOpacity) {
+  if (exposurePointStyle.display !== EXPOSURE_POINT_DISPLAY_MARKER) {
+    return maxOpacity;
+  }
+  return [
+    "interpolate",
+    ["linear"],
+    ["zoom"],
+    Math.max(0, EXPOSURE_MARKER_MIN_ZOOM - 0.15), maxOpacity,
+    EXPOSURE_MARKER_MIN_ZOOM + 0.45, 0
+  ];
+}
+
+function exposureMarkerOpacityExpression() {
+  if (exposurePointStyle.display !== EXPOSURE_POINT_DISPLAY_MARKER) {
+    return 0;
+  }
+  return 1;
+}
+
+function exposureDotHaloRadiusExpression() {
+  return scaledCountRadiusExpression(
+    [[1, 5], [20, 8], [200, 12]],
+    exposurePointSizeScale(exposurePointStyle.dotSize, EXPOSURE_POINT_STYLE_DEFAULTS.dotSize)
+  );
+}
+
+function exposureDotCircleRadiusExpression() {
+  return scaledCountRadiusExpression(
+    [[1, 3], [20, 5], [200, 8]],
+    exposurePointSizeScale(exposurePointStyle.dotSize, EXPOSURE_POINT_STYLE_DEFAULTS.dotSize)
+  );
+}
+
+function exposureCountTextSizeExpression() {
+  const scale = exposurePointSizeScale(exposurePointStyle.dotSize, EXPOSURE_POINT_STYLE_DEFAULTS.dotSize);
+  return [
+    "interpolate",
+    ["linear"],
+    ["zoom"],
+    9, Number((10 * scale).toFixed(3)),
+    14, Number((12 * scale).toFixed(3)),
+    18, Number((13 * scale).toFixed(3))
+  ];
+}
+
+function exposureMarkerSizeExpression() {
+  const scale = exposurePointSizeScale(exposurePointStyle.markerSize, EXPOSURE_POINT_STYLE_DEFAULTS.markerSize);
+  return [
+    "interpolate",
+    ["linear"],
+    ["zoom"],
+    EXPOSURE_MARKER_MIN_ZOOM, Number((0.7 * scale).toFixed(3)),
+    18, Number((1.7 * scale).toFixed(3)),
+    20, Number((2.1 * scale).toFixed(3))
+  ];
+}
+
+function sanitizeExposureColorRule(rule) {
+  return {
+    column: String(rule.column || "").trim(),
+    value: String(rule.value || "").trim(),
+    color: normalizeHexColor(rule.color, EXPOSURE_COLOR_RULE_DEFAULTS.color)
+  };
+}
+
+function selectedExposureColorColumn() {
+  const column = String(exposureColorRule.column || "").trim();
+  return column && currentUploadColumns.includes(column) ? column : "";
+}
+
+function selectedExposureColorValue() {
+  const value = String(exposureColorRule.value || "").trim();
+  return selectedExposureColorColumn() && value ? value : "";
+}
+
+function exposureColorHighlightActive() {
+  return Boolean(selectedExposureColorColumn() && selectedExposureColorValue());
+}
+
+function exposurePointMatchExpression(matchedOutput, defaultOutput) {
+  if (!exposureColorHighlightActive()) {
+    return defaultOutput;
+  }
+  return [
+    "case",
+    ["==", ["coalesce", ["get", "csv_color_match"], 0], 1],
+    matchedOutput,
+    defaultOutput
+  ];
+}
+
+function exposureMarkerIconImageExpression() {
+  // Referencing the match icon before it is added leaves matched symbols without an icon until the next re-layout.
+  if (!map.hasImage(EXPOSURE_MARKER_MATCH_ICON_ID)) {
+    return EXPOSURE_MARKER_ICON_ID;
+  }
+  return exposurePointMatchExpression(EXPOSURE_MARKER_MATCH_ICON_ID, EXPOSURE_MARKER_ICON_ID);
+}
+
+function exposureMarkerLayerConfig() {
+  return {
+    id: "exposure-points-marker",
+    type: "symbol",
+    source: "exposure-points",
+    minzoom: EXPOSURE_MARKER_MIN_ZOOM,
+    layout: {
+      "icon-image": exposureMarkerIconImageExpression(),
+      "icon-size": exposureMarkerSizeExpression(),
+      "icon-anchor": "bottom",
+      "icon-allow-overlap": true,
+      "icon-ignore-placement": true
+    },
+    paint: {
+      "icon-opacity": exposureMarkerOpacityExpression()
+    }
+  };
+}
+
+function exposurePointStyleModeLabel() {
+  return exposurePointStyle.display === EXPOSURE_POINT_DISPLAY_MARKER
+    ? "location icon"
+    : "dot";
+}
+
+function syncExposurePointStyleControl() {
+  if (!exposurePointStyleButton) return;
+
+  const isMarkerMode = exposurePointStyle.display === EXPOSURE_POINT_DISPLAY_MARKER;
+  const highlightColumn = selectedExposureColorColumn();
+  const highlightValue = selectedExposureColorValue();
+  const highlightActive = Boolean(highlightColumn && highlightValue);
+  const highlightTitle = highlightActive
+    ? ` Highlight ${highlightColumn} = ${highlightValue}.`
+    : "";
+  exposurePointStyleButton.classList.toggle("is-marker-mode", isMarkerMode);
+  exposurePointStyleButton.style.setProperty("--exposure-point-style-dot", exposurePointStyle.dotColor);
+  exposurePointStyleButton.style.setProperty("--exposure-point-style-marker", exposurePointStyle.markerColor);
+  exposurePointStyleButton.setAttribute(
+    "aria-label",
+    `Exposure points are shown as ${exposurePointStyleModeLabel()}.${highlightTitle} Click to change style.`
+  );
+  exposurePointStyleButton.setAttribute(
+    "title",
+    highlightActive
+      ? `Exposure style: ${exposurePointStyleModeLabel()} · ${highlightColumn}=${highlightValue}`
+      : `Exposure style: ${exposurePointStyleModeLabel()}`
+  );
+
+  const {
+    modeSelect,
+    dotColorInput,
+    dotSizeSelect,
+    markerColorInput,
+    markerSizeSelect,
+    highlightColumnSelect,
+    highlightValueInput,
+    highlightColorInput
+  } = exposurePointStyleControls;
+  if (modeSelect) modeSelect.value = exposurePointStyle.display;
+  if (dotColorInput) dotColorInput.value = exposurePointStyle.dotColor;
+  if (dotSizeSelect) dotSizeSelect.value = String(exposurePointStyle.dotSize);
+  if (markerColorInput) markerColorInput.value = exposurePointStyle.markerColor;
+  if (markerSizeSelect) markerSizeSelect.value = String(exposurePointStyle.markerSize);
+  if (highlightColumnSelect) {
+    highlightColumnSelect.innerHTML = [
+      '<option value="">None</option>',
+      ...currentUploadColumns.map((column) => `<option value="${escapeHtml(column)}">${escapeHtml(column)}</option>`)
+    ].join("");
+    highlightColumnSelect.value = highlightColumn;
+  }
+  if (highlightValueInput) {
+    highlightValueInput.value = exposureColorRule.value;
+    highlightValueInput.disabled = !highlightColumn;
+  }
+  if (highlightColorInput) {
+    highlightColorInput.value = exposureColorRule.color;
+    highlightColorInput.disabled = !highlightColumn;
+  }
+}
+
+async function ensureExposureMarkerLayer() {
+  if (typeof map === "undefined" || !map.getSource("exposure-points")) {
+    return;
+  }
+
+  const markerLayerId = "exposure-points-marker";
+  const layerExists = Boolean(map.getLayer(markerLayerId));
+  const highlightActive = exposureColorHighlightActive();
+  const defaultMarkerColor = exposurePointStyle.markerColor;
+  const matchedMarkerColor = highlightActive ? exposureColorRule.color : defaultMarkerColor;
+  const defaultImageExists = map.hasImage(EXPOSURE_MARKER_ICON_ID);
+  const matchImageExists = map.hasImage(EXPOSURE_MARKER_MATCH_ICON_ID);
+  const needsDefaultImageUpdate = !defaultImageExists || exposureMarkerImageColor !== defaultMarkerColor;
+  const needsMatchImageUpdate = highlightActive && (!matchImageExists || exposureMarkerMatchImageColor !== matchedMarkerColor);
+  const beforeLayerId = map.getLayer("selected-building-fill") ? "selected-building-fill" : "";
+
+  if (!needsDefaultImageUpdate && !needsMatchImageUpdate) {
+    if (!layerExists) {
+      if (beforeLayerId) {
+        map.addLayer(exposureMarkerLayerConfig(), beforeLayerId);
+      } else {
+        map.addLayer(exposureMarkerLayerConfig());
+      }
+      applyOverlayLayerOrder();
+      return;
+    }
+
+    map.setLayoutProperty(markerLayerId, "icon-size", exposureMarkerSizeExpression());
+    map.setLayoutProperty(markerLayerId, "icon-image", exposureMarkerIconImageExpression());
+    map.setPaintProperty(markerLayerId, "icon-opacity", exposureMarkerOpacityExpression());
+    applyExposureTagStyle();
+    return;
+  }
+
+  const requestId = ++exposureMarkerImageRequestId;
+
+  try {
+    const [defaultImage, matchImage] = await Promise.all([
+      needsDefaultImageUpdate ? loadExposureMarkerImage(defaultMarkerColor) : Promise.resolve(null),
+      needsMatchImageUpdate ? loadExposureMarkerImage(matchedMarkerColor) : Promise.resolve(null)
+    ]);
+    if (requestId !== exposureMarkerImageRequestId || !map.getSource("exposure-points")) {
+      return;
+    }
+
+    if (defaultImage) {
+      if (map.hasImage(EXPOSURE_MARKER_ICON_ID)) {
+        map.updateImage(EXPOSURE_MARKER_ICON_ID, defaultImage);
+      } else {
+        map.addImage(EXPOSURE_MARKER_ICON_ID, defaultImage, { pixelRatio: 2 });
+      }
+      exposureMarkerImageColor = defaultMarkerColor;
+    }
+    if (matchImage) {
+      if (map.hasImage(EXPOSURE_MARKER_MATCH_ICON_ID)) {
+        map.updateImage(EXPOSURE_MARKER_MATCH_ICON_ID, matchImage);
+      } else {
+        map.addImage(EXPOSURE_MARKER_MATCH_ICON_ID, matchImage, { pixelRatio: 2 });
+      }
+      exposureMarkerMatchImageColor = matchedMarkerColor;
+    }
+
+    if (!map.getLayer(markerLayerId)) {
+      if (beforeLayerId) {
+        map.addLayer(exposureMarkerLayerConfig(), beforeLayerId);
+      } else {
+        map.addLayer(exposureMarkerLayerConfig());
+      }
+      applyOverlayLayerOrder();
+      applyExposureTagStyle();
+      return;
+    }
+
+    map.setLayoutProperty(markerLayerId, "icon-size", exposureMarkerSizeExpression());
+    map.setLayoutProperty(markerLayerId, "icon-image", exposureMarkerIconImageExpression());
+    map.setPaintProperty(markerLayerId, "icon-opacity", exposureMarkerOpacityExpression());
+    applyExposureTagStyle();
+  } catch (error) {
+    console.error("Failed to load exposure marker icon", error);
+  }
+}
+
+function applyExposurePointStyle() {
+  // isStyleLoaded() is false while tiles load, which would silently drop style updates.
+  if (typeof map === "undefined" || !map.getSource("exposure-points")) return;
+
+  const dotStrokeColor = darkenHexColor(exposurePointStyle.dotColor, 0.34);
+  const dotLabelColor = darkenHexColor(exposurePointStyle.dotColor, 0.5);
+  const highlightStrokeColor = darkenHexColor(exposureColorRule.color, 0.34);
+  const highlightLabelColor = darkenHexColor(exposureColorRule.color, 0.5);
+
+  if (map.getLayer("exposure-points-halo")) {
+    map.setPaintProperty("exposure-points-halo", "circle-opacity", exposureDotOpacityExpression(0.84));
+    map.setPaintProperty("exposure-points-halo", "circle-radius", exposureDotHaloRadiusExpression());
+    map.setPaintProperty(
+      "exposure-points-halo",
+      "circle-stroke-color",
+      exposurePointMatchExpression(rgbaColor(highlightStrokeColor, 0.16), rgbaColor(dotStrokeColor, 0.16))
+    );
+  }
+
+  if (map.getLayer("exposure-points-circle")) {
+    map.setPaintProperty(
+      "exposure-points-circle",
+      "circle-color",
+      exposurePointMatchExpression(exposureColorRule.color, exposurePointStyle.dotColor)
+    );
+    map.setPaintProperty("exposure-points-circle", "circle-opacity", exposureDotOpacityExpression(0.88));
+    map.setPaintProperty("exposure-points-circle", "circle-radius", exposureDotCircleRadiusExpression());
+    map.setPaintProperty(
+      "exposure-points-circle",
+      "circle-stroke-color",
+      exposurePointMatchExpression(highlightStrokeColor, dotStrokeColor)
+    );
+  }
+
+  if (map.getLayer("exposure-points-count")) {
+    map.setLayoutProperty("exposure-points-count", "text-size", exposureCountTextSizeExpression());
+    map.setPaintProperty(
+      "exposure-points-count",
+      "text-color",
+      exposurePointMatchExpression(highlightLabelColor, dotLabelColor)
+    );
+  }
+
+  if (map.getLayer("exposure-points-marker")) {
+    map.setLayoutProperty("exposure-points-marker", "icon-size", exposureMarkerSizeExpression());
+    map.setLayoutProperty("exposure-points-marker", "icon-image", exposureMarkerIconImageExpression());
+    map.setPaintProperty("exposure-points-marker", "icon-opacity", exposureMarkerOpacityExpression());
+  }
+
+  applyExposureTagStyle();
+  void ensureExposureMarkerLayer();
+}
+
+function setExposurePointStyle(nextStyle) {
+  exposurePointStyle = sanitizeExposurePointStyle({
+    ...exposurePointStyle,
+    ...nextStyle
+  });
+  syncExposurePointStyleControl();
+  applyExposurePointStyle();
+}
+
+function setExposureColorRule(nextRule, { refresh = false } = {}) {
+  const previousColumn = selectedExposureColorColumn();
+  const previousValue = selectedExposureColorValue();
+  exposureColorRule = sanitizeExposureColorRule({
+    ...exposureColorRule,
+    ...nextRule
+  });
+
+  const nextColumn = selectedExposureColorColumn();
+  const nextValue = selectedExposureColorValue();
+  syncExposurePointStyleControl();
+  applyExposurePointStyle();
+
+  if (activeExposureMap && (refresh || previousColumn !== nextColumn || previousValue !== nextValue)) {
+    activeExposureMap = {
+      ...activeExposureMap,
+      color_column: nextColumn,
+      color_value: nextValue
+    };
+    requestExposurePointRefresh();
+  }
+}
+
+function exposureTagSizeValue(value, fallback = 12) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? Math.round(numeric) : fallback;
+}
+
+function sanitizeExposureTagStyle(style) {
+  return {
+    column: String(style.column || "").trim(),
+    color: normalizeHexColor(style.color, EXPOSURE_TAG_DEFAULTS.color),
+    size: exposureTagSizeValue(style.size, EXPOSURE_TAG_DEFAULTS.size)
+  };
+}
+
+function selectedExposureTagColumn() {
+  const column = String(exposureTagStyle.column || "").trim();
+  return column && currentUploadColumns.includes(column) ? column : "";
+}
+
+function exposureTagLabelsVisible() {
+  return exposurePointStyle.display === EXPOSURE_POINT_DISPLAY_MARKER && Boolean(selectedExposureTagColumn());
+}
+
+function exposureTagTextOffset() {
+  const markerScale = exposurePointSizeScale(
+    exposurePointStyle.markerSize,
+    EXPOSURE_POINT_STYLE_DEFAULTS.markerSize
+  );
+  return [0, Number((-2.8 - (markerScale * 2.0)).toFixed(3))];
+}
+
+function syncExposureTagControl() {
+  if (!exposureTagButton) return;
+
+  const selectedColumn = selectedExposureTagColumn();
+  exposureTagButton.classList.toggle("is-active", Boolean(selectedColumn));
+  exposureTagButton.style.setProperty("--exposure-point-tag-color", exposureTagStyle.color);
+  exposureTagButton.setAttribute(
+    "aria-label",
+    selectedColumn
+      ? `Exposure tags use ${selectedColumn}. Click to change the tag column.`
+      : "Choose an exposure tag column."
+  );
+  exposureTagButton.setAttribute(
+    "title",
+    selectedColumn ? `Exposure tag: ${selectedColumn}` : "Exposure tags"
+  );
+
+  const { columnSelect, colorInput, sizeSelect } = exposureTagControls;
+  if (columnSelect) {
+    columnSelect.innerHTML = [
+      '<option value="">None</option>',
+      ...currentUploadColumns.map((column) => `<option value="${escapeHtml(column)}">${escapeHtml(column)}</option>`)
+    ].join("");
+    columnSelect.value = selectedColumn;
+  }
+  if (colorInput) colorInput.value = exposureTagStyle.color;
+  if (sizeSelect) sizeSelect.value = String(exposureTagStyle.size);
+}
+
+function ensureExposureTagLayer() {
+  if (typeof map === "undefined" || !map.getSource("exposure-points")) return;
+  if (!map.getLayer("exposure-points-marker") || map.getLayer(EXPOSURE_POINT_TAG_LAYER_ID)) return;
+
+  const layerConfig = {
+    id: EXPOSURE_POINT_TAG_LAYER_ID,
+    type: "symbol",
+    source: "exposure-points",
+    minzoom: EXPOSURE_MARKER_MIN_ZOOM,
+    filter: ["all", ["has", "csv_tag"], ["!=", ["coalesce", ["get", "csv_tag"], ""], ""]],
+    layout: {
+      "text-field": ["get", "csv_tag"],
+      "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+      "text-size": exposureTagStyle.size,
+      "text-letter-spacing": EXPOSURE_TAG_LETTER_SPACING,
+      "text-anchor": "bottom",
+      "text-offset": exposureTagTextOffset(),
+      "text-allow-overlap": true,
+      "text-ignore-placement": true
+    },
+    paint: {
+      "text-color": exposureTagStyle.color,
+      "text-opacity": exposureTagLabelsVisible() ? 1 : 0,
+      "text-halo-color": "rgba(255, 255, 255, 0.94)",
+      "text-halo-width": 1.25
+    }
+  };
+
+  const beforeLayerId = map.getLayer("selected-building-fill") ? "selected-building-fill" : "";
+  if (beforeLayerId) {
+    map.addLayer(layerConfig, beforeLayerId);
+  } else {
+    map.addLayer(layerConfig);
+  }
+  applyOverlayLayerOrder();
+}
+
+function applyExposureTagStyle() {
+  if (typeof map === "undefined" || !map.getSource("exposure-points")) return;
+  ensureExposureTagLayer();
+  if (!map.getLayer(EXPOSURE_POINT_TAG_LAYER_ID)) return;
+
+  map.setLayoutProperty(EXPOSURE_POINT_TAG_LAYER_ID, "text-size", exposureTagStyle.size);
+  map.setLayoutProperty(EXPOSURE_POINT_TAG_LAYER_ID, "text-letter-spacing", EXPOSURE_TAG_LETTER_SPACING);
+  map.setLayoutProperty(EXPOSURE_POINT_TAG_LAYER_ID, "text-offset", exposureTagTextOffset());
+  map.setPaintProperty(EXPOSURE_POINT_TAG_LAYER_ID, "text-color", exposureTagStyle.color);
+  map.setPaintProperty(EXPOSURE_POINT_TAG_LAYER_ID, "text-opacity", exposureTagLabelsVisible() ? 1 : 0);
+}
+
+function setExposureTagStyle(nextStyle, { refresh = false } = {}) {
+  const previousColumn = selectedExposureTagColumn();
+  exposureTagStyle = sanitizeExposureTagStyle({
+    ...exposureTagStyle,
+    ...nextStyle
+  });
+  if (!selectedExposureTagColumn() && exposureTagStyle.column) {
+    exposureTagStyle.column = "";
+  }
+
+  const nextColumn = selectedExposureTagColumn();
+  syncExposureTagControl();
+  applyExposureTagStyle();
+
+  if (activeExposureMap && (refresh || previousColumn !== nextColumn)) {
+    activeExposureMap = {
+      ...activeExposureMap,
+      tag_column: nextColumn
+    };
+    requestExposurePointRefresh();
+  }
+}
+
 const IMPORTED_LAYER_IDS = [
   "user-added-vector-fill",
   "user-added-vector-outline",
@@ -631,6 +1252,265 @@ class ExposureRefreshControl {
   }
 }
 
+class ExposurePointStyleControl {
+  onAdd(mapInstance) {
+    this.map = mapInstance;
+    this.container = document.createElement("div");
+    this.container.className = "maplibregl-ctrl maplibregl-ctrl-group exposure-point-style-control";
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "exposure-point-style-control-button";
+    button.innerHTML = '<span aria-hidden="true"></span>';
+    button.setAttribute("aria-haspopup", "dialog");
+    button.setAttribute("aria-expanded", "false");
+
+    const panel = document.createElement("div");
+    panel.className = "exposure-point-style-control-panel";
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-label", "Exposure point style");
+
+    const sizeOptions = EXPOSURE_POINT_STYLE_SIZE_OPTIONS
+      .map((option) => `<option value="${option.value}">${option.label}</option>`)
+      .join("");
+    panel.innerHTML = `
+      <label class="exposure-point-style-control-field">
+        <span>Point view</span>
+        <select class="exposure-point-style-control-select" data-setting="display">
+          <option value="${EXPOSURE_POINT_DISPLAY_MARKER}">Location icon</option>
+          <option value="${EXPOSURE_POINT_DISPLAY_DOT}">Dot</option>
+        </select>
+      </label>
+      <section class="exposure-point-style-control-section">
+        <h3>Dot</h3>
+        <div class="exposure-point-style-control-row">
+          <label class="exposure-point-style-control-field">
+            <span>Color</span>
+            <input class="exposure-point-style-control-color" data-setting="dot-color" type="color">
+          </label>
+          <label class="exposure-point-style-control-field">
+            <span>Size</span>
+            <select class="exposure-point-style-control-size" data-setting="dot-size">${sizeOptions}</select>
+          </label>
+        </div>
+      </section>
+      <section class="exposure-point-style-control-section">
+        <h3>Location icon</h3>
+        <div class="exposure-point-style-control-row">
+          <label class="exposure-point-style-control-field">
+            <span>Color</span>
+            <input class="exposure-point-style-control-color" data-setting="marker-color" type="color">
+          </label>
+          <label class="exposure-point-style-control-field">
+            <span>Size</span>
+            <select class="exposure-point-style-control-size" data-setting="marker-size">${sizeOptions}</select>
+          </label>
+        </div>
+      </section>
+      <section class="exposure-point-style-control-section">
+        <h3>Highlight matches</h3>
+        <label class="exposure-point-style-control-field">
+          <span>Column</span>
+          <select class="exposure-point-style-control-select" data-setting="highlight-column">
+            <option value="">None</option>
+          </select>
+        </label>
+        <div class="exposure-point-style-control-row">
+          <label class="exposure-point-style-control-field">
+            <span>Value</span>
+            <input class="exposure-point-style-control-input" data-setting="highlight-value" type="text" placeholder="VG">
+          </label>
+          <label class="exposure-point-style-control-field">
+            <span>Color</span>
+            <input class="exposure-point-style-control-color" data-setting="highlight-color" type="color">
+          </label>
+        </div>
+      </section>
+    `;
+
+    const modeSelect = panel.querySelector('[data-setting="display"]');
+    const dotColorInput = panel.querySelector('[data-setting="dot-color"]');
+    const dotSizeSelect = panel.querySelector('[data-setting="dot-size"]');
+    const markerColorInput = panel.querySelector('[data-setting="marker-color"]');
+    const markerSizeSelect = panel.querySelector('[data-setting="marker-size"]');
+    const highlightColumnSelect = panel.querySelector('[data-setting="highlight-column"]');
+    const highlightValueInput = panel.querySelector('[data-setting="highlight-value"]');
+    const highlightColorInput = panel.querySelector('[data-setting="highlight-color"]');
+
+    const setOpen = (isOpen) => {
+      this.container.classList.toggle("open", isOpen);
+      button.setAttribute("aria-expanded", isOpen ? "true" : "false");
+    };
+
+    button.addEventListener("click", () => {
+      const nextOpen = !this.container.classList.contains("open");
+      setOpen(nextOpen);
+      if (nextOpen) {
+        modeSelect?.focus();
+      }
+    });
+
+    this.container.addEventListener("focusout", () => {
+      window.setTimeout(() => {
+        if (!this.container.contains(document.activeElement)) {
+          setOpen(false);
+        }
+      }, 0);
+    });
+
+    modeSelect?.addEventListener("change", () => {
+      setExposurePointStyle({ display: modeSelect.value });
+    });
+    dotColorInput?.addEventListener("input", () => {
+      setExposurePointStyle({ dotColor: dotColorInput.value });
+    });
+    dotSizeSelect?.addEventListener("change", () => {
+      setExposurePointStyle({ dotSize: Number(dotSizeSelect.value || EXPOSURE_POINT_STYLE_DEFAULTS.dotSize) });
+    });
+    markerColorInput?.addEventListener("input", () => {
+      setExposurePointStyle({ markerColor: markerColorInput.value });
+    });
+    markerSizeSelect?.addEventListener("change", () => {
+      setExposurePointStyle({ markerSize: Number(markerSizeSelect.value || EXPOSURE_POINT_STYLE_DEFAULTS.markerSize) });
+    });
+    highlightColumnSelect?.addEventListener("change", () => {
+      setExposureColorRule({ column: highlightColumnSelect.value }, { refresh: true });
+    });
+    highlightValueInput?.addEventListener("change", () => {
+      setExposureColorRule({ value: highlightValueInput.value }, { refresh: true });
+    });
+    highlightColorInput?.addEventListener("input", () => {
+      setExposureColorRule({ color: highlightColorInput.value });
+    });
+
+    this.container.addEventListener("mousedown", (event) => event.stopPropagation());
+    this.container.addEventListener("dblclick", (event) => event.stopPropagation());
+    this.container.append(button, panel);
+    this.button = button;
+    exposurePointStyleButton = button;
+    exposurePointStyleControls = {
+      modeSelect,
+      dotColorInput,
+      dotSizeSelect,
+      markerColorInput,
+      markerSizeSelect,
+      highlightColumnSelect,
+      highlightValueInput,
+      highlightColorInput
+    };
+    syncExposurePointStyleControl();
+    return this.container;
+  }
+
+  onRemove() {
+    if (exposurePointStyleButton === this.button) {
+      exposurePointStyleButton = null;
+      exposurePointStyleControls = {};
+    }
+    this.container?.parentNode?.removeChild(this.container);
+    this.map = undefined;
+  }
+}
+
+class ExposurePointTagControl {
+  onAdd(mapInstance) {
+    this.map = mapInstance;
+    this.container = document.createElement("div");
+    this.container.className = "maplibregl-ctrl maplibregl-ctrl-group exposure-point-tag-control";
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "exposure-point-tag-control-button";
+    button.textContent = "Tag";
+    button.setAttribute("aria-haspopup", "dialog");
+    button.setAttribute("aria-expanded", "false");
+
+    const panel = document.createElement("div");
+    panel.className = "exposure-point-tag-control-panel";
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-label", "Exposure tag settings");
+
+    const sizeOptions = EXPOSURE_TAG_SIZE_OPTIONS
+      .map((option) => `<option value="${option.value}">${option.label}</option>`)
+      .join("");
+    panel.innerHTML = `
+      <label class="exposure-point-tag-control-field">
+        <span>Column</span>
+        <select class="exposure-point-tag-control-select" data-setting="column">
+          <option value="">None</option>
+        </select>
+      </label>
+      <div class="exposure-point-tag-control-row">
+        <label class="exposure-point-tag-control-field">
+          <span>Color</span>
+          <input class="exposure-point-tag-control-color" data-setting="color" type="color">
+        </label>
+        <label class="exposure-point-tag-control-field">
+          <span>Size</span>
+          <select class="exposure-point-tag-control-size" data-setting="size">${sizeOptions}</select>
+        </label>
+      </div>
+    `;
+
+    const columnSelect = panel.querySelector('[data-setting="column"]');
+    const colorInput = panel.querySelector('[data-setting="color"]');
+    const sizeSelect = panel.querySelector('[data-setting="size"]');
+
+    const setOpen = (isOpen) => {
+      this.container.classList.toggle("open", isOpen);
+      button.setAttribute("aria-expanded", isOpen ? "true" : "false");
+    };
+
+    button.addEventListener("click", () => {
+      const nextOpen = !this.container.classList.contains("open");
+      setOpen(nextOpen);
+      if (nextOpen) {
+        columnSelect?.focus();
+      }
+    });
+
+    this.container.addEventListener("focusout", () => {
+      window.setTimeout(() => {
+        if (!this.container.contains(document.activeElement)) {
+          setOpen(false);
+        }
+      }, 0);
+    });
+
+    columnSelect?.addEventListener("change", () => {
+      setExposureTagStyle({ column: columnSelect.value }, { refresh: true });
+    });
+    colorInput?.addEventListener("input", () => {
+      setExposureTagStyle({ color: colorInput.value });
+    });
+    sizeSelect?.addEventListener("change", () => {
+      setExposureTagStyle({ size: Number(sizeSelect.value || EXPOSURE_TAG_DEFAULTS.size) });
+    });
+
+    this.container.addEventListener("mousedown", (event) => event.stopPropagation());
+    this.container.addEventListener("dblclick", (event) => event.stopPropagation());
+    this.container.append(button, panel);
+    this.button = button;
+    exposureTagButton = button;
+    exposureTagControls = {
+      columnSelect,
+      colorInput,
+      sizeSelect
+    };
+    syncExposureTagControl();
+    return this.container;
+  }
+
+  onRemove() {
+    if (exposureTagButton === this.button) {
+      exposureTagButton = null;
+      exposureTagControls = {};
+    }
+    this.container?.parentNode?.removeChild(this.container);
+    this.map = undefined;
+  }
+}
+
 const map = new maplibregl.Map({
   container: "map",
   style: {
@@ -666,6 +1546,8 @@ map.addControl(new BasemapControl(), "top-left");
 map.addControl(new BuildingDimensionControl(), "top-left");
 map.addControl(new OverlayOrderControl(), "top-left");
 map.addControl(new ExposureRefreshControl(), "top-left");
+map.addControl(new ExposurePointStyleControl(), "top-left");
+map.addControl(new ExposurePointTagControl(), "top-left");
 
 window.getOverlayLayerOrder = () => overlayLayerOrder;
 window.applyOverlayLayerOrder = applyOverlayLayerOrder;
@@ -707,7 +1589,7 @@ function switchMode(mode) {
   etlTools.classList.toggle("hidden", !isEtl);
   dataSourcePanel.classList.toggle("hidden", isEtl);
 
-  modeEyebrow.textContent = isLookup ? "Germany" : " ";
+  modeEyebrow.textContent = isLookup ? "" : " ";
   modeTitle.textContent = isLookup ? "Spatial Explorer"
     : isExposure ? "Exposure Analytics"
     : "Create Database";
@@ -888,16 +1770,9 @@ map.on("load", () => {
     source: "exposure-points",
     paint: {
       "circle-color": "#ffffff",
-      "circle-opacity": 0.84,
-      "circle-radius": [
-        "interpolate",
-        ["linear"],
-        ["coalesce", ["get", "csv_count"], 1],
-        1, 5,
-        20, 8,
-        200, 12
-      ],
-      "circle-stroke-color": "rgba(0, 31, 63, 0.16)",
+      "circle-opacity": exposureDotOpacityExpression(0.84),
+      "circle-radius": exposureDotHaloRadiusExpression(),
+      "circle-stroke-color": rgbaColor(darkenHexColor(exposurePointStyle.dotColor, 0.34), 0.16),
       "circle-stroke-width": 1
     }
   });
@@ -907,17 +1782,10 @@ map.on("load", () => {
     type: "circle",
     source: "exposure-points",
     paint: {
-      "circle-color": "#0f766e",
-      "circle-opacity": 0.88,
-      "circle-radius": [
-        "interpolate",
-        ["linear"],
-        ["coalesce", ["get", "csv_count"], 1],
-        1, 3,
-        20, 5,
-        200, 8
-      ],
-      "circle-stroke-color": "#064e3b",
+      "circle-color": exposurePointStyle.dotColor,
+      "circle-opacity": exposureDotOpacityExpression(0.88),
+      "circle-radius": exposureDotCircleRadiusExpression(),
+      "circle-stroke-color": darkenHexColor(exposurePointStyle.dotColor, 0.34),
       "circle-stroke-width": 0.5
     }
   });
@@ -931,19 +1799,12 @@ map.on("load", () => {
     layout: {
       "text-field": ["coalesce", ["get", "csv_label"], ["to-string", ["get", "csv_count"]]],
       "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-      "text-size": [
-        "interpolate",
-        ["linear"],
-        ["zoom"],
-        9, 10,
-        14, 12,
-        18, 13
-      ],
+      "text-size": exposureCountTextSizeExpression(),
       "text-allow-overlap": false,
       "text-ignore-placement": false
     },
     paint: {
-      "text-color": "#063f35",
+      "text-color": darkenHexColor(exposurePointStyle.dotColor, 0.5),
       "text-halo-color": "rgba(255, 255, 255, 0.92)",
       "text-halo-width": 1.2
     }
@@ -977,6 +1838,7 @@ map.on("load", () => {
     }
   });
 
+  applyExposurePointStyle();
   syncBuildingDimensionLayers();
   applyOverlayLayerOrder();
 });
@@ -1016,26 +1878,33 @@ function syncOverlayOrderButton() {
 }
 
 function applyOverlayLayerOrder() {
-  if (typeof map === "undefined" || !map.isStyleLoaded()) return;
+  if (typeof map === "undefined" || !map.getSource("exposure-points")) return;
 
   const exposureLayers = EXPOSURE_POINT_LAYER_IDS.filter((layerId) => map.getLayer(layerId));
-  const importedLayers = IMPORTED_LAYER_IDS.filter((layerId) => map.getLayer(layerId));
-  if (!exposureLayers.length || !importedLayers.length) return;
+  if (!exposureLayers.length) return;
 
-  if (overlayLayerOrder === OVERLAY_ORDER_EXPOSURE_TOP) {
+  const importedLayers = IMPORTED_LAYER_IDS.filter((layerId) => map.getLayer(layerId));
+
+  if (importedLayers.length && overlayLayerOrder === OVERLAY_ORDER_EXPOSURE_TOP) {
     const anchorLayerId = exposureLayers[0];
     for (const layerId of importedLayers) {
       if (layerId !== anchorLayerId && map.getLayer(layerId) && map.getLayer(anchorLayerId)) {
         map.moveLayer(layerId, anchorLayerId);
       }
     }
-    return;
+  } else if (importedLayers.length) {
+    const anchorLayerId = importedLayers[0];
+    for (const layerId of exposureLayers) {
+      if (layerId !== anchorLayerId && map.getLayer(layerId) && map.getLayer(anchorLayerId)) {
+        map.moveLayer(layerId, anchorLayerId);
+      }
+    }
   }
 
-  const anchorLayerId = importedLayers[0];
-  for (const layerId of exposureLayers) {
-    if (layerId !== anchorLayerId && map.getLayer(layerId) && map.getLayer(anchorLayerId)) {
-      map.moveLayer(layerId, anchorLayerId);
+  const exposureAnchorLayerId = exposureLayers[0];
+  for (const layerId of EXPOSURE_ALWAYS_BELOW_LAYER_IDS) {
+    if (layerId !== exposureAnchorLayerId && map.getLayer(layerId) && map.getLayer(exposureAnchorLayerId)) {
+      map.moveLayer(layerId, exposureAnchorLayerId);
     }
   }
 }
@@ -1061,12 +1930,15 @@ map.on("click", async (event) => {
   if (event.defaultPrevented) return;
 
   if (activeExposureMap && map.isStyleLoaded()) {
-    const pointFeatures = map.queryRenderedFeatures(event.point, {
-      layers: ["exposure-points-circle"]
-    });
-    if (pointFeatures.length) {
-      await renderExposurePointDetails(pointFeatures[0]);
-      return;
+    const pointLayers = EXPOSURE_POINT_INTERACTIVE_LAYER_IDS.filter((layerId) => map.getLayer(layerId));
+    if (pointLayers.length) {
+      const pointFeatures = map.queryRenderedFeatures(event.point, {
+        layers: pointLayers
+      });
+      if (pointFeatures.length) {
+        await renderExposurePointDetails(pointFeatures[0]);
+        return;
+      }
     }
   }
 
@@ -1525,7 +2397,17 @@ function renderViewFilterLayer(tileUrl) {
     promoteId: "building_id"
   });
 
-  map.addLayer({
+  const beforeExposureLayerId = EXPOSURE_POINT_LAYER_IDS.find((layerId) => map.getLayer(layerId));
+
+  const addViewFilterLayer = (layerConfig) => {
+    if (beforeExposureLayerId) {
+      map.addLayer(layerConfig, beforeExposureLayerId);
+    } else {
+      map.addLayer(layerConfig);
+    }
+  };
+
+  addViewFilterLayer({
     id: viewFilterFillLayerId,
     type: "fill",
     source: viewFilterSourceId,
@@ -1543,7 +2425,7 @@ function renderViewFilterLayer(tileUrl) {
     }
   });
 
-  map.addLayer({
+  addViewFilterLayer({
     id: viewFilterOutlineLayerId,
     type: "line",
     source: viewFilterSourceId,
@@ -1568,7 +2450,7 @@ function renderViewFilterLayer(tileUrl) {
     }
   });
 
-  map.addLayer({
+  addViewFilterLayer({
     id: viewFilter3dLayerId,
     type: "fill-extrusion",
     source: viewFilterSourceId,
@@ -1588,6 +2470,7 @@ function renderViewFilterLayer(tileUrl) {
 
   setSelectedBuildingFeatureId(selectedBuildingFeatureId);
   syncBuildingDimensionLayers();
+  applyOverlayLayerOrder();
 }
 
 function applyViewFilterLegendColors(legend) {
@@ -1798,6 +2681,9 @@ async function uploadSelectedCsv() {
     currentUploadId = payload.upload_id;
     currentUploadFilename = payload.filename;
     currentUploadColumns = Array.isArray(payload.columns) ? [...payload.columns] : [];
+    setExposureTagStyle({ column: "" });
+    syncExposurePointStyleControl();
+    applyExposurePointStyle();
     setUploadedCsvName(payload.filename);
     populateColumnSelectors(payload.columns);
     publishExposureUploadState();
@@ -1812,6 +2698,9 @@ async function uploadSelectedCsv() {
     if (requestId !== exposureUploadRequestId) return;
     statusEl.textContent = "Error";
     currentUploadColumns = [];
+    setExposureTagStyle({ column: "" });
+    syncExposurePointStyleControl();
+    applyExposurePointStyle();
     setUploadSummary(error.message);
     previewTable.classList.add("hidden");
     exposureMapControls?.classList.add("hidden");
@@ -1861,6 +2750,9 @@ async function activateExposureMap() {
       filename: payload.filename || currentUploadFilename || "Exposure",
       lat_col: latCol,
       lon_col: lonCol,
+      tag_column: selectedExposureTagColumn(),
+      color_column: selectedExposureColorColumn(),
+      color_value: selectedExposureColorValue(),
       total_rows: Number(payload.total_rows || 0),
       valid_rows: validRows,
       extent: payload.extent
@@ -1927,31 +2819,53 @@ function fitMapToExposureExtent(extent) {
 }
 
 function requestExposurePointRefresh() {
-  if (!activeExposureMap || !map.isStyleLoaded()) return;
+  if (!activeExposureMap || !map.getSource("exposure-points")) return;
   refreshExposurePoints({ silent: true });
 }
 
 async function refreshExposurePoints({ silent = false, manual = false } = {}) {
-  if (!activeExposureMap || !map.isStyleLoaded()) return;
+  if (!activeExposureMap || !map.getSource("exposure-points")) return;
 
   const requestId = ++exposureMapRequestId;
   const bounds = map.getBounds();
   const canvas = map.getCanvas();
-  const lonPadding = Math.max(0.00001, Math.abs(bounds.getEast() - bounds.getWest()) * 0.12);
-  const latPadding = Math.max(0.00001, Math.abs(bounds.getNorth() - bounds.getSouth()) * 0.12);
+  let west = bounds.getWest();
+  let south = bounds.getSouth();
+  let east = bounds.getEast();
+  let north = bounds.getNorth();
+  if (map.getPitch() > 5) {
+    // Pitched bounds stretch to the horizon; cap them to a few flat viewports around the center.
+    const center = map.getCenter();
+    const screenPx = Math.max(canvas.clientWidth || 1200, canvas.clientHeight || 800);
+    const lonHalf = (screenPx * 360 / (512 * 2 ** map.getZoom())) * 1.5;
+    const latHalf = lonHalf * Math.max(0.1, Math.cos(center.lat * Math.PI / 180));
+    west = Math.max(west, center.lng - lonHalf);
+    east = Math.min(east, center.lng + lonHalf);
+    south = Math.max(south, center.lat - latHalf);
+    north = Math.min(north, center.lat + latHalf);
+  }
+  const lonPadding = Math.max(0.00001, Math.abs(east - west) * 0.12);
+  const latPadding = Math.max(0.00001, Math.abs(north - south) * 0.12);
   const params = new URLSearchParams({
     upload_id: activeExposureMap.upload_id,
     lat_col: activeExposureMap.lat_col,
     lon_col: activeExposureMap.lon_col,
-    min_lon: String(bounds.getWest() - lonPadding),
-    min_lat: String(bounds.getSouth() - latPadding),
-    max_lon: String(bounds.getEast() + lonPadding),
-    max_lat: String(bounds.getNorth() + latPadding),
+    min_lon: String(west - lonPadding),
+    min_lat: String(south - latPadding),
+    max_lon: String(east + lonPadding),
+    max_lat: String(north + latPadding),
     width: String(canvas.clientWidth || 1200),
     height: String(canvas.clientHeight || 800),
     zoom: String(map.getZoom()),
     format: "compact"
   });
+  if (activeExposureMap.tag_column) {
+    params.set("tag_col", activeExposureMap.tag_column);
+  }
+  if (activeExposureMap.color_column && activeExposureMap.color_value) {
+    params.set("color_col", activeExposureMap.color_column);
+    params.set("color_value", activeExposureMap.color_value);
+  }
 
   if (exposureMapFetchController) {
     exposureMapFetchController.abort();
@@ -1991,7 +2905,9 @@ async function refreshExposurePoints({ silent = false, manual = false } = {}) {
           row_id: point[2],
           csv_count: point[3],
           csv_label: point[4],
-          duplicate_count: point[5]
+          duplicate_count: point[5],
+          csv_tag: point[6] || "",
+          csv_color_match: Number(point[7] || 0) === 1 ? 1 : 0
         }
       };
     }
@@ -2140,6 +3056,9 @@ async function clearExposureWorkflow({ preserveStatus = false } = {}) {
   currentUploadId = null;
   currentUploadFilename = null;
   currentUploadColumns = [];
+  setExposureTagStyle({ column: "" });
+  syncExposurePointStyleControl();
+  applyExposurePointStyle();
   publishExposureUploadState();
 
   clearActiveExposureMap({ keepControls: false });

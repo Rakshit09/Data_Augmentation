@@ -1,6 +1,6 @@
 import math
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import duckdb
 
@@ -408,11 +408,13 @@ def _features_from_rows(
 ) -> List[Dict[str, Any]]:
     features: List[Dict[str, Any]] = []
     for row in rows:
-        row_id, lon, lat, csv_count, *_extra = row
+        row_id, lon, lat, csv_count, _visible_count, _cell_count, duplicate_index, duplicate_count, tag_value, color_match = row
         display_lon = float(lon)
         display_lat = float(lat)
-        duplicate_index = int(_extra[2]) if len(_extra) >= 4 else 0
-        duplicate_count = int(_extra[3]) if len(_extra) >= 4 else 1
+        duplicate_index = int(duplicate_index or 0)
+        duplicate_count = int(duplicate_count or 1)
+        tag_value = "" if tag_value is None else str(tag_value)
+        color_match = 1 if int(color_match or 0) > 0 else 0
         if separate_duplicates:
             display_lon, display_lat = _offset_duplicate_coordinate(
                 display_lon,
@@ -423,20 +425,71 @@ def _features_from_rows(
             )
 
         count = int(csv_count or 0)
+        properties = {
+            "row_id": int(row_id),
+            "csv_count": count,
+            "csv_label": _count_label(count),
+            "duplicate_count": duplicate_count,
+            "csv_color_match": color_match,
+        }
+        if tag_value:
+            properties["csv_tag"] = tag_value
         features.append({
             "type": "Feature",
             "geometry": {
                 "type": "Point",
                 "coordinates": [display_lon, display_lat],
             },
-            "properties": {
-                "row_id": int(row_id),
-                "csv_count": count,
-                "csv_label": _count_label(count),
-                "duplicate_count": duplicate_count,
-            },
+            "properties": properties,
         })
     return features
+
+
+def _csv_row_storage_name(
+    con: duckdb.DuckDBPyConnection,
+    column_name: str | None,
+) -> Optional[str]:
+    if not column_name:
+        return None
+    if not exposure_row_table_is_current(con):
+        raise ValueError("Exposure row details are not available for map tags.")
+
+    row = con.execute(
+        "SELECT storage_name FROM csv_row_columns WHERE column_name = ?;",
+        [str(column_name)],
+    ).fetchone()
+    if row is None or not row[0]:
+        raise ValueError(f"Exposure column '{column_name}' was not found.")
+    return str(row[0])
+
+
+def _point_metadata_sql(
+    source_alias: str,
+    tag_storage_name: str | None = None,
+    color_storage_name: str | None = None,
+    color_value: str | None = None,
+) -> Tuple[str, str]:
+    if not tag_storage_name and not color_storage_name:
+        return ", '' AS csv_tag, 0 AS csv_color_match", ""
+
+    join_sql = f"LEFT JOIN csv_rows AS csv_row ON csv_row.row_id = {source_alias}.row_id"
+    tag_sql = (
+        f"csv_row.{sql_identifier(tag_storage_name)} AS csv_tag"
+        if tag_storage_name
+        else "'' AS csv_tag"
+    )
+
+    if color_storage_name and color_value:
+        normalized_value = sql_string(str(color_value).strip().lower())
+        color_sql = (
+            "CASE WHEN LOWER(TRIM(COALESCE("
+            f"csv_row.{sql_identifier(color_storage_name)}, ''"
+            f"))) = {normalized_value} THEN 1 ELSE 0 END AS csv_color_match"
+        )
+    else:
+        color_sql = "0 AS csv_color_match"
+
+    return f", {tag_sql}, {color_sql}", join_sql
 
 
 def _empty_feature_collection(mode: str = "empty") -> Dict[str, Any]:
@@ -458,9 +511,18 @@ def _query_individual_points(
     max_lat: float,
     max_features: int,
     zoom: float,
+    tag_storage_name: str | None = None,
+    color_storage_name: str | None = None,
+    color_value: str | None = None,
 ) -> Dict[str, Any]:
+    metadata_select, metadata_join = _point_metadata_sql(
+        "picked",
+        tag_storage_name=tag_storage_name,
+        color_storage_name=color_storage_name,
+        color_value=color_value,
+    )
     rows = con.execute(
-        """
+        f"""
         WITH bounded AS (
             SELECT
                 row_id,
@@ -472,22 +534,27 @@ def _query_individual_points(
             WHERE lon BETWEEN ? AND ?
                 AND lat BETWEEN ? AND ?
         ),
-        ranked AS (
+        picked AS (
             SELECT
-                row_id,
-                lon,
-                lat,
+                bounded.row_id,
+                bounded.lon,
+                bounded.lat,
                 1 AS csv_count,
                 COUNT(*) OVER () AS visible_count,
                 COUNT(*) OVER () AS cell_count,
-                duplicate_index,
-                duplicate_count
+                bounded.duplicate_index,
+                bounded.duplicate_count
             FROM bounded
+            ORDER BY bounded.row_id
+            LIMIT ?
         )
-        SELECT row_id, lon, lat, csv_count, visible_count, cell_count, duplicate_index, duplicate_count
-        FROM ranked
-        ORDER BY row_id
-        LIMIT ?;
+        SELECT
+            picked.row_id, picked.lon, picked.lat, picked.csv_count, picked.visible_count,
+            picked.cell_count, picked.duplicate_index, picked.duplicate_count
+            {metadata_select}
+        FROM picked
+        {metadata_join}
+        ORDER BY picked.row_id;
         """,
         [min_lon, max_lon, min_lat, max_lat, max_features],
     ).fetchall()
@@ -512,9 +579,18 @@ def _query_exact_coordinate_points(
     max_lon: float,
     max_lat: float,
     max_features: int,
+    tag_storage_name: str | None = None,
+    color_storage_name: str | None = None,
+    color_value: str | None = None,
 ) -> Dict[str, Any]:
+    metadata_select, metadata_join = _point_metadata_sql(
+        "picked",
+        tag_storage_name=tag_storage_name,
+        color_storage_name=color_storage_name,
+        color_value=color_value,
+    )
     rows = con.execute(
-        """
+        f"""
         WITH bounded AS (
             SELECT row_id, lon, lat
             FROM points
@@ -530,20 +606,27 @@ def _query_exact_coordinate_points(
             FROM bounded
             GROUP BY lon, lat
         ),
-        ranked AS (
+        picked AS (
             SELECT
-                row_id,
-                lon,
-                lat,
-                csv_count,
-                SUM(csv_count) OVER () AS visible_count,
-                COUNT(*) OVER () AS cell_count
+                exact_points.row_id,
+                exact_points.lon,
+                exact_points.lat,
+                exact_points.csv_count,
+                SUM(exact_points.csv_count) OVER () AS visible_count,
+                COUNT(*) OVER () AS cell_count,
+                0 AS duplicate_index,
+                1 AS duplicate_count
             FROM exact_points
+            ORDER BY exact_points.csv_count DESC, exact_points.row_id
+            LIMIT ?
         )
-        SELECT row_id, lon, lat, csv_count, visible_count, cell_count
-        FROM ranked
-        ORDER BY csv_count DESC, row_id
-        LIMIT ?;
+        SELECT
+            picked.row_id, picked.lon, picked.lat, picked.csv_count, picked.visible_count,
+            picked.cell_count, picked.duplicate_index, picked.duplicate_count
+            {metadata_select}
+        FROM picked
+        {metadata_join}
+        ORDER BY picked.csv_count DESC, picked.row_id;
         """,
         [min_lon, max_lon, min_lat, max_lat, max_features],
     ).fetchall()
@@ -571,12 +654,21 @@ def _query_view_grid_points(
     source_zoom: int,
     width: int,
     height: int,
+    tag_storage_name: str | None = None,
+    color_storage_name: str | None = None,
+    color_value: str | None = None,
 ) -> Dict[str, Any]:
     table_name = _bin_table_name(source_zoom)
     grid_cols, grid_rows = _view_grid(width, height, max_features)
     lon_step = max((max_lon - min_lon) / grid_cols, 1e-12)
     lat_step = max((max_lat - min_lat) / grid_rows, 1e-12)
     min_x, max_x, min_y, max_y = _tile_range_for_bounds(min_lon, min_lat, max_lon, max_lat, source_zoom)
+    metadata_select, metadata_join = _point_metadata_sql(
+        "picked",
+        tag_storage_name=tag_storage_name,
+        color_storage_name=color_storage_name,
+        color_value=color_value,
+    )
     rows = con.execute(
         f"""
         WITH source AS (
@@ -606,20 +698,27 @@ def _query_view_grid_points(
             FROM gridded
             GROUP BY grid_x, grid_y
         ),
-        ranked AS (
+        picked AS (
             SELECT
-                row_id,
-                lon,
-                lat,
-                csv_count,
-                SUM(csv_count) OVER () AS visible_count,
-                COUNT(*) OVER () AS cell_count
+                cells.row_id,
+                cells.lon,
+                cells.lat,
+                cells.csv_count,
+                SUM(cells.csv_count) OVER () AS visible_count,
+                COUNT(*) OVER () AS cell_count,
+                0 AS duplicate_index,
+                1 AS duplicate_count
             FROM cells
+            ORDER BY cells.csv_count DESC, cells.row_id
+            LIMIT ?
         )
-        SELECT row_id, lon, lat, csv_count, visible_count, cell_count
-        FROM ranked
-        ORDER BY csv_count DESC, row_id
-        LIMIT ?;
+        SELECT
+            picked.row_id, picked.lon, picked.lat, picked.csv_count, picked.visible_count,
+            picked.cell_count, picked.duplicate_index, picked.duplicate_count
+            {metadata_select}
+        FROM picked
+        {metadata_join}
+        ORDER BY picked.csv_count DESC, picked.row_id;
         """,
         [
             min_x,
@@ -672,6 +771,9 @@ def lookup_exposure_points_multires(
     height: int,
     max_features: int,
     zoom: float = 0.0,
+    tag_column: str | None = None,
+    color_column: str | None = None,
+    color_value: str | None = None,
     con: duckdb.DuckDBPyConnection | None = None,
 ) -> Dict[str, Any]:
     min_lon, min_lat, max_lon, max_lat = _clamp_bounds(min_lon, min_lat, max_lon, max_lat)
@@ -683,10 +785,33 @@ def lookup_exposure_points_multires(
     if con is None:
         con = duckdb.connect(str(cache_path), read_only=True)
     try:
+        tag_storage_name = _csv_row_storage_name(con, tag_column)
+        color_storage_name = _csv_row_storage_name(con, color_column)
         if zoom >= RAW_POINT_ZOOM:
             if zoom < DUPLICATE_SPREAD_ZOOM:
-                return _query_exact_coordinate_points(con, min_lon, min_lat, max_lon, max_lat, safe_max)
-            return _query_individual_points(con, min_lon, min_lat, max_lon, max_lat, safe_max, zoom)
+                return _query_exact_coordinate_points(
+                    con,
+                    min_lon,
+                    min_lat,
+                    max_lon,
+                    max_lat,
+                    safe_max,
+                    tag_storage_name=tag_storage_name,
+                    color_storage_name=color_storage_name,
+                    color_value=color_value,
+                )
+            return _query_individual_points(
+                con,
+                min_lon,
+                min_lat,
+                max_lon,
+                max_lat,
+                safe_max,
+                zoom,
+                tag_storage_name=tag_storage_name,
+                color_storage_name=color_storage_name,
+                color_value=color_value,
+            )
 
         source_zoom = _select_source_zoom(zoom, min_lon, min_lat, max_lon, max_lat, safe_max)
         return _query_view_grid_points(
@@ -699,6 +824,9 @@ def lookup_exposure_points_multires(
             source_zoom,
             width,
             height,
+            tag_storage_name=tag_storage_name,
+            color_storage_name=color_storage_name,
+            color_value=color_value,
         )
     finally:
         if owns_connection:

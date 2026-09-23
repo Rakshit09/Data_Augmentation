@@ -1984,6 +1984,9 @@ def create_app(
         upload_id = str(request.args.get("upload_id", "")).strip()
         lat_col = str(request.args.get("lat_col", "")).strip()
         lon_col = str(request.args.get("lon_col", "")).strip()
+        tag_col = str(request.args.get("tag_col", "")).strip()
+        color_col = str(request.args.get("color_col", "")).strip()
+        color_value = str(request.args.get("color_value", "")).strip()
 
         if not upload_id or not lat_col or not lon_col:
             return jsonify({"error": "Upload id, latitude column, and longitude column are required."}), 400
@@ -2060,8 +2063,13 @@ def create_app(
                 height=height,
                 max_features=limit,
                 zoom=zoom,
+                tag_column=tag_col or None,
+                color_column=color_col or None,
+                color_value=color_value or None,
                 con=point_con,
             )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
         except Exception as exc:
             return jsonify({"error": f"Could not load exposure map points: {exc}"}), 500
         finally:
@@ -2081,6 +2089,8 @@ def create_app(
                     properties.get("csv_count", 1),
                     properties.get("csv_label", "1"),
                     properties.get("duplicate_count", 1),
+                    properties.get("csv_tag", ""),
+                    properties.get("csv_color_match", 0),
                 ])
             points_payload["points"] = compact_points
 
@@ -2806,6 +2816,9 @@ def lookup_exposure_points_in_view(
     height: int,
     max_features: int = EXPOSURE_MAP_MAX_FEATURES,
     zoom: float = 0.0,
+    tag_column: Optional[str] = None,
+    color_column: Optional[str] = None,
+    color_value: Optional[str] = None,
     con: Optional[duckdb.DuckDBPyConnection] = None,
 ) -> Dict[str, Any]:
     safe_max = max(500, min(int(max_features or EXPOSURE_MAP_MAX_FEATURES), EXPOSURE_MAP_MAX_FEATURES))
@@ -2819,6 +2832,9 @@ def lookup_exposure_points_in_view(
         height=height,
         max_features=safe_max,
         zoom=zoom,
+        tag_column=tag_column,
+        color_column=color_column,
+        color_value=color_value,
         con=con,
     )
 

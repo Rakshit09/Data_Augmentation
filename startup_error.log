@@ -1,0 +1,26 @@
+
+====================================================================================================
+Application starting...
+
+====================================================================================================
+Starting server thread...
+
+====================================================================================================
+Traceback (most recent call last):
+  File "C:\Users\rajoshi\Data Augmentation\run_app.py", line 288, in run_server
+    from waitress import serve
+ModuleNotFoundError: No module named 'waitress'
+
+
+====================================================================================================
+Traceback (most recent call last):
+  File "C:\Users\rajoshi\Data Augmentation\run_app.py", line 382, in <module>
+    main()
+  File "C:\Users\rajoshi\Data Augmentation\run_app.py", line 335, in main
+    raise RuntimeError(server_error)
+RuntimeError: Traceback (most recent call last):
+  File "C:\Users\rajoshi\Data Augmentation\run_app.py", line 288, in run_server
+    from waitress import serve
+ModuleNotFoundError: No module named 'waitress'
+
+

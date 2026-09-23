@@ -238,7 +238,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='DataAugmentation_v3.0',
+    name='DataAugmentation_v3.13_exp',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -258,5 +258,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='DataAugmentation_v3.0',
+    name='DataAugmentation_v3.13_exp',
 )
