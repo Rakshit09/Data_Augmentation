@@ -305,7 +305,8 @@ const EXPOSURE_POINT_INTERACTIVE_LAYER_IDS = [
 const EXPOSURE_MARKER_ICON_ID = "exposure-marker-icon";
 const EXPOSURE_MARKER_MATCH_ICON_ID = "exposure-marker-match-icon";
 const EXPOSURE_POINT_TAG_LAYER_ID = "exposure-points-tag";
-const EXPOSURE_MARKER_MIN_ZOOM = exposureRawPointZoom;
+const EXPOSURE_MARKER_MIN_ZOOM = Math.min(10, exposureRawPointZoom);
+const EXPOSURE_MARKER_FULL_SIZE_ZOOM = 12;
 const EXPOSURE_POINT_DISPLAY_DOT = "dot";
 const EXPOSURE_POINT_DISPLAY_MARKER = "marker";
 const EXPOSURE_POINT_STYLE_SIZE_OPTIONS = [
@@ -483,7 +484,8 @@ function exposureMarkerSizeExpression() {
     "interpolate",
     ["linear"],
     ["zoom"],
-    EXPOSURE_MARKER_MIN_ZOOM, Number((0.7 * scale).toFixed(3)),
+    EXPOSURE_MARKER_MIN_ZOOM, Number((0.45 * scale).toFixed(3)),
+    EXPOSURE_MARKER_FULL_SIZE_ZOOM, Number((0.7 * scale).toFixed(3)),
     18, Number((1.7 * scale).toFixed(3)),
     20, Number((2.1 * scale).toFixed(3))
   ];
@@ -806,7 +808,15 @@ function exposureTagTextOffset() {
     exposurePointStyle.markerSize,
     EXPOSURE_POINT_STYLE_DEFAULTS.markerSize
   );
-  return [0, Number((-2.8 - (markerScale * 2.0)).toFixed(3))];
+  const offsetY = Number((-2.8 - (markerScale * 2.0)).toFixed(3));
+  // Icons shrink from 0.7x to 0.45x at the lowest zooms, so pull tags down with them.
+  return [
+    "interpolate",
+    ["linear"],
+    ["zoom"],
+    EXPOSURE_MARKER_MIN_ZOOM, ["literal", [0, Number((offsetY * 0.45 / 0.7).toFixed(3))]],
+    EXPOSURE_MARKER_FULL_SIZE_ZOOM, ["literal", [0, offsetY]]
+  ];
 }
 
 function syncExposureTagControl() {
