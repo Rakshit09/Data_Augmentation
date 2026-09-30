@@ -17,6 +17,7 @@
 
 .add-layer-form {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   margin-top: 12px;
 }
@@ -24,6 +25,7 @@
 .add-layer-dropzone {
   display: grid;
   gap: 5px;
+  min-width: 0;
   padding: 14px 16px;
   border: 2px dashed var(--brand);
   border-radius: 12px;
@@ -46,6 +48,7 @@
   color: var(--muted);
   font-size: 12px;
   line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .add-layer-form button {
@@ -80,6 +83,7 @@
 
 .add-layer-controls {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
   padding: 12px;
   border: 1px solid var(--line);
@@ -124,12 +128,48 @@
   accent-color: var(--brand-dark2);
 }
 
+.add-layer-legend {
+  display: grid;
+  gap: 3px;
+  justify-self: center;
+  width: min(100%, 400px);
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.add-layer-legend-title {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-align: center;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+
+.add-layer-legend-bar {
+  height: 14px;
+  border-radius: 4px;
+}
+
+.add-layer-legend-labels {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+
 .add-layer-message {
   min-height: 18px;
   margin: 0;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .add-layer-message.error {

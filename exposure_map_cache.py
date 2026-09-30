@@ -1,4 +1,5 @@
 import math
+import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -401,11 +402,117 @@ def _offset_duplicate_coordinate(
     )
 
 
+_DECIMAL_TAG_PATTERN = re.compile(r"^[+-]?(?:\d+\.\d*|\.\d+|\d+(?=[eE]))(?:[eE][+-]?\d+)?$")
+
+
+def _format_tag_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        number = value
+    else:
+        text = str(value).strip()
+        # Plain integer strings (IDs, postcodes with leading zeros) are left untouched.
+        if not _DECIMAL_TAG_PATTERN.match(text):
+            return str(value)
+        number = float(text)
+    if not math.isfinite(number):
+        return str(value)
+    formatted = f"{number:.2f}".rstrip("0").rstrip(".")
+    return "0" if formatted in ("-0", "") else formatted
+
+
+MAX_STACKED_TAGS = 8
+
+
+def _stacked_tag_labels(
+    con: duckdb.DuckDBPyConnection,
+    rows: List[Tuple[Any, ...]],
+    tag_storage_name: str | None,
+    row_filter_sql: str = "",
+) -> Dict[Tuple[float, float], str]:
+    """Newline-joined tag lists for coordinates shared by more than one row."""
+    if not tag_storage_name:
+        return {}
+    targets = {
+        (float(row[1]), float(row[2]))
+        for row in rows
+        if int(row[3] or 0) > 1 or int(row[7] or 1) > 1
+    }
+    if not targets:
+        return {}
+
+    tag_sql = f"csv_row.{sql_identifier(tag_storage_name)}"
+    lons, lats = zip(*targets)
+    tag_rows = con.execute(
+        f"""
+        WITH targets AS (
+            SELECT UNNEST(?::DOUBLE[]) AS lon, UNNEST(?::DOUBLE[]) AS lat
+        ),
+        matched AS (
+            SELECT row_id, lon, lat
+            FROM points
+            JOIN targets USING (lon, lat)
+            WHERE TRUE{row_filter_sql}
+        ),
+        ranked AS (
+            SELECT
+                matched.lon,
+                matched.lat,
+                matched.row_id,
+                {tag_sql} AS tag,
+                ROW_NUMBER() OVER (PARTITION BY matched.lon, matched.lat ORDER BY matched.row_id) AS tag_rank,
+                COUNT(*) OVER (PARTITION BY matched.lon, matched.lat) AS tag_total
+            FROM matched
+            JOIN csv_rows AS csv_row ON csv_row.row_id = matched.row_id
+            WHERE NULLIF(TRIM({tag_sql}), '') IS NOT NULL
+        )
+        SELECT lon, lat, tag, tag_total
+        FROM ranked
+        WHERE tag_rank <= ?
+        ORDER BY lon, lat, row_id;
+        """,
+        [list(lons), list(lats), MAX_STACKED_TAGS],
+    ).fetchall()
+
+    lines: Dict[Tuple[float, float], List[str]] = {}
+    totals: Dict[Tuple[float, float], int] = {}
+    for lon, lat, tag, tag_total in tag_rows:
+        key = (float(lon), float(lat))
+        lines.setdefault(key, []).append(_format_tag_value(tag))
+        totals[key] = int(tag_total)
+
+    labels: Dict[Tuple[float, float], str] = {}
+    for key, values in lines.items():
+        total = totals[key]
+        if total <= 1:
+            continue
+        if total > len(values):
+            values.append(f"+{total - len(values)} more")
+        labels[key] = "\n".join(values)
+    return labels
+
+
 def _features_from_rows(
     rows: Iterable[Tuple[Any, ...]],
     zoom: float = 0.0,
     separate_duplicates: bool = False,
+    stacked_tags: Dict[Tuple[float, float], str] | None = None,
 ) -> List[Dict[str, Any]]:
+    stacked_tags = stacked_tags or {}
+    # Only one feature per shared coordinate carries the stacked label.
+    stack_anchor_index: Dict[Tuple[float, float], int] = {}
+    if stacked_tags:
+        for row in rows:
+            key = (float(row[1]), float(row[2]))
+            if key in stacked_tags:
+                index = int(row[6] or 0)
+                stack_anchor_index[key] = min(index, stack_anchor_index.get(key, index))
+
     features: List[Dict[str, Any]] = []
     for row in rows:
         row_id, lon, lat, csv_count, _visible_count, _cell_count, duplicate_index, duplicate_count, tag_value, color_match = row
@@ -413,7 +520,12 @@ def _features_from_rows(
         display_lat = float(lat)
         duplicate_index = int(duplicate_index or 0)
         duplicate_count = int(duplicate_count or 1)
-        tag_value = "" if tag_value is None else str(tag_value)
+        coordinate_key = (display_lon, display_lat)
+        if coordinate_key in stacked_tags:
+            is_anchor = stack_anchor_index.get(coordinate_key) == duplicate_index
+            tag_value = stacked_tags[coordinate_key] if is_anchor else ""
+        else:
+            tag_value = _format_tag_value(tag_value)
         color_match = 1 if int(color_match or 0) > 0 else 0
         if separate_duplicates:
             display_lon, display_lat = _offset_duplicate_coordinate(
@@ -492,6 +604,53 @@ def _point_metadata_sql(
     return f", {tag_sql}, {color_sql}", join_sql
 
 
+EXPOSURE_FILTER_OPERATORS = {"gt": ">", "lt": "<", "eq": "="}
+MAX_TOP_N = 100_000
+_NUMERIC_FILTER_PATTERN = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$")
+
+
+def _row_filter_sql(
+    storage_name: str | None,
+    operator: str | None,
+    value: str | None,
+    rank_storage_name: str | None = None,
+    rank_limit: int | None = None,
+) -> str:
+    conditions: List[str] = []
+    text = str(value or "").strip()
+    if storage_name and text:
+        sql_operator = EXPOSURE_FILTER_OPERATORS.get(str(operator or "").strip().lower())
+        if sql_operator is None:
+            raise ValueError("Filter operator must be one of >, <, or =.")
+
+        column_sql = f"TRIM(filter_row.{sql_identifier(storage_name)})"
+        number = float(text) if _NUMERIC_FILTER_PATTERN.match(text) else None
+        if number is not None and math.isfinite(number):
+            conditions.append(
+                f"TRY_CAST({column_sql} AS DOUBLE) {sql_operator} CAST({sql_string(repr(number))} AS DOUBLE)"
+            )
+        elif sql_operator == "=":
+            conditions.append(f"LOWER({column_sql}) = {sql_string(text.lower())}")
+        else:
+            raise ValueError("Greater-than and less-than filters need a numeric value.")
+
+    order_sql = ""
+    if rank_storage_name and rank_limit:
+        limit = int(rank_limit)
+        if limit < 1 or limit > MAX_TOP_N:
+            raise ValueError(f"Top N must be between 1 and {MAX_TOP_N}.")
+        rank_sql = f"TRY_CAST(TRIM(filter_row.{sql_identifier(rank_storage_name)}) AS DOUBLE)"
+        conditions.append(f"{rank_sql} IS NOT NULL")
+        # Rank only mappable rows so the map shows exactly N locations.
+        conditions.append("filter_row.row_id IN (SELECT row_id FROM points)")
+        order_sql = f" ORDER BY {rank_sql} DESC, filter_row.row_id LIMIT {limit}"
+
+    if not conditions:
+        return ""
+    where_sql = " AND ".join(conditions)
+    return f" AND row_id IN (SELECT filter_row.row_id FROM csv_rows AS filter_row WHERE {where_sql}{order_sql})"
+
+
 def _empty_feature_collection(mode: str = "empty") -> Dict[str, Any]:
     return {
         "type": "FeatureCollection",
@@ -514,6 +673,7 @@ def _query_individual_points(
     tag_storage_name: str | None = None,
     color_storage_name: str | None = None,
     color_value: str | None = None,
+    row_filter_sql: str = "",
 ) -> Dict[str, Any]:
     metadata_select, metadata_join = _point_metadata_sql(
         "picked",
@@ -532,7 +692,7 @@ def _query_individual_points(
                 COUNT(*) OVER (PARTITION BY lon, lat) AS duplicate_count
             FROM points
             WHERE lon BETWEEN ? AND ?
-                AND lat BETWEEN ? AND ?
+                AND lat BETWEEN ? AND ?{row_filter_sql}
         ),
         picked AS (
             SELECT
@@ -561,7 +721,12 @@ def _query_individual_points(
 
     visible_count = int(rows[0][4]) if rows else 0
     cell_count = int(rows[0][5]) if rows else 0
-    features = _features_from_rows(rows, zoom=zoom, separate_duplicates=True)
+    features = _features_from_rows(
+        rows,
+        zoom=zoom,
+        separate_duplicates=True,
+        stacked_tags=_stacked_tag_labels(con, rows, tag_storage_name, row_filter_sql),
+    )
     return {
         "type": "FeatureCollection",
         "features": features,
@@ -582,6 +747,7 @@ def _query_exact_coordinate_points(
     tag_storage_name: str | None = None,
     color_storage_name: str | None = None,
     color_value: str | None = None,
+    row_filter_sql: str = "",
 ) -> Dict[str, Any]:
     metadata_select, metadata_join = _point_metadata_sql(
         "picked",
@@ -595,7 +761,7 @@ def _query_exact_coordinate_points(
             SELECT row_id, lon, lat
             FROM points
             WHERE lon BETWEEN ? AND ?
-                AND lat BETWEEN ? AND ?
+                AND lat BETWEEN ? AND ?{row_filter_sql}
         ),
         exact_points AS (
             SELECT
@@ -633,7 +799,10 @@ def _query_exact_coordinate_points(
 
     visible_count = int(rows[0][4]) if rows else 0
     cell_count = int(rows[0][5]) if rows else 0
-    features = _features_from_rows(rows)
+    features = _features_from_rows(
+        rows,
+        stacked_tags=_stacked_tag_labels(con, rows, tag_storage_name, row_filter_sql),
+    )
     return {
         "type": "FeatureCollection",
         "features": features,
@@ -657,6 +826,7 @@ def _query_view_grid_points(
     tag_storage_name: str | None = None,
     color_storage_name: str | None = None,
     color_value: str | None = None,
+    row_filter_sql: str = "",
 ) -> Dict[str, Any]:
     table_name = _bin_table_name(source_zoom)
     grid_cols, grid_rows = _view_grid(width, height, max_features)
@@ -669,16 +839,28 @@ def _query_view_grid_points(
         color_storage_name=color_storage_name,
         color_value=color_value,
     )
-    rows = con.execute(
-        f"""
-        WITH source AS (
+    if row_filter_sql:
+        # Pre-aggregated bins cannot be filtered per row, so grid filtered points directly.
+        source_sql = f"""
+            SELECT row_id, lon, lat, 1 AS csv_count
+            FROM points
+            WHERE lon BETWEEN ? AND ?
+                AND lat BETWEEN ? AND ?{row_filter_sql}
+        """
+        source_params = [min_lon, max_lon, min_lat, max_lat]
+    else:
+        source_sql = f"""
             SELECT row_id, lon, lat, csv_count
             FROM {table_name}
             WHERE tile_x BETWEEN ? AND ?
                 AND tile_y BETWEEN ? AND ?
                 AND lon BETWEEN ? AND ?
                 AND lat BETWEEN ? AND ?
-        ),
+        """
+        source_params = [min_x, max_x, min_y, max_y, min_lon, max_lon, min_lat, max_lat]
+    rows = con.execute(
+        f"""
+        WITH source AS ({source_sql}),
         gridded AS (
             SELECT
                 row_id,
@@ -721,14 +903,7 @@ def _query_view_grid_points(
         ORDER BY picked.csv_count DESC, picked.row_id;
         """,
         [
-            min_x,
-            max_x,
-            min_y,
-            max_y,
-            min_lon,
-            max_lon,
-            min_lat,
-            max_lat,
+            *source_params,
             min_lon,
             lon_step,
             grid_cols - 1,
@@ -774,6 +949,11 @@ def lookup_exposure_points_multires(
     tag_column: str | None = None,
     color_column: str | None = None,
     color_value: str | None = None,
+    filter_column: str | None = None,
+    filter_operator: str | None = None,
+    filter_value: str | None = None,
+    rank_column: str | None = None,
+    rank_limit: int | None = None,
     con: duckdb.DuckDBPyConnection | None = None,
 ) -> Dict[str, Any]:
     min_lon, min_lat, max_lon, max_lat = _clamp_bounds(min_lon, min_lat, max_lon, max_lat)
@@ -787,6 +967,17 @@ def lookup_exposure_points_multires(
     try:
         tag_storage_name = _csv_row_storage_name(con, tag_column)
         color_storage_name = _csv_row_storage_name(con, color_column)
+        row_filter_sql = ""
+        has_rule = bool(filter_column and str(filter_value or "").strip())
+        has_rank = bool(rank_column and rank_limit)
+        if has_rule or has_rank:
+            row_filter_sql = _row_filter_sql(
+                _csv_row_storage_name(con, filter_column) if has_rule else None,
+                filter_operator,
+                filter_value,
+                rank_storage_name=_csv_row_storage_name(con, rank_column) if has_rank else None,
+                rank_limit=rank_limit if has_rank else None,
+            )
         if zoom >= RAW_POINT_ZOOM:
             if zoom < DUPLICATE_SPREAD_ZOOM:
                 return _query_exact_coordinate_points(
@@ -799,6 +990,7 @@ def lookup_exposure_points_multires(
                     tag_storage_name=tag_storage_name,
                     color_storage_name=color_storage_name,
                     color_value=color_value,
+                    row_filter_sql=row_filter_sql,
                 )
             return _query_individual_points(
                 con,
@@ -811,6 +1003,7 @@ def lookup_exposure_points_multires(
                 tag_storage_name=tag_storage_name,
                 color_storage_name=color_storage_name,
                 color_value=color_value,
+                row_filter_sql=row_filter_sql,
             )
 
         source_zoom = _select_source_zoom(zoom, min_lon, min_lat, max_lon, max_lat, safe_max)
@@ -827,6 +1020,7 @@ def lookup_exposure_points_multires(
             tag_storage_name=tag_storage_name,
             color_storage_name=color_storage_name,
             color_value=color_value,
+            row_filter_sql=row_filter_sql,
         )
     finally:
         if owns_connection:

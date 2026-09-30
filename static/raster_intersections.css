@@ -1,5 +1,6 @@
 .raster-intersection-controls {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
   padding: 12px;
   border: 1px solid #d7e2ee;
@@ -9,6 +10,7 @@
 
 .raster-intersection-current {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
 }
 
@@ -59,7 +61,7 @@
 
 .raster-intersection-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 8px;
 }
 

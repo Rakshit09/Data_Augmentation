@@ -41,3 +41,5 @@ Werkzeug==3.1.8
 wheel==0.47.0
 pillow
 psutil
+rasterio
+gdal

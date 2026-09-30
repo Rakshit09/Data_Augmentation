@@ -89,7 +89,8 @@ def register_raster_intersection_routes(
                         percent=18,
                         detail="Selecting exposure points inside the analysis area.",
                     )
-                    candidates, candidate_count = query_exposure_candidates(cache_path, bounds, MAX_CANDIDATES)
+                    # Runs as a chunked background job, so the full exposure file is allowed.
+                    candidates, candidate_count = query_exposure_candidates(cache_path, bounds, None)
                     if not candidates:
                         raise ValueError("No exposure points are inside the selected raster/map area.")
 

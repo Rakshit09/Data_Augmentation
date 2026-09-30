@@ -11,6 +11,7 @@
   const clearButton = document.getElementById("clearMapLayer");
   const messageEl = document.getElementById("addLayerMessage");
   const importStatusEl = document.getElementById("layerImportStatus");
+  const legendEl = document.getElementById("addLayerLegend");
   const maxUploadBytes = Number(layerFile?.dataset.maxBytes || 0);
 
   const vectorSourceId = "user-added-vector-layer";
@@ -24,6 +25,17 @@
   const rasterLayerId = "user-added-raster-layer";
   const buildingOverlayLayerId = "view-filter-buildings-fill";
   const emptyCollection = { type: "FeatureCollection", features: [] };
+  // Keep in sync with COLOR_MAPS in layer_upload_routes.py.
+  const legendPalettes = {
+    viridis: ["#440154", "#3b528b", "#21918c", "#5ec962", "#fde725"],
+    plasma: ["#0d0887", "#7e03a8", "#cc4778", "#f89540", "#f0f921"],
+    magma: ["#000004", "#3b0f70", "#8c2981", "#de4968", "#fcfdbf"],
+    cividis: ["#00204c", "#414d6b", "#7c7b78", "#b8ad6f", "#ffea46"],
+    hazard: ["#2c7bb6", "#abd9e9", "#ffffbf", "#fdae61", "#d7191c"],
+    reds: ["#fff5f0", "#fcbba1", "#fb6a4a", "#cb181d", "#67000d"],
+    blues: ["#f7fbff", "#c6dbef", "#6baed6", "#2171b5", "#08306b"],
+    categorical: ["#2563eb", "#16a34a", "#dc2626", "#9333ea", "#ea580c", "#0891b2", "#be123c", "#4d7c0f"]
+  };
 
   const state = {
     layer: null,
@@ -91,6 +103,7 @@
     state.layer.colormap = colormapSelect.value;
     if (state.layer.kind === "raster") {
       reloadRasterTiles();
+      updateRasterLegend();
     } else {
       scheduleVectorRefresh({ immediate: true });
     }
@@ -264,12 +277,13 @@
       }
 
       controls.classList.remove("hidden");
+      updateRasterLegend();
       publishLayerChange();
       fitToExtent(payload.extent);
       if (payload.kind === "raster") {
-        setMessage(`Raster ready: ${payload.name || "uploaded layer"}. Click buildings normally; Alt/Option-click the layer for its popup.`, "success");
+        setMessage("Raster ready. Click buildings normally; Alt/Option-click the layer for its popup.", "success");
       } else {
-        setMessage(`Vector layer ready: ${payload.name || "uploaded layer"}. Click buildings normally; Alt/Option-click the layer for its popup.`, "success");
+        setMessage("Vector layer ready. Click buildings normally; Alt/Option-click the layer for its popup.", "success");
       }
       if (typeof statusEl !== "undefined") statusEl.textContent = "Ready";
     } catch (error) {
@@ -302,7 +316,7 @@
         activeImportJobId = "";
         uploadButton.disabled = false;
         uploadButton.textContent = originalLabel;
-        showImportSuccess(payload);
+        hideImportStatus();
         applyLoadedLayer(payload.layer || {});
         return;
       }
@@ -365,12 +379,13 @@
     }
 
     controls.classList.remove("hidden");
+    updateRasterLegend();
     publishLayerChange();
     fitToExtent(payload.extent);
     if (payload.kind === "raster") {
-      setMessage(`Raster ready: ${payload.name || "uploaded layer"}. Click buildings normally; Alt/Option-click the layer for its popup.`, "success");
+      setMessage("Raster ready. Click buildings normally; Alt/Option-click the layer for its popup.", "success");
     } else {
-      setMessage(`Vector layer ready: ${payload.name || "uploaded layer"}. Click buildings normally; Alt/Option-click the layer for its popup.`, "success");
+      setMessage("Vector layer ready. Click buildings normally; Alt/Option-click the layer for its popup.", "success");
     }
     if (typeof statusEl !== "undefined") statusEl.textContent = "Ready";
   }
@@ -399,17 +414,37 @@
     `;
   }
 
-  function showImportSuccess(payload) {
-    if (!importStatusEl) return;
-    const layer = payload?.layer || {};
-    const layerName = layer.name || payload?.display_name || "Layer";
-    importStatusEl.classList.remove("hidden", "etl-status--error");
-    importStatusEl.classList.add("etl-status--success");
-    importStatusEl.innerHTML = `
-      <strong>${htmlEscape(layerName)} ready.</strong><br>
-      <div class="progress-copy">${htmlEscape(payload?.phase || "Layer ready.")}</div>
-      ${payload?.path ? `<div class="progress-copy">${htmlEscape(payload.path)}</div>` : ""}
+  function updateRasterLegend() {
+    if (!legendEl) return;
+    const layer = state.layer;
+    const bands = layer?.bands || [];
+    // Colourmaps are only applied to single-band tiled rasters.
+    if (!layer || layer.kind !== "raster" || layer.render_mode === "image" || bands.length > 1) {
+      legendEl.classList.add("hidden");
+      legendEl.innerHTML = "";
+      return;
+    }
+    const palette = legendPalettes[layer.colormap || colormapSelect.value] || legendPalettes.hazard;
+    const min = Number(bands[0]?.min);
+    const max = Number(bands[0]?.max);
+    const hasRange = bands[0]?.min != null && bands[0]?.max != null && Number.isFinite(min) && Number.isFinite(max);
+    const labels = hasRange
+      ? [min, (min + max) / 2, max].map(formatLegendValue)
+      : ["Low", "", "High"];
+    const bandName = String(bands[0]?.name || "");
+    const title = bandName && !/^Band \d+$/.test(bandName) ? bandName : "Raster values";
+    legendEl.innerHTML = `
+      <div class="add-layer-legend-title">${htmlEscape(title)}</div>
+      <div class="add-layer-legend-bar" style="background: linear-gradient(to right, ${palette.join(", ")})"></div>
+      <div class="add-layer-legend-labels">${labels.map((label) => `<span>${htmlEscape(label)}</span>`).join("")}</div>
     `;
+    legendEl.classList.remove("hidden");
+  }
+
+  function formatLegendValue(value) {
+    const abs = Math.abs(value);
+    if (abs !== 0 && (abs >= 1e6 || abs < 1e-3)) return value.toExponential(2);
+    return value.toLocaleString(undefined, { maximumFractionDigits: abs >= 100 ? 0 : abs >= 1 ? 2 : 3 });
   }
 
   function showImportError(message) {
@@ -746,6 +781,7 @@
     clearVectorSource();
     removeRasterLayer();
     controls.classList.add("hidden");
+    updateRasterLegend();
     publishLayerChange();
     if (cleanupServer && layerId) {
       deleteLayerOnServer(layerId);

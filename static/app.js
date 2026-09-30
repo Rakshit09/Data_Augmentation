@@ -305,6 +305,7 @@ const EXPOSURE_POINT_INTERACTIVE_LAYER_IDS = [
 const EXPOSURE_MARKER_ICON_ID = "exposure-marker-icon";
 const EXPOSURE_MARKER_MATCH_ICON_ID = "exposure-marker-match-icon";
 const EXPOSURE_POINT_TAG_LAYER_ID = "exposure-points-tag";
+const EXPOSURE_TAG_BOX_ICON_ID = "exposure-tag-box";
 const EXPOSURE_MARKER_MIN_ZOOM = Math.min(10, exposureRawPointZoom);
 const EXPOSURE_MARKER_FULL_SIZE_ZOOM = 12;
 const EXPOSURE_POINT_DISPLAY_DOT = "dot";
@@ -337,6 +338,14 @@ const EXPOSURE_COLOR_RULE_DEFAULTS = Object.freeze({
   color: "#c2410c"
 });
 const EXPOSURE_TAG_LETTER_SPACING = 0.05;
+const EXPOSURE_FILTER_OPERATORS = [
+  { value: "gt", label: ">" },
+  { value: "lt", label: "<" },
+  { value: "eq", label: "=" }
+];
+const EXPOSURE_FILTER_NUMBER_PATTERN = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
+const EXPOSURE_TOP_N_OPTIONS = [5, 10, 25, 50, 100];
+const EXPOSURE_TOP_N_MAX = 100000;
 
 function loadExposureMarkerImage(fillColor = "#ff1a1a") {
   const markerColor = normalizeHexColor(fillColor, "#ff1a1a");
@@ -423,6 +432,9 @@ let exposureTagStyle = sanitizeExposureTagStyle({ ...EXPOSURE_TAG_DEFAULTS });
 let exposureTagButton = null;
 let exposureTagControls = {};
 let exposureColorRule = sanitizeExposureColorRule({ ...EXPOSURE_COLOR_RULE_DEFAULTS });
+let exposureFilterRule = { column: "", operator: "gt", value: "", rankColumn: "", rankLimit: "10" };
+let exposureFilterButton = null;
+let exposureFilterControls = {};
 
 function scaledCountRadiusExpression(stops, scale) {
   const expression = ["interpolate", ["linear"], ["coalesce", ["get", "csv_count"], 1]];
@@ -848,10 +860,36 @@ function syncExposureTagControl() {
   if (sizeSelect) sizeSelect.value = String(exposureTagStyle.size);
 }
 
+function ensureExposureTagBoxImage() {
+  if (map.hasImage(EXPOSURE_TAG_BOX_ICON_ID)) return;
+
+  const size = 24;
+  const radius = 5;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d");
+  context.beginPath();
+  context.roundRect(1, 1, size - 2, size - 2, radius);
+  context.fillStyle = "rgba(255, 255, 255, 0.94)";
+  context.fill();
+  context.lineWidth = 1.5;
+  context.strokeStyle = "rgba(6, 63, 53, 0.45)";
+  context.stroke();
+  // Stretchable 9-slice box so icon-text-fit can wrap labels of any height.
+  map.addImage(EXPOSURE_TAG_BOX_ICON_ID, context.getImageData(0, 0, size, size), {
+    stretchX: [[radius + 1, size - radius - 1]],
+    stretchY: [[radius + 1, size - radius - 1]],
+    content: [radius, radius, size - radius, size - radius]
+  });
+}
+
 function ensureExposureTagLayer() {
   if (typeof map === "undefined" || !map.getSource("exposure-points")) return;
   if (!map.getLayer("exposure-points-marker") || map.getLayer(EXPOSURE_POINT_TAG_LAYER_ID)) return;
 
+  ensureExposureTagBoxImage();
+  const tagOpacity = exposureTagLabelsVisible() ? 1 : 0;
   const layerConfig = {
     id: EXPOSURE_POINT_TAG_LAYER_ID,
     type: "symbol",
@@ -863,14 +901,27 @@ function ensureExposureTagLayer() {
       "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
       "text-size": exposureTagStyle.size,
       "text-letter-spacing": EXPOSURE_TAG_LETTER_SPACING,
+      "text-line-height": 1.25,
+      "text-justify": "left",
       "text-anchor": "bottom",
       "text-offset": exposureTagTextOffset(),
       "text-allow-overlap": true,
-      "text-ignore-placement": true
+      "text-ignore-placement": true,
+      "icon-image": [
+        "case",
+        ["in", "\n", ["coalesce", ["get", "csv_tag"], ""]],
+        EXPOSURE_TAG_BOX_ICON_ID,
+        ""
+      ],
+      "icon-text-fit": "both",
+      "icon-text-fit-padding": [4, 6, 4, 6],
+      "icon-allow-overlap": true,
+      "icon-ignore-placement": true
     },
     paint: {
       "text-color": exposureTagStyle.color,
-      "text-opacity": exposureTagLabelsVisible() ? 1 : 0,
+      "text-opacity": tagOpacity,
+      "icon-opacity": tagOpacity,
       "text-halo-color": "rgba(255, 255, 255, 0.94)",
       "text-halo-width": 1.25
     }
@@ -895,6 +946,7 @@ function applyExposureTagStyle() {
   map.setLayoutProperty(EXPOSURE_POINT_TAG_LAYER_ID, "text-offset", exposureTagTextOffset());
   map.setPaintProperty(EXPOSURE_POINT_TAG_LAYER_ID, "text-color", exposureTagStyle.color);
   map.setPaintProperty(EXPOSURE_POINT_TAG_LAYER_ID, "text-opacity", exposureTagLabelsVisible() ? 1 : 0);
+  map.setPaintProperty(EXPOSURE_POINT_TAG_LAYER_ID, "icon-opacity", exposureTagLabelsVisible() ? 1 : 0);
 }
 
 function setExposureTagStyle(nextStyle, { refresh = false } = {}) {
@@ -915,6 +967,142 @@ function setExposureTagStyle(nextStyle, { refresh = false } = {}) {
     activeExposureMap = {
       ...activeExposureMap,
       tag_column: nextColumn
+    };
+    requestExposurePointRefresh();
+  }
+}
+
+function exposureFilterRuleError() {
+  const { column, operator, value } = exposureFilterRule;
+  if (!column || !currentUploadColumns.includes(column) || !value) return "";
+  if (operator !== "eq" && !EXPOSURE_FILTER_NUMBER_PATTERN.test(value)) {
+    return "> and < need a numeric value.";
+  }
+  return "";
+}
+
+function exposureFilterRankError() {
+  const { rankColumn, rankLimit } = exposureFilterRule;
+  if (!rankColumn || !currentUploadColumns.includes(rankColumn)) return "";
+  const limit = Number(rankLimit);
+  if (!/^\d+$/.test(rankLimit) || limit < 1 || limit > EXPOSURE_TOP_N_MAX) {
+    return `Top N must be a whole number from 1 to ${formatInteger(EXPOSURE_TOP_N_MAX)}.`;
+  }
+  return "";
+}
+
+function activeExposureFilter() {
+  const { column, operator, value, rankColumn, rankLimit } = exposureFilterRule;
+  const hasRule = Boolean(column && currentUploadColumns.includes(column) && value && !exposureFilterRuleError());
+  const hasRank = Boolean(rankColumn && currentUploadColumns.includes(rankColumn) && !exposureFilterRankError());
+  if (!hasRule && !hasRank) return null;
+  return {
+    column: hasRule ? column : "",
+    operator: hasRule ? operator : "",
+    value: hasRule ? value : "",
+    rankColumn: hasRank ? rankColumn : "",
+    rankLimit: hasRank ? rankLimit : ""
+  };
+}
+
+function exposureFilterKey(filter) {
+  return filter
+    ? [filter.column, filter.operator, filter.value, filter.rankColumn, filter.rankLimit].join("\u0000")
+    : "";
+}
+
+function exposureFilterSummary(filter) {
+  if (!filter) return "";
+  const parts = [];
+  if (filter.column) {
+    const operatorLabel = EXPOSURE_FILTER_OPERATORS.find((option) => option.value === filter.operator)?.label || "";
+    parts.push(`${filter.column} ${operatorLabel} ${filter.value}`);
+  }
+  if (filter.rankColumn) {
+    parts.push(`top ${filter.rankLimit} by ${filter.rankColumn}`);
+  }
+  return parts.join(" · ");
+}
+
+function exposureColumnOptionsHtml() {
+  return [
+    '<option value="">None</option>',
+    ...currentUploadColumns.map((column) => `<option value="${escapeHtml(column)}">${escapeHtml(column)}</option>`)
+  ].join("");
+}
+
+function syncExposureFilterControl() {
+  if (!exposureFilterButton) return;
+
+  const filter = activeExposureFilter();
+  const summary = exposureFilterSummary(filter);
+  exposureFilterButton.classList.toggle("is-active", Boolean(filter));
+  exposureFilterButton.setAttribute(
+    "aria-label",
+    filter ? `Exposure filter: ${summary}. Click to change the filter.` : "Filter exposure locations."
+  );
+  exposureFilterButton.setAttribute("title", filter ? `Filter: ${summary}` : "Filter locations");
+
+  const {
+    columnSelect,
+    operatorSelect,
+    valueInput,
+    rankColumnSelect,
+    rankLimitInput,
+    statusEl: filterStatus
+  } = exposureFilterControls;
+  if (columnSelect) {
+    columnSelect.innerHTML = exposureColumnOptionsHtml();
+    columnSelect.value = currentUploadColumns.includes(exposureFilterRule.column) ? exposureFilterRule.column : "";
+  }
+  if (rankColumnSelect) {
+    rankColumnSelect.innerHTML = exposureColumnOptionsHtml();
+    rankColumnSelect.value = currentUploadColumns.includes(exposureFilterRule.rankColumn)
+      ? exposureFilterRule.rankColumn
+      : "";
+  }
+  if (operatorSelect) operatorSelect.value = exposureFilterRule.operator;
+  if (valueInput && valueInput.value.trim() !== exposureFilterRule.value) {
+    valueInput.value = exposureFilterRule.value;
+  }
+  if (rankLimitInput && rankLimitInput.value.trim() !== exposureFilterRule.rankLimit) {
+    rankLimitInput.value = exposureFilterRule.rankLimit;
+  }
+  exposureFilterControls.presetButtons?.forEach((presetButton) => {
+    presetButton.classList.toggle("is-active", presetButton.dataset.topN === exposureFilterRule.rankLimit);
+  });
+  if (filterStatus) {
+    const ruleError = exposureFilterRuleError();
+    const rankError = exposureFilterRankError();
+    const error = [ruleError, rankError].filter(Boolean).join(" ");
+    filterStatus.textContent = error;
+    filterStatus.classList.toggle("hidden", !error);
+    valueInput?.classList.toggle("is-invalid", Boolean(ruleError));
+    rankLimitInput?.classList.toggle("is-invalid", Boolean(rankError));
+  }
+}
+
+function setExposureFilterRule(nextRule, { refresh = false } = {}) {
+  const previousKey = exposureFilterKey(activeExposureFilter());
+  exposureFilterRule = {
+    ...exposureFilterRule,
+    ...nextRule
+  };
+  exposureFilterRule.column = String(exposureFilterRule.column || "").trim();
+  exposureFilterRule.value = String(exposureFilterRule.value || "").trim();
+  exposureFilterRule.rankColumn = String(exposureFilterRule.rankColumn || "").trim();
+  exposureFilterRule.rankLimit = String(exposureFilterRule.rankLimit ?? "").trim();
+  if (!EXPOSURE_FILTER_OPERATORS.some((option) => option.value === exposureFilterRule.operator)) {
+    exposureFilterRule.operator = "gt";
+  }
+
+  const filter = activeExposureFilter();
+  syncExposureFilterControl();
+
+  if (activeExposureMap && (refresh || previousKey !== exposureFilterKey(filter))) {
+    activeExposureMap = {
+      ...activeExposureMap,
+      filter
     };
     requestExposurePointRefresh();
   }
@@ -1521,6 +1709,150 @@ class ExposurePointTagControl {
   }
 }
 
+class ExposurePointFilterControl {
+  onAdd(mapInstance) {
+    this.map = mapInstance;
+    this.container = document.createElement("div");
+    this.container.className = "maplibregl-ctrl maplibregl-ctrl-group exposure-point-tag-control exposure-point-filter-control";
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "exposure-point-tag-control-button";
+    button.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M3 5h18l-7 8.5V19l-4 2v-7.5L3 5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>';
+    button.setAttribute("aria-haspopup", "dialog");
+    button.setAttribute("aria-expanded", "false");
+
+    const panel = document.createElement("div");
+    panel.className = "exposure-point-tag-control-panel";
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-label", "Exposure filter settings");
+
+    const operatorOptions = EXPOSURE_FILTER_OPERATORS
+      .map((option) => `<option value="${option.value}">${option.label}</option>`)
+      .join("");
+    panel.innerHTML = `
+      <label class="exposure-point-tag-control-field">
+        <span>Filter column</span>
+        <select class="exposure-point-tag-control-select" data-setting="column">
+          <option value="">None</option>
+        </select>
+      </label>
+      <div class="exposure-point-tag-control-row exposure-point-filter-control-row">
+        <label class="exposure-point-tag-control-field">
+          <span>Rule</span>
+          <select class="exposure-point-tag-control-size" data-setting="operator">${operatorOptions}</select>
+        </label>
+        <label class="exposure-point-tag-control-field">
+          <span>Value</span>
+          <input class="exposure-point-tag-control-select exposure-point-filter-control-value" data-setting="value" type="text" autocomplete="off" spellcheck="false">
+        </label>
+      </div>
+      <hr class="exposure-point-filter-control-divider">
+      <label class="exposure-point-tag-control-field">
+        <span>Top N highest by column</span>
+        <select class="exposure-point-tag-control-select" data-setting="rank-column">
+          <option value="">None</option>
+        </select>
+      </label>
+      <div class="exposure-point-filter-control-top-n" role="group" aria-label="Top N count">
+        ${EXPOSURE_TOP_N_OPTIONS.map((count) => `<button type="button" data-top-n="${count}">${count}</button>`).join("")}
+        <input class="exposure-point-tag-control-select exposure-point-filter-control-value" data-setting="rank-limit" type="text" inputmode="numeric" autocomplete="off" aria-label="Custom top N" placeholder="N">
+      </div>
+      <p class="exposure-point-filter-control-status hidden" role="status"></p>
+    `;
+
+    const columnSelect = panel.querySelector('[data-setting="column"]');
+    const operatorSelect = panel.querySelector('[data-setting="operator"]');
+    const valueInput = panel.querySelector('[data-setting="value"]');
+    const rankColumnSelect = panel.querySelector('[data-setting="rank-column"]');
+    const rankLimitInput = panel.querySelector('[data-setting="rank-limit"]');
+    const statusText = panel.querySelector(".exposure-point-filter-control-status");
+
+    const setOpen = (isOpen) => {
+      this.container.classList.toggle("open", isOpen);
+      button.setAttribute("aria-expanded", isOpen ? "true" : "false");
+    };
+
+    button.addEventListener("click", () => {
+      const nextOpen = !this.container.classList.contains("open");
+      setOpen(nextOpen);
+      if (nextOpen) {
+        columnSelect?.focus();
+      }
+    });
+
+    this.container.addEventListener("focusout", () => {
+      window.setTimeout(() => {
+        if (!this.container.contains(document.activeElement)) {
+          setOpen(false);
+        }
+      }, 0);
+    });
+
+    let valueTimer = null;
+    columnSelect?.addEventListener("change", () => {
+      setExposureFilterRule({ column: columnSelect.value });
+    });
+    operatorSelect?.addEventListener("change", () => {
+      setExposureFilterRule({ operator: operatorSelect.value });
+    });
+    valueInput?.addEventListener("input", () => {
+      window.clearTimeout(valueTimer);
+      valueTimer = window.setTimeout(() => setExposureFilterRule({ value: valueInput.value }), 450);
+    });
+    valueInput?.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      window.clearTimeout(valueTimer);
+      setExposureFilterRule({ value: valueInput.value });
+    });
+    let rankTimer = null;
+    rankColumnSelect?.addEventListener("change", () => {
+      setExposureFilterRule({ rankColumn: rankColumnSelect.value });
+    });
+    panel.querySelectorAll("[data-top-n]").forEach((presetButton) => {
+      presetButton.addEventListener("click", () => {
+        window.clearTimeout(rankTimer);
+        setExposureFilterRule({ rankLimit: presetButton.dataset.topN });
+      });
+    });
+    rankLimitInput?.addEventListener("input", () => {
+      window.clearTimeout(rankTimer);
+      rankTimer = window.setTimeout(() => setExposureFilterRule({ rankLimit: rankLimitInput.value }), 450);
+    });
+    rankLimitInput?.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter") return;
+      window.clearTimeout(rankTimer);
+      setExposureFilterRule({ rankLimit: rankLimitInput.value });
+    });
+
+    this.container.addEventListener("mousedown", (event) => event.stopPropagation());
+    this.container.addEventListener("dblclick", (event) => event.stopPropagation());
+    this.container.append(button, panel);
+    this.button = button;
+    exposureFilterButton = button;
+    exposureFilterControls = {
+      columnSelect,
+      operatorSelect,
+      valueInput,
+      rankColumnSelect,
+      rankLimitInput,
+      presetButtons: panel.querySelectorAll("[data-top-n]"),
+      statusEl: statusText
+    };
+    syncExposureFilterControl();
+    return this.container;
+  }
+
+  onRemove() {
+    if (exposureFilterButton === this.button) {
+      exposureFilterButton = null;
+      exposureFilterControls = {};
+    }
+    this.container?.parentNode?.removeChild(this.container);
+    this.map = undefined;
+  }
+}
+
 const map = new maplibregl.Map({
   container: "map",
   style: {
@@ -1558,6 +1890,7 @@ map.addControl(new OverlayOrderControl(), "top-left");
 map.addControl(new ExposureRefreshControl(), "top-left");
 map.addControl(new ExposurePointStyleControl(), "top-left");
 map.addControl(new ExposurePointTagControl(), "top-left");
+map.addControl(new ExposurePointFilterControl(), "top-left");
 
 window.getOverlayLayerOrder = () => overlayLayerOrder;
 window.applyOverlayLayerOrder = applyOverlayLayerOrder;
@@ -2692,6 +3025,7 @@ async function uploadSelectedCsv() {
     currentUploadFilename = payload.filename;
     currentUploadColumns = Array.isArray(payload.columns) ? [...payload.columns] : [];
     setExposureTagStyle({ column: "" });
+    setExposureFilterRule({ column: "", value: "", rankColumn: "" });
     syncExposurePointStyleControl();
     applyExposurePointStyle();
     setUploadedCsvName(payload.filename);
@@ -2709,6 +3043,7 @@ async function uploadSelectedCsv() {
     statusEl.textContent = "Error";
     currentUploadColumns = [];
     setExposureTagStyle({ column: "" });
+    setExposureFilterRule({ column: "", value: "", rankColumn: "" });
     syncExposurePointStyleControl();
     applyExposurePointStyle();
     setUploadSummary(error.message);
@@ -2763,6 +3098,7 @@ async function activateExposureMap() {
       tag_column: selectedExposureTagColumn(),
       color_column: selectedExposureColorColumn(),
       color_value: selectedExposureColorValue(),
+      filter: activeExposureFilter(),
       total_rows: Number(payload.total_rows || 0),
       valid_rows: validRows,
       extent: payload.extent
@@ -2875,6 +3211,16 @@ async function refreshExposurePoints({ silent = false, manual = false } = {}) {
   if (activeExposureMap.color_column && activeExposureMap.color_value) {
     params.set("color_col", activeExposureMap.color_column);
     params.set("color_value", activeExposureMap.color_value);
+  }
+  const exposureFilter = activeExposureMap.filter;
+  if (exposureFilter?.column) {
+    params.set("filter_col", exposureFilter.column);
+    params.set("filter_op", exposureFilter.operator);
+    params.set("filter_value", exposureFilter.value);
+  }
+  if (exposureFilter?.rankColumn) {
+    params.set("top_col", exposureFilter.rankColumn);
+    params.set("top_n", exposureFilter.rankLimit);
   }
 
   if (exposureMapFetchController) {

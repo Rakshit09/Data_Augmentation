@@ -1987,6 +1987,14 @@ def create_app(
         tag_col = str(request.args.get("tag_col", "")).strip()
         color_col = str(request.args.get("color_col", "")).strip()
         color_value = str(request.args.get("color_value", "")).strip()
+        filter_col = str(request.args.get("filter_col", "")).strip()
+        filter_op = str(request.args.get("filter_op", "")).strip()
+        filter_value = str(request.args.get("filter_value", "")).strip()
+        top_col = str(request.args.get("top_col", "")).strip()
+        try:
+            top_n = int(request.args.get("top_n", "") or 0) if top_col else 0
+        except (TypeError, ValueError):
+            return jsonify({"error": "Top N must be a whole number."}), 400
 
         if not upload_id or not lat_col or not lon_col:
             return jsonify({"error": "Upload id, latitude column, and longitude column are required."}), 400
@@ -2066,6 +2074,11 @@ def create_app(
                 tag_column=tag_col or None,
                 color_column=color_col or None,
                 color_value=color_value or None,
+                filter_column=filter_col or None,
+                filter_operator=filter_op or None,
+                filter_value=filter_value or None,
+                rank_column=top_col or None,
+                rank_limit=top_n or None,
                 con=point_con,
             )
         except ValueError as exc:
@@ -2819,6 +2832,11 @@ def lookup_exposure_points_in_view(
     tag_column: Optional[str] = None,
     color_column: Optional[str] = None,
     color_value: Optional[str] = None,
+    filter_column: Optional[str] = None,
+    filter_operator: Optional[str] = None,
+    filter_value: Optional[str] = None,
+    rank_column: Optional[str] = None,
+    rank_limit: Optional[int] = None,
     con: Optional[duckdb.DuckDBPyConnection] = None,
 ) -> Dict[str, Any]:
     safe_max = max(500, min(int(max_features or EXPOSURE_MAP_MAX_FEATURES), EXPOSURE_MAP_MAX_FEATURES))
@@ -2835,6 +2853,11 @@ def lookup_exposure_points_in_view(
         tag_column=tag_column,
         color_column=color_column,
         color_value=color_value,
+        filter_column=filter_column,
+        filter_operator=filter_operator,
+        filter_value=filter_value,
+        rank_column=rank_column,
+        rank_limit=rank_limit,
         con=con,
     )
 

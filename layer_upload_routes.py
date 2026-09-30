@@ -1522,8 +1522,18 @@ def _raster_bands(info: Dict[str, Any]) -> List[Dict[str, Any]]:
             "name": description or f"Band {band_number}",
             "type": str(band.get("type") or ""),
             "nodata": band.get("noDataValue"),
+            "min": _finite_or_none(band.get("computedMin", band.get("minimum"))),
+            "max": _finite_or_none(band.get("computedMax", band.get("maximum"))),
         })
     return bands or [{"index": 1, "name": "Band 1", "type": "", "nodata": None}]
+
+
+def _finite_or_none(value: Any) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _public_layer_metadata(layer: Dict[str, Any]) -> Dict[str, Any]:

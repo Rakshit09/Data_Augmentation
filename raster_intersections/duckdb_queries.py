@@ -43,7 +43,7 @@ DATABASE_CONTEXT_FIELDS = [
 def query_exposure_candidates(
     cache_path: Path,
     bounds: Dict[str, float],
-    max_candidates: int,
+    max_candidates: Optional[int],
 ) -> Tuple[List[Dict[str, Any]], int]:
     con = duckdb.connect(str(cache_path), read_only=True)
     try:
@@ -56,7 +56,7 @@ def query_exposure_candidates(
             """,
             [bounds["min_lon"], bounds["max_lon"], bounds["min_lat"], bounds["max_lat"]],
         ).fetchone()[0] or 0)
-        if count > max_candidates:
+        if max_candidates is not None and count > max_candidates:
             raise ValueError(
                 f"The selected area contains {count:,} exposure locations. "
                 "Zoom in or keep Area set to Visible map area to keep the analysis smooth."

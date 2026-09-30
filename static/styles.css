@@ -102,6 +102,7 @@ input[type=number] {
   border-left: 1px solid rgba(0, 31, 63, 0.08);
   background: #fff;
   box-shadow: none;
+  overflow-x: hidden;
   overflow-y: auto;
 }
 
@@ -2113,6 +2114,61 @@ button:focus-visible,
   outline: none;
   border-color: var(--brand);
   box-shadow: 0 0 0 3px var(--focus);
+}
+
+.exposure-point-filter-control .exposure-point-tag-control-button {
+  display: grid;
+  place-items: center;
+}
+
+.exposure-point-filter-control .exposure-point-filter-control-row {
+  grid-template-columns: minmax(0, 58px) minmax(0, 1fr);
+}
+
+.exposure-point-filter-control .exposure-point-filter-control-value.is-invalid {
+  border-color: #b91c1c;
+}
+
+.exposure-point-filter-control .exposure-point-filter-control-status {
+  margin: 0;
+  color: #b91c1c;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.exposure-point-filter-control .exposure-point-filter-control-divider {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+.exposure-point-filter-control .exposure-point-filter-control-top-n {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) 48px;
+  gap: 4px;
+}
+
+.exposure-point-filter-control .exposure-point-filter-control-top-n button {
+  width: auto;
+  height: 31px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.exposure-point-filter-control .exposure-point-filter-control-top-n button.is-active {
+  border-color: var(--brand);
+  background: rgba(15, 118, 110, 0.12);
+  color: var(--brand);
+}
+
+.exposure-point-filter-control .exposure-point-filter-control-top-n input {
+  padding: 4px 6px;
+  text-align: center;
 }
 
 .hidden {
