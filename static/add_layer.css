@@ -39,6 +39,16 @@
   background: #edf7ff;
 }
 
+.add-layer-dropzone.is-imported {
+  border: 2px solid #16a34a;
+  background: #f0fdf4;
+}
+
+.add-layer-dropzone.is-imported span:last-child {
+  color: #15803d;
+  font-weight: 700;
+}
+
 .add-layer-dropzone span:first-child {
   font-size: 13px;
   font-weight: 800;
@@ -132,7 +142,7 @@
   display: grid;
   gap: 3px;
   justify-self: center;
-  width: min(100%, 400px);
+  width: 100%;
   padding: 6px 8px;
   border: 1px solid var(--line);
   border-radius: 8px;

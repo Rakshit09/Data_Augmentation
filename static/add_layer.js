@@ -51,6 +51,7 @@
   let selectedLocalPath = "";
   let activeImportJobId = "";
   let uploadAfterPick = false;
+  let layerImported = false;
   publishLayerChange();
 
   if (!layerFile || !uploadButton || !fieldSelect || !colormapSelect || !transparencyInput) {
@@ -71,6 +72,7 @@
   layerFile.addEventListener("change", () => {
     selectedLocalPath = "";
     const files = Array.from(layerFile.files || []);
+    if (files.length) setImported(false);
     const primaryName = files[0] ? files[0].name : "";
     layerFileTitle.textContent = files.length > 1 ? `${files.length} files selected` : (primaryName || defaultLayerTitle);
     layerFileSubtitle.textContent = files.length
@@ -91,7 +93,7 @@
     chooseLocalLayer(false);
   });
   uploadButton.addEventListener("click", handleAddLayerClick);
-  clearButton?.addEventListener("click", () => clearLayer());
+  clearButton?.addEventListener("click", () => resetLayerUi());
   fieldSelect.addEventListener("change", () => {
     if (!state.layer) return;
     state.layer.field = fieldSelect.value;
@@ -111,6 +113,12 @@
   transparencyInput.addEventListener("input", updateLayerOpacity);
 
   async function handleAddLayerClick() {
+    if (layerImported) {
+      resetLayerUi();
+      setMessage("Layer removed.");
+      return;
+    }
+
     if (selectedLocalPath) {
       await importLocalLayer();
       return;
@@ -129,7 +137,6 @@
     if (activeImportJobId) return;
     const selectionCycle = state.importCycle;
     uploadButton.disabled = true;
-    const originalLabel = uploadButton.textContent;
     uploadButton.innerHTML = '<span class="spinner"></span> Selecting...';
     setMessage("Opening layer file picker...");
 
@@ -156,7 +163,7 @@
         return;
       }
       if (autoImport) {
-        uploadButton.textContent = originalLabel;
+        syncUploadButton();
         await importLocalLayer();
       } else {
         setMessage("Layer selected. Click Import layer to load it.", "success");
@@ -166,7 +173,7 @@
     } finally {
       if (selectionCycle === state.importCycle && !activeImportJobId) {
         uploadButton.disabled = false;
-        uploadButton.textContent = originalLabel;
+        syncUploadButton();
       }
     }
   }
@@ -180,7 +187,6 @@
     const importCycle = ++state.importCycle;
     if (typeof dismissCriticalNote === "function") dismissCriticalNote();
     uploadButton.disabled = true;
-    const originalLabel = uploadButton.textContent;
     uploadButton.innerHTML = '<span class="spinner"></span> Importing...';
     if (typeof statusEl !== "undefined") statusEl.textContent = "Adding layer";
     setMessage("Submitting local layer import...");
@@ -204,12 +210,12 @@
       activeImportJobId = payload.job_id || "";
       showImportProgress(payload);
       setMessage(payload.phase || "Importing layer...");
-      pollLayerImport(activeImportJobId, originalLabel, importCycle);
+      pollLayerImport(activeImportJobId, importCycle);
     } catch (error) {
       if (importCycle !== state.importCycle) return;
       activeImportJobId = "";
       uploadButton.disabled = false;
-      uploadButton.textContent = originalLabel;
+      syncUploadButton();
       showImportError(error.message);
       setMessage(error.message, "error");
       if (typeof statusEl !== "undefined") statusEl.textContent = "Error";
@@ -236,7 +242,6 @@
     if (typeof dismissCriticalNote === "function") dismissCriticalNote();
     const importCycle = ++state.importCycle;
     uploadButton.disabled = true;
-    const originalLabel = uploadButton.textContent;
     uploadButton.innerHTML = '<span class="spinner"></span> Uploading\u2026';
     if (typeof statusEl !== "undefined") statusEl.textContent = "Adding layer";
     setMessage("Preparing layer for smooth map rendering...");
@@ -280,6 +285,7 @@
       updateRasterLegend();
       publishLayerChange();
       fitToExtent(payload.extent);
+      setImported(true);
       if (payload.kind === "raster") {
         setMessage("Raster ready. Click buildings normally; Alt/Option-click the layer for its popup.", "success");
       } else {
@@ -296,12 +302,12 @@
     } finally {
       if (importCycle === state.importCycle) {
         uploadButton.disabled = false;
-        uploadButton.textContent = originalLabel;
+        syncUploadButton();
       }
     }
   }
 
-  async function pollLayerImport(jobId, originalLabel, importCycle) {
+  async function pollLayerImport(jobId, importCycle) {
     try {
       const response = await fetch(`api/layers/import-jobs/${encodeURIComponent(jobId)}`);
       const payload = await response.json();
@@ -315,7 +321,6 @@
       if (payload.status === "complete") {
         activeImportJobId = "";
         uploadButton.disabled = false;
-        uploadButton.textContent = originalLabel;
         hideImportStatus();
         applyLoadedLayer(payload.layer || {});
         return;
@@ -325,12 +330,12 @@
         throw new Error(payload.error || "Layer import failed");
       }
 
-      window.setTimeout(() => pollLayerImport(jobId, originalLabel, importCycle), 1500);
+      window.setTimeout(() => pollLayerImport(jobId, importCycle), 1500);
     } catch (error) {
       if (importCycle !== state.importCycle) return;
       activeImportJobId = "";
       uploadButton.disabled = false;
-      uploadButton.textContent = originalLabel;
+      syncUploadButton();
       showImportError(error.message);
       setMessage(error.message, "error");
       if (typeof statusEl !== "undefined") statusEl.textContent = "Error";
@@ -352,6 +357,7 @@
 
   function applyLocalSelection(path) {
     selectedLocalPath = String(path || "").trim();
+    if (selectedLocalPath) setImported(false);
     try {
       layerFile.value = "";
     } catch (_error) {
@@ -382,12 +388,30 @@
     updateRasterLegend();
     publishLayerChange();
     fitToExtent(payload.extent);
+    setImported(true);
     if (payload.kind === "raster") {
       setMessage("Raster ready. Click buildings normally; Alt/Option-click the layer for its popup.", "success");
     } else {
       setMessage("Vector layer ready. Click buildings normally; Alt/Option-click the layer for its popup.", "success");
     }
     if (typeof statusEl !== "undefined") statusEl.textContent = "Ready";
+  }
+
+  function setImported(imported) {
+    const wasImported = layerImported;
+    layerImported = Boolean(imported && state.layer);
+    dropzone?.classList.toggle("is-imported", layerImported);
+    if (layerImported) {
+      layerFileSubtitle.textContent = "\u2713 Import successful";
+    } else if (wasImported) {
+      layerFileSubtitle.textContent = defaultLayerSubtitle;
+    }
+    syncUploadButton();
+  }
+
+  function syncUploadButton() {
+    if (activeImportJobId) return;
+    uploadButton.textContent = layerImported ? "Remove layer" : "Import layer";
   }
 
   function localPathName(path) {
@@ -782,6 +806,7 @@
     removeRasterLayer();
     controls.classList.add("hidden");
     updateRasterLegend();
+    if (layerImported) setImported(false);
     publishLayerChange();
     if (cleanupServer && layerId) {
       deleteLayerOnServer(layerId);
@@ -806,7 +831,7 @@
     hideImportStatus();
     setMessage("Upload a layer to display it over buildings and exposure points.");
     uploadButton.disabled = false;
-    uploadButton.textContent = "Import layer";
+    syncUploadButton();
   }
 
   async function deleteLayerOnServer(layerId) {
