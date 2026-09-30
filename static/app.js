@@ -38,6 +38,9 @@ const csvDropzoneTitle = document.getElementById("csvDropzoneTitle");
 const csvDropzoneSubtitle = document.getElementById("csvDropzoneSubtitle");
 const exposureUploadActions = document.getElementById("exposureUploadActions");
 const mappingControls = document.getElementById("mappingControls");
+const exposureSheetControl = document.getElementById("exposureSheetControl");
+const exposureSheet = document.getElementById("exposureSheet");
+const EXPOSURE_ALL_SHEETS = "__ALL__";
 const latColumn = document.getElementById("latColumn");
 const lonColumn = document.getElementById("lonColumn");
 const matchMode = document.getElementById("matchMode");
@@ -1108,13 +1111,6 @@ function setExposureFilterRule(nextRule, { refresh = false } = {}) {
   }
 }
 
-const IMPORTED_LAYER_IDS = [
-  "user-added-vector-fill",
-  "user-added-vector-outline",
-  "user-added-vector-line",
-  "user-added-vector-point",
-  "user-added-raster-layer"
-];
 const defaultBasemapId = getStoredBasemapId();
 let overlayLayerOrder = getStoredOverlayLayerOrder();
 let buildingDimensionMode = "2d";
@@ -2226,7 +2222,8 @@ function applyOverlayLayerOrder() {
   const exposureLayers = EXPOSURE_POINT_LAYER_IDS.filter((layerId) => map.getLayer(layerId));
   if (!exposureLayers.length) return;
 
-  const importedLayers = IMPORTED_LAYER_IDS.filter((layerId) => map.getLayer(layerId));
+  // Ordered bottom-to-top by add_layer.js.
+  const importedLayers = (window.getImportedMapLayerIds?.() || []).filter((layerId) => map.getLayer(layerId));
 
   if (importedLayers.length && overlayLayerOrder === OVERLAY_ORDER_EXPOSURE_TOP) {
     const anchorLayerId = exposureLayers[0];
@@ -3021,22 +3018,7 @@ async function uploadSelectedCsv() {
     }
     if (requestId !== exposureUploadRequestId) return;
 
-    currentUploadId = payload.upload_id;
-    currentUploadFilename = payload.filename;
-    currentUploadColumns = Array.isArray(payload.columns) ? [...payload.columns] : [];
-    setExposureTagStyle({ column: "" });
-    setExposureFilterRule({ column: "", value: "", rankColumn: "" });
-    syncExposurePointStyleControl();
-    applyExposurePointStyle();
-    setUploadedCsvName(payload.filename);
-    populateColumnSelectors(payload.columns);
-    publishExposureUploadState();
-    renderPreview(payload.columns, payload.rows);
-    mappingControls.classList.remove("hidden");
-    exposureMapControls?.classList.remove("hidden");
-    statsPanel.classList.add("hidden");
-    releaseStatsDownload();
-    renderFileSummary(payload.filename, payload.rows.length);
+    applyExposurePreviewPayload(payload);
     statusEl.textContent = "Ready";
   } catch (error) {
     if (requestId !== exposureUploadRequestId) return;
@@ -3046,9 +3028,91 @@ async function uploadSelectedCsv() {
     setExposureFilterRule({ column: "", value: "", rankColumn: "" });
     syncExposurePointStyleControl();
     applyExposurePointStyle();
+    renderExposureSheetOptions([], null);
     setUploadSummary(error.message);
     previewTable.classList.add("hidden");
     exposureMapControls?.classList.add("hidden");
+  }
+}
+
+function applyExposurePreviewPayload(payload) {
+  currentUploadId = payload.upload_id;
+  currentUploadFilename = payload.filename;
+  currentUploadColumns = Array.isArray(payload.columns) ? [...payload.columns] : [];
+  setExposureTagStyle({ column: "" });
+  setExposureFilterRule({ column: "", value: "", rankColumn: "" });
+  syncExposurePointStyleControl();
+  applyExposurePointStyle();
+  setUploadedCsvName(payload.filename);
+  renderExposureSheetOptions(payload.sheets, payload.sheet);
+  populateColumnSelectors(payload.columns);
+  publishExposureUploadState();
+  renderPreview(payload.columns, payload.rows);
+  mappingControls.classList.remove("hidden");
+  exposureMapControls?.classList.remove("hidden");
+  statsPanel.classList.add("hidden");
+  releaseStatsDownload();
+  renderFileSummary(payload.filename, payload.rows.length);
+}
+
+function renderExposureSheetOptions(sheets, selectedSheet) {
+  if (!exposureSheet || !exposureSheetControl) return;
+  const names = Array.isArray(sheets) ? sheets : [];
+  if (names.length < 2) {
+    exposureSheet.innerHTML = "";
+    exposureSheetControl.classList.add("hidden");
+    return;
+  }
+
+  exposureSheet.innerHTML = [
+    ...names.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`),
+    `<option value="${EXPOSURE_ALL_SHEETS}">ALL</option>`
+  ].join("");
+  exposureSheet.value = selectedSheet || names[0];
+  exposureSheet.dataset.current = exposureSheet.value;
+  exposureSheetControl.classList.remove("hidden");
+}
+
+exposureSheet?.addEventListener("change", () => {
+  void selectExposureSheet(exposureSheet.value);
+});
+
+async function selectExposureSheet(sheet) {
+  if (!currentUploadId || !sheet) return;
+  const requestId = ++exposureUploadRequestId;
+  const previousSheet = exposureSheet.dataset.current || "";
+
+  dismissCriticalNote();
+  clearActiveExposureMap({ keepControls: true });
+  setExposureMapMessage("");
+  exposureSheet.disabled = true;
+  statusEl.textContent = "Loading worksheet";
+  setUploadSummary(sheet === EXPOSURE_ALL_SHEETS ? "Combining all worksheets..." : "Reading worksheet...");
+  downloadLink.classList.add("hidden");
+
+  try {
+    const response = await fetch("api/exposure/sheet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ upload_id: currentUploadId, sheet })
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Could not read worksheet");
+    }
+    if (requestId !== exposureUploadRequestId) return;
+
+    applyExposurePreviewPayload(payload);
+    statusEl.textContent = "Ready";
+  } catch (error) {
+    if (requestId !== exposureUploadRequestId) return;
+    exposureSheet.value = previousSheet;
+    statusEl.textContent = "Error";
+    setUploadSummary(error.message);
+  } finally {
+    if (requestId === exposureUploadRequestId) {
+      exposureSheet.disabled = false;
+    }
   }
 }
 
@@ -3433,6 +3497,7 @@ async function clearExposureWorkflow({ preserveStatus = false } = {}) {
   }
 
   setUploadedCsvName("");
+  renderExposureSheetOptions([], null);
   setUploadSummary(defaultUploadSummaryText);
   previewTable.classList.add("hidden");
   previewTable.innerHTML = "";

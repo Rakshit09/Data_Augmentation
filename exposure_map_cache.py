@@ -609,6 +609,14 @@ MAX_TOP_N = 100_000
 _NUMERIC_FILTER_PATTERN = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$")
 
 
+def _numeric_sql(column_sql: str) -> str:
+    # Accept grouped values like "377,681" or "1'234.5"; plain TRY_CAST turns them into NULL.
+    return (
+        f"TRY_CAST(CASE WHEN regexp_full_match({column_sql}, '[+-]?\\d{{1,3}}([,''’]\\d{{3}})+(\\.\\d*)?') "
+        f"THEN regexp_replace({column_sql}, '[,''’]', '', 'g') ELSE {column_sql} END AS DOUBLE)"
+    )
+
+
 def _row_filter_sql(
     storage_name: str | None,
     operator: str | None,
@@ -627,7 +635,7 @@ def _row_filter_sql(
         number = float(text) if _NUMERIC_FILTER_PATTERN.match(text) else None
         if number is not None and math.isfinite(number):
             conditions.append(
-                f"TRY_CAST({column_sql} AS DOUBLE) {sql_operator} CAST({sql_string(repr(number))} AS DOUBLE)"
+                f"{_numeric_sql(column_sql)} {sql_operator} CAST({sql_string(repr(number))} AS DOUBLE)"
             )
         elif sql_operator == "=":
             conditions.append(f"LOWER({column_sql}) = {sql_string(text.lower())}")
@@ -639,7 +647,7 @@ def _row_filter_sql(
         limit = int(rank_limit)
         if limit < 1 or limit > MAX_TOP_N:
             raise ValueError(f"Top N must be between 1 and {MAX_TOP_N}.")
-        rank_sql = f"TRY_CAST(TRIM(filter_row.{sql_identifier(rank_storage_name)}) AS DOUBLE)"
+        rank_sql = _numeric_sql(f"TRIM(filter_row.{sql_identifier(rank_storage_name)})")
         conditions.append(f"{rank_sql} IS NOT NULL")
         # Rank only mappable rows so the map shows exactly N locations.
         conditions.append("filter_row.row_id IN (SELECT row_id FROM points)")

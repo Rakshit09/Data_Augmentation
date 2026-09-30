@@ -1,6 +1,6 @@
 (function () {
   const controls = document.getElementById("rasterIntersectionControls");
-  const layerName = document.getElementById("rasterIntersectionLayerName");
+  const layerSelect = document.getElementById("rasterIntersectionLayer");
   const bandSelect = document.getElementById("rasterIntersectionBand");
   const bandLabel = bandSelect?.closest("label");
   const areaSelect = document.getElementById("rasterIntersectionArea");
@@ -16,7 +16,9 @@
   const databaseButton = document.getElementById("intersectDatabaseRaster");
   const message = document.getElementById("rasterIntersectionMessage");
 
-  let activeLayer = window.currentAddedMapLayer || null;
+  let activeLayer = null;
+  let selectedLayerId = "";
+  let knownLayerIds = [];
   let running = false;
   let requestCycle = 0;
 
@@ -24,14 +26,43 @@
 
   exposureButton.addEventListener("click", () => runIntersection("exposure"));
   databaseButton.addEventListener("click", () => runIntersection("database"));
-  window.addEventListener("added-map-layer-change", (event) => {
-    activeLayer = event.detail || null;
+  window.addEventListener("added-map-layer-change", () => {
+    const ids = intersectableLayers().map((layer) => layer.id);
+    const added = ids.find((id) => !knownLayerIds.includes(id));
+    knownLayerIds = ids;
+    if (added) selectedLayerId = added;
+    syncLayerState();
+  });
+  layerSelect?.addEventListener("change", () => {
+    selectedLayerId = layerSelect.value;
     syncLayerState();
   });
   window.addEventListener("exposure-upload-state-change", syncLayerState);
   syncLayerState();
 
+  function intersectableLayers() {
+    return (window.currentAddedMapLayers || []).filter((layer) => layer.kind === "raster" || layer.kind === "vector");
+  }
+
+  function syncSelectedLayer() {
+    const layers = intersectableLayers();
+    if (!layers.some((layer) => layer.id === selectedLayerId)) {
+      const fallback = window.currentAddedMapLayer;
+      selectedLayerId = layers.some((layer) => layer.id === fallback?.id) ? fallback.id : (layers[0]?.id || "");
+    }
+    activeLayer = layers.find((layer) => layer.id === selectedLayerId) || null;
+    if (!layerSelect) return;
+    layerSelect.innerHTML = layers.length
+      ? layers
+        .map((layer) => `<option value="${escapeHtml(layer.id)}">${escapeHtml(layer.name || "Layer")} (${layer.kind})</option>`)
+        .join("")
+      : '<option value="">No layer loaded</option>';
+    layerSelect.value = selectedLayerId;
+    layerSelect.disabled = running || !layers.length;
+  }
+
   function syncLayerState({ updateMessage = true } = {}) {
+    syncSelectedLayer();
     const isRaster = activeLayer && activeLayer.kind === "raster";
     const isVector = activeLayer && activeLayer.kind === "vector";
     const isIntersectable = isRaster || isVector;
@@ -46,13 +77,11 @@
     syncSiFieldOptions(Array.isArray(exposureState.columns) ? exposureState.columns : []);
 
     if (!isIntersectable) {
-      layerName.textContent = "No layer selected";
       bandSelect.innerHTML = "";
       if (updateMessage) setMessage("Upload a GeoTIFF or vector layer to intersect exposure or building locations.");
       return;
     }
 
-    layerName.textContent = activeLayer.name || "Layer";
     if (isVector) {
       const field = activeLayer.field || activeLayer.default_field || "";
       const fieldCopy = field ? `Using field: ${field}.` : "No field selected; feature id will be appended.";

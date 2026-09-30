@@ -20,11 +20,13 @@ import time
 import urllib.parse
 import urllib.request
 import uuid
+import zipfile
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from xml.etree import ElementTree
 
 import duckdb
 import pandas as pd
@@ -64,6 +66,7 @@ MAX_RETAINED_EXPOSURE_UPLOADS = 1
 MAX_RETAINED_EXPOSURE_RESULTS = 1
 EXPOSURE_ARTIFACT_MAX_AGE_SECONDS = 6 * 60 * 60
 SUPPORTED_EXPOSURE_UPLOAD_EXTENSIONS = {".csv", ".xlsx"}
+EXCEL_ALL_SHEETS = "__ALL__"
 SUPPORTED_LOCAL_LAYER_PICKER_EXTENSIONS = {".gpkg", ".zip", ".shp", ".geojson", ".json", ".vrt", *RASTER_EXTENSIONS}
 EXPOSURE_MAP_MAX_FEATURES = int(os.environ.get("EXPOSURE_MAP_MAX_FEATURES", "12000"))
 EXPOSURE_MAP_CACHE_MAX_FILES = int(os.environ.get("EXPOSURE_MAP_CACHE_MAX_FILES", "3"))
@@ -523,15 +526,27 @@ def _load_excel_extension(con: duckdb.DuckDBPyConnection) -> None:
         con.execute("LOAD excel;")
 
 
-def _xlsx_read_sql(xlsx_path: Path) -> str:
-    return f"read_xlsx({sql_string(str(xlsx_path.resolve()))}, header := true, all_varchar := true)"
+def _xlsx_read_sql(xlsx_path: Path, sheet: Optional[str] = None) -> str:
+    sheet_sql = f", sheet := {sql_string(sheet)}" if sheet else ""
+    return f"read_xlsx({sql_string(str(xlsx_path.resolve()))}, header := true, all_varchar := true{sheet_sql})"
 
 
-def preview_excel_file(excel_path: Path) -> tuple[List[str], List[Dict[str, Any]]]:
+def list_excel_sheet_names(excel_path: Path) -> List[str]:
+    # Read workbook.xml directly; openpyxl would parse all shared strings first.
+    with zipfile.ZipFile(excel_path) as archive:
+        root = ElementTree.fromstring(archive.read("xl/workbook.xml"))
+    return [
+        str(element.get("name"))
+        for element in root.iter()
+        if element.tag.rsplit("}", 1)[-1] == "sheet" and element.get("name")
+    ]
+
+
+def preview_excel_file(excel_path: Path, sheet: Optional[str] = None) -> tuple[List[str], List[Dict[str, Any]]]:
     con = duckdb.connect()
     try:
         _load_excel_extension(con)
-        xlsx_sql = _xlsx_read_sql(excel_path)
+        xlsx_sql = _xlsx_read_sql(excel_path, sheet)
 
         desc = con.execute(f"DESCRIBE SELECT * FROM {xlsx_sql};").fetchall()
         columns = [str(row[0]) for row in desc]
@@ -561,6 +576,44 @@ def convert_excel_to_csv(excel_path: Path, csv_path: Path) -> None:
         con.execute(f"COPY (SELECT * FROM {xlsx_sql}) TO {csv_out} (HEADER, DELIMITER ',');")
     finally:
         con.close()
+
+
+def convert_excel_sheets_to_csv(excel_path: Path, csv_path: Path, sheets: List[str]) -> None:
+    con = duckdb.connect()
+    try:
+        _load_excel_extension(con)
+        con.execute(f"SET temp_directory = {sql_string(str(local_runtime_dir('duckdb_temp').resolve()))};")
+        selects: List[str] = []
+        for sheet in sheets:
+            xlsx_sql = _xlsx_read_sql(excel_path, sheet)
+            try:
+                if not con.execute(f"DESCRIBE SELECT * FROM {xlsx_sql};").fetchall():
+                    continue
+            except duckdb.Error:
+                if len(sheets) == 1:
+                    raise
+                # Skip empty or unreadable sheets when combining all sheets.
+                continue
+            selects.append(f"SELECT * FROM {xlsx_sql}")
+
+        if not selects:
+            raise ValueError("The selected worksheet(s) do not contain any readable columns.")
+
+        union_sql = " UNION ALL BY NAME ".join(selects)
+        temp_path = csv_path.with_name(f"{csv_path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            con.execute(
+                f"COPY ({union_sql}) TO {sql_string(str(temp_path.resolve()))} (FORMAT CSV, HEADER, DELIMITER ',');"
+            )
+            os.replace(temp_path, csv_path)
+        finally:
+            temp_path.unlink(missing_ok=True)
+    finally:
+        con.close()
+
+
+def excel_sheet_csv_path(excel_path: Path) -> Path:
+    return excel_path.with_suffix(".csv")
 
 
 def prepare_exposure_upload(uploaded_file, upload_dir: Path, upload_id: str) -> tuple[Path, str]:
@@ -1952,7 +2005,10 @@ def create_app(
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
 
+        sheets: List[str] = []
         try:
+            if upload_path.suffix.lower() == ".xlsx":
+                sheets = list_excel_sheet_names(upload_path)
             columns, rows = preview_uploaded_file(upload_path)
         except Exception as exc:
             upload_path.unlink(missing_ok=True)
@@ -1966,6 +2022,66 @@ def create_app(
             "filename": filename,
             "columns": columns,
             "rows": rows,
+            "sheets": sheets,
+            "sheet": sheets[0] if sheets else None,
+        })
+
+    @app.route("/api/exposure/sheet", methods=["POST"])
+    def exposure_select_sheet():
+        payload = request.get_json(silent=True) or {}
+        upload_id = str(payload.get("upload_id") or "").strip()
+        sheet = str(payload.get("sheet") or "").strip()
+
+        if not re.fullmatch(r"[0-9a-f]{32}", upload_id) or not sheet:
+            return jsonify({"error": "A valid upload id and worksheet are required."}), 400
+
+        upload_dir = Path(app.config["UPLOAD_DIR"])
+        excel_path = find_excel_upload(upload_dir, upload_id)
+        if excel_path is None:
+            return jsonify({"error": "Uploaded Excel file was not found. Upload it again."}), 404
+
+        with jobs_lock:
+            has_running_job = any(
+                str(job.get("upload_id") or "") == upload_id
+                and job.get("status") in {"queued", "running"}
+                for job in jobs.values()
+            )
+        if has_running_job:
+            return jsonify({"error": "This upload is being used by a running enrichment job."}), 409
+
+        try:
+            sheets = list_excel_sheet_names(excel_path)
+        except Exception as exc:
+            return jsonify({"error": f"Could not read worksheets: {exc}"}), 400
+
+        if sheet != EXCEL_ALL_SHEETS and sheet not in sheets:
+            return jsonify({"error": f"Unknown worksheet: {sheet}"}), 400
+
+        csv_path = excel_sheet_csv_path(excel_path)
+        close_cached_exposure_map_connection()
+        try:
+            csv_path.unlink(missing_ok=True)
+        except OSError as exc:
+            return jsonify({"error": f"The current worksheet data is still in use: {exc}"}), 409
+
+        try:
+            if sheet == EXCEL_ALL_SHEETS and len(sheets) > 1:
+                convert_excel_sheets_to_csv(excel_path, csv_path, sheets)
+            elif sheets and sheet != sheets[0] and sheet != EXCEL_ALL_SHEETS:
+                convert_excel_sheets_to_csv(excel_path, csv_path, [sheet])
+            # Otherwise the first sheet is read straight from the .xlsx (DuckDB default).
+            columns, rows = preview_uploaded_file(find_upload(upload_dir, upload_id) or excel_path)
+        except Exception as exc:
+            csv_path.unlink(missing_ok=True)
+            return jsonify({"error": f"Could not read worksheet: {exc}"}), 400
+
+        return jsonify({
+            "upload_id": upload_id,
+            "filename": excel_path.name.partition("_")[2] or excel_path.name,
+            "columns": columns,
+            "rows": rows,
+            "sheets": sheets,
+            "sheet": sheet,
         })
 
     @app.route("/api/exposure/upload/<upload_id>", methods=["DELETE"])
@@ -2506,7 +2622,20 @@ def find_upload(upload_dir: Path, upload_id: str) -> Optional[Path]:
         for path in upload_dir.glob(f"{upload_id}_*")
         if path.is_file() and path.suffix.lower() in SUPPORTED_EXPOSURE_UPLOAD_EXTENSIONS
     ]
+    # A CSV next to an .xlsx is the materialized worksheet selection, so it wins.
+    matches.sort(key=lambda path: path.suffix.lower() != ".csv")
     return matches[0] if matches else None
+
+
+def find_excel_upload(upload_dir: Path, upload_id: str) -> Optional[Path]:
+    return next(
+        (
+            path
+            for path in upload_dir.glob(f"{upload_id}_*")
+            if path.is_file() and path.suffix.lower() == ".xlsx"
+        ),
+        None,
+    )
 
 
 def preview_uploaded_file(upload_path: Path) -> tuple[List[str], List[Dict[str, Any]]]:

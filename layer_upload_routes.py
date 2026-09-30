@@ -62,6 +62,13 @@ COLOR_MAPS = {
     "hazard": ["#2c7bb6", "#abd9e9", "#ffffbf", "#fdae61", "#d7191c"],
     "reds": ["#fff5f0", "#fcbba1", "#fb6a4a", "#cb181d", "#67000d"],
     "blues": ["#f7fbff", "#c6dbef", "#6baed6", "#2171b5", "#08306b"],
+    "greens": ["#f7fcf5", "#c7e9c0", "#74c476", "#238b45", "#00441b"],
+    "purples": ["#fcfbfd", "#dadaeb", "#9e9ac8", "#6a51a3", "#3f007d"],
+    "ylorrd": ["#ffffcc", "#fed976", "#fd8d3c", "#e31a1c", "#800026"],
+    "turbo": ["#30123b", "#4686fb", "#1ae4b6", "#a2fc3c", "#faba39", "#e4460a", "#7a0403"],
+    "spectral": ["#9e0142", "#f46d43", "#fee08b", "#e6f598", "#66c2a5", "#5e4fa2"],
+    "terrain": ["#333399", "#0294fa", "#24d36d", "#fefe98", "#835f53", "#ffffff"],
+    "brbg": ["#543005", "#bf812d", "#f5f5f5", "#35978f", "#003c30"],
     "categorical": ["#2563eb", "#16a34a", "#dc2626", "#9333ea", "#ea580c", "#0891b2", "#be123c", "#4d7c0f"],
 }
 
@@ -279,10 +286,11 @@ def register_layer_upload_routes(app: Flask) -> None:
             return jsonify({"error": "Tiles are only available for raster layers."}), 400
 
         colormap = str(request.args.get("colormap", "")).strip() or None
+        boundary_width = max(0, min(8, request.args.get("boundary", default=0, type=int) or 0))
 
         cog_path = layer.get("cog_path") or ""
         if cog_path:
-            png_bytes = _render_tile_on_demand(cog_path, z, x, y, colormap)
+            png_bytes = _render_tile_on_demand(cog_path, z, x, y, colormap, boundary_width)
             if png_bytes is None:
                 return ("", 204)
             return Response(png_bytes, mimetype="image/png",
@@ -1041,9 +1049,25 @@ def _build_colormap_lut(name: str) -> np.ndarray:
     return lut
 
 
-def _render_tile_on_demand(cog_path: str, z: int, x: int, y: int, colormap: Optional[str] = None) -> Optional[bytes]:
-    """Render a single XYZ tile from a COG with overviews."""
-    cache_key = (cog_path, z, x, y, colormap)
+def _data_edge_mask(valid: np.ndarray, width: int) -> np.ndarray:
+    """Return the inner `width`-pixel rim of the valid-data area."""
+    eroded = valid.copy()
+    for _ in range(width):
+        shrunk = eroded.copy()
+        # Pixels on the tile border keep their outside neighbour as valid to avoid seams.
+        shrunk[1:, :] &= eroded[:-1, :]
+        shrunk[:-1, :] &= eroded[1:, :]
+        shrunk[:, 1:] &= eroded[:, :-1]
+        shrunk[:, :-1] &= eroded[:, 1:]
+        eroded = shrunk
+    return valid & ~eroded
+
+
+def _render_tile_on_demand(
+    cog_path: str, z: int, x: int, y: int, colormap: Optional[str] = None, boundary_width: int = 0
+) -> Optional[bytes]:
+    """Render a single XYZ tile from a COG with overviews, or its data-edge boundary."""
+    cache_key = (cog_path, z, x, y, colormap, boundary_width)
     with _TILE_CACHE_LOCK:
         cached = _TILE_CACHE.get(cache_key)
     if cached is not None:
@@ -1105,6 +1129,13 @@ def _render_tile_on_demand(cog_path: str, z: int, x: int, y: int, colormap: Opti
         # Treat that lowest display bucket as transparent so low-value background does
         # not render as a solid colored tile over the basemap.
         alpha[gray <= 1] = 0
+
+    if boundary_width > 0:
+        edge = _data_edge_mask(alpha > 0, boundary_width)
+        rgba = np.zeros((tile_size, tile_size, 4), dtype=np.uint8)
+        rgba[edge] = (17, 24, 39, 255)
+        img = Image.fromarray(rgba, mode="RGBA")
+    elif data_bands == 1:
         if colormap and colormap in COLOR_MAPS:
             lut = _build_colormap_lut(colormap)
             rgb = lut[gray]

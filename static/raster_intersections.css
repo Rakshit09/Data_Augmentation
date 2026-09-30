@@ -1,7 +1,5 @@
 .raster-intersection-controls {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 10px;
+  display: block;
   padding: 12px;
   border: 1px solid #d7e2ee;
   border-radius: 8px;
@@ -9,16 +7,28 @@
 }
 
 .raster-intersection-current {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 4px;
+  cursor: pointer;
 }
 
-.raster-intersection-current span,
+.raster-intersection-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.raster-intersection-current span {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+
 .raster-intersection-controls label span {
   color: var(--muted);
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 600;
   letter-spacing: 0.5px;
   text-transform: uppercase;
 }
