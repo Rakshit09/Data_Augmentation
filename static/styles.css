@@ -1273,6 +1273,10 @@ button:focus-visible,
   text-transform: uppercase;
 }
 
+.mapping > label.hidden {
+  display: none;
+}
+
 .file-input {
   position: fixed;
   left: -9999px;

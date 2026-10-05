@@ -37,8 +37,24 @@
     selectedLayerId = layerSelect.value;
     syncLayerState();
   });
+  thresholdOperator?.addEventListener("change", syncOptionalInputs);
+  aggregationSelect.addEventListener("change", syncOptionalInputs);
   window.addEventListener("exposure-upload-state-change", syncLayerState);
+  syncOptionalInputs();
   syncLayerState();
+
+  // "None" / "No aggregation" freeze the dependent input so it is clear it will be ignored.
+  function syncOptionalInputs() {
+    const filterOn = Boolean(thresholdOperator?.value);
+    thresholdValue.disabled = !filterOn;
+    thresholdValue.placeholder = filterOn ? "Enter value" : "Optional";
+    if (!filterOn) thresholdValue.value = "";
+
+    const aggregate = Boolean(aggregationSelect.value);
+    radiusInput.disabled = !aggregate;
+    radiusInput.placeholder = aggregate ? "e.g. 50" : "Exact point sample";
+    if (!aggregate) radiusInput.value = "";
+  }
 
   function intersectableLayers() {
     return (window.currentAddedMapLayers || []).filter((layer) => layer.kind === "raster" || layer.kind === "vector");
@@ -131,16 +147,22 @@
         bounds: currentBounds()
       };
       if (isRaster) {
+        if (thresholdOperator.value && threshold === "") {
+          throw new Error("Enter a filter value, or set Filter to None.");
+        }
+        if (aggregationSelect.value && radiusText === "") {
+          throw new Error("Enter a radius in metres, or set Radius aggregation to No aggregation.");
+        }
         payload.band_index = Number(bandSelect.value || 1);
-        payload.threshold = threshold === "" ? null : Number(threshold);
+        payload.threshold = thresholdOperator.value ? Number(threshold) : null;
         payload.threshold_operator = thresholdOperator.value || ">";
-        if (radiusText !== "") {
+        if (aggregationSelect.value) {
           const radius = Number(radiusText);
           if (!Number.isFinite(radius) || radius <= 0) {
             throw new Error("Radius must be greater than 0 metres.");
           }
           payload.sample_radius_m = radius;
-          payload.sample_radius_aggregation = aggregationSelect.value || "mean";
+          payload.sample_radius_aggregation = aggregationSelect.value;
         }
       } else {
         payload.field = activeLayer.field || activeLayer.default_field || "";
@@ -185,10 +207,11 @@
     requestCycle += 1;
     running = false;
     areaSelect.value = "visible";
-    thresholdOperator.value = ">";
+    thresholdOperator.value = "";
     thresholdValue.value = "";
     radiusInput.value = "";
-    aggregationSelect.value = "mean";
+    aggregationSelect.value = "";
+    syncOptionalInputs();
     siFieldSelect.value = "";
     window.rasterIntersectionPreview?.clear?.();
     window.rasterIntersectionLayers?.clear?.();

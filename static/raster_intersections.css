@@ -69,6 +69,12 @@
   box-shadow: 0 0 0 3px var(--focus);
 }
 
+.raster-intersection-controls input[type=number]:disabled {
+  background: var(--soft);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
 .raster-intersection-actions {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);

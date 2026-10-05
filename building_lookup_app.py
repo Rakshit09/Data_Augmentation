@@ -48,6 +48,7 @@ from exposure_map_cache import (
 from layer_upload_routes import MAX_LAYER_UPLOAD_BYTES, RASTER_EXTENSIONS, register_layer_upload_routes
 from obm_country_to_parquet import ETLConfig, OpenBuildingMapCountryETL
 from raster_intersections import register_raster_intersection_routes
+from sql_server_routes import register_sql_server_routes, wait_for_sql_export
 
 
 DEFAULT_PARQUET = "etl_output/buildings_de_cleaned.parquet"
@@ -65,6 +66,9 @@ MAX_RETAINED_EXPOSURE_JOBS = 1
 MAX_RETAINED_EXPOSURE_UPLOADS = 1
 MAX_RETAINED_EXPOSURE_RESULTS = 1
 EXPOSURE_ARTIFACT_MAX_AGE_SECONDS = 6 * 60 * 60
+RUNTIME_STALE_MAX_AGE_SECONDS = 24 * 60 * 60
+RUNTIME_SWEEP_SKIP_DIRS = {"duckdb_db_cache"}
+GEOCODE_CACHE_MAX_ENTRIES = 500
 SUPPORTED_EXPOSURE_UPLOAD_EXTENSIONS = {".csv", ".xlsx"}
 EXCEL_ALL_SHEETS = "__ALL__"
 SUPPORTED_LOCAL_LAYER_PICKER_EXTENSIONS = {".gpkg", ".zip", ".shp", ".geojson", ".json", ".vrt", *RASTER_EXTENSIONS}
@@ -711,6 +715,27 @@ def local_runtime_dir(name: str) -> Path:
     runtime_dir = Path(tempfile.gettempdir()) / "data_augmentation_runtime" / name
     runtime_dir.mkdir(parents=True, exist_ok=True)
     return runtime_dir
+
+
+def sweep_stale_runtime_files(max_age_seconds: float = RUNTIME_STALE_MAX_AGE_SECONDS) -> None:
+    # Age-gated so a second app instance sharing %TEMP% does not lose in-use files.
+    now = time.time()
+    runtime_root = Path(tempfile.gettempdir()) / "data_augmentation_runtime"
+    candidates: List[Path] = list(Path(tempfile.gettempdir()).glob("*.worker.std*.log"))
+    if runtime_root.is_dir():
+        for sub_dir in runtime_root.iterdir():
+            if sub_dir.is_dir() and sub_dir.name not in RUNTIME_SWEEP_SKIP_DIRS:
+                candidates.extend(sub_dir.iterdir())
+    for entry in candidates:
+        try:
+            if now - entry.stat().st_mtime <= max_age_seconds:
+                continue
+            if entry.is_dir():
+                shutil.rmtree(entry, ignore_errors=True)
+            else:
+                entry.unlink(missing_ok=True)
+        except OSError:
+            continue
 
 
 def _tile_xy(lon: float, lat: float, zoom: int) -> Tuple[int, int]:
@@ -1373,6 +1398,7 @@ def create_app(
         for _f in _dir.iterdir():
             if _f.is_file():
                 _f.unlink(missing_ok=True)
+    sweep_stale_runtime_files()
     register_custom_parquet_routes(app)
     register_layer_upload_routes(app)
     register_raster_intersection_routes(
@@ -1381,6 +1407,15 @@ def create_app(
         prepare_exposure_map_cache=prepare_exposure_map_cache,
         open_db=open_db,
         convert_excel_to_csv=convert_excel_to_csv,
+    )
+
+    def adopt_exposure_upload(upload_id: str) -> None:
+        latest_upload_id[0] = upload_id
+        cleanup_exposure_runtime()
+
+    register_sql_server_routes(
+        app,
+        on_upload_ready=adopt_exposure_upload,
     )
 
     def set_job(job_id: str, **updates: Any) -> None:
@@ -1976,6 +2011,8 @@ def create_app(
                 last_geocode_at[0] = time.time()
 
             if results:
+                if len(geocode_cache) >= GEOCODE_CACHE_MAX_ENTRIES:
+                    geocode_cache.pop(next(iter(geocode_cache)), None)
                 geocode_cache[cache_key] = results
                 return jsonify({"results": results})
 
@@ -2617,6 +2654,8 @@ def create_app(
 
 
 def find_upload(upload_dir: Path, upload_id: str) -> Optional[Path]:
+    # SQL Server tables are copied in the background; readers block until the CSV is complete.
+    wait_for_sql_export(upload_id)
     matches = [
         path
         for path in upload_dir.glob(f"{upload_id}_*")

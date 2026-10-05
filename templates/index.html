@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='add_layer.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='raster_intersections.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='sql_server_source.css') }}">
 </head>
 <body>
   <main class="shell">
@@ -208,6 +209,7 @@
                   <label for="rasterThresholdOperator">
                     <span>Filter</span>
                     <select id="rasterThresholdOperator">
+                      <option value="" selected>None</option>
                       <option value=">">&gt;</option>
                       <option value=">=">&gt;=</option>
                       <option value="<">&lt;</option>
@@ -218,26 +220,27 @@
                   </label>
                   <label for="rasterThresholdValue">
                     <span>Value</span>
-                    <input id="rasterThresholdValue" type="number" step="any" placeholder="Optional">
+                    <input id="rasterThresholdValue" type="number" step="any" placeholder="Optional" disabled>
                   </label>
                 </div>
-                <label for="rasterSampleRadius">
-                  <span>Radius (m, optional)</span>
-                  <input id="rasterSampleRadius" type="number" step="any" min="0" placeholder="Blank = exact point sample">
-                </label>
                 <label for="rasterSampleAggregation">
                   <span>Radius aggregation</span>
                   <select id="rasterSampleAggregation">
+                    <option value="" selected>No aggregation</option>
                     <option value="mean">Mean</option>
                     <option value="max">Max</option>
                     <option value="min">Min</option>
                   </select>
                 </label>
+                <label for="rasterSampleRadius">
+                  <span>Radius (m)</span>
+                  <input id="rasterSampleRadius" type="number" step="any" min="0" placeholder="Exact point sample" disabled>
+                </label>
                 <div class="raster-intersection-actions">
                   <button id="intersectExposureRaster" type="button" disabled>Intersect Exposure</button>
                   <button id="intersectDatabaseRaster" type="button" disabled>Intersect Database</button>
                 </div>
-                <p id="rasterIntersectionMessage" class="raster-intersection-message">Upload a raster to sample exposure or building locations. Add a radius in metres to aggregate values in a circular footprint.</p>
+                <p id="rasterIntersectionMessage" class="raster-intersection-message">Upload a raster to sample exposure or building locations. Choose a radius aggregation to summarise values within a circular footprint.</p>
                 </div>
               </details>
               <button id="clearMapLayer" type="button">Remove all layers</button>
@@ -283,22 +286,52 @@
       <section id="exposureTools" class="side-mode hidden">
         <section class="exposure-tools">
           <header>
-            <p class="eyebrow">Batch Enrichment</p>
+            <p class="eyebrow">Exposure Upload</p>
           </header>
 
           <form id="uploadForm" class="upload-form">
-            <label class="dropzone" for="csvFile">
-              <span class="dropzone-title-row">
-                <span id="csvDropzoneTitle" class="dropzone-title">Choose Exposure File</span>
-                <span class="field-tip" tabindex="0" data-tooltip="Upload the CSV or Excel (.xlsx) file you want to enrich. Include latitude and longitude columns plus any original exposure columns you want to keep in the output.">i</span>
-              </span>
-              <span id="csvDropzoneSubtitle" class="dropzone-subtitle">CSV or Excel (.xlsx) with latitude, longitude, and other columns</span>
-            </label>
-            <input id="csvFile" class="file-input" type="file" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" tabindex="-1" aria-hidden="true" onchange="const name=this.files&&this.files[0]?this.files[0].name:''; const titleEl=document.getElementById('csvDropzoneTitle'); const subtitleEl=document.getElementById('csvDropzoneSubtitle'); if(titleEl){titleEl.textContent=name||'Choose Exposure File';} if(subtitleEl){subtitleEl.textContent=name?'Click to choose a different file':'CSV or Excel (.xlsx) with latitude, longitude, and other columns';}">
+            <div id="exposureSourceChoice" class="exposure-source-choice">
+              <label class="dropzone" for="csvFile">
+                <span class="dropzone-title-row">
+                  <span id="csvDropzoneTitle" class="dropzone-title">Choose CSV</span>
+                  <span class="field-tip" tabindex="0" data-tooltip="Upload the CSV or Excel (.xlsx) file you want to enrich. Include latitude and longitude columns plus any original exposure columns you want to keep in the output.">i</span>
+                </span>
+                <span id="csvDropzoneSubtitle" class="dropzone-subtitle">CSV or Excel (.xlsx) with latitude, longitude, and other columns</span>
+              </label>
+              <button id="sqlSourceOpen" class="dropzone source-tile" type="button">
+                <span class="dropzone-title-row">
+                  <span class="dropzone-title">From Server</span>
+                  <span class="field-tip" data-tooltip="Load an exposure table straight from SQL Server using your Windows login. Enrichment and raster results can then be written back into the same table.">i</span>
+                </span>
+                <span class="dropzone-subtitle">SQL Server table, signed in with Windows</span>
+              </button>
+            </div>
+            <input id="csvFile" class="file-input" type="file" accept=".csv,text/csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" tabindex="-1" aria-hidden="true" onchange="const name=this.files&&this.files[0]?this.files[0].name:''; const titleEl=document.getElementById('csvDropzoneTitle'); const subtitleEl=document.getElementById('csvDropzoneSubtitle'); if(titleEl){titleEl.textContent=name||'Choose CSV';} if(subtitleEl){subtitleEl.textContent=name?'Click to choose a different file':'CSV or Excel (.xlsx) with latitude, longitude, and other columns';}">
             <div id="exposureUploadActions" class="upload-form-actions hidden">
               <button id="clearExposureUpload" class="secondary-action-button upload-inline-action" type="button">Clear upload</button>
             </div>
           </form>
+
+          <section id="sqlSourcePanel" class="sql-panel hidden" aria-label="Load exposure from SQL Server">
+            <div class="sql-panel-header">
+              <span class="dropzone-title">From Server</span>
+              <button id="sqlSourceBack" class="sql-link-button" type="button">Use CSV instead</button>
+            </div>
+            <label>
+              <span>Server</span>
+              <select id="sqlServer"></select>
+            </label>
+            <label>
+              <span>Database</span>
+              <select id="sqlDatabase" disabled></select>
+            </label>
+            <label>
+              <span>Table</span>
+              <select id="sqlTable" disabled></select>
+            </label>
+            <button id="sqlLoadTable" class="sql-primary-button" type="button" disabled>Load table</button>
+            <p id="sqlSourceMessage" class="sql-message">Connects with your Windows login.</p>
+          </section>
 
           <div id="mappingControls" class="mapping hidden">
             <label id="exposureSheetControl" class="hidden">
@@ -363,6 +396,8 @@
             </details>
             <button id="runEnrichment" type="button">Run enrichment</button>
           </div>
+
+          <section id="sqlWriteBackPanel" class="sql-panel sql-writeback hidden" aria-label="Write results back to SQL Server"></section>
         </section>
       </section>
 
@@ -593,5 +628,7 @@
   <script src="{{ url_for('static', filename='raster_intersection_layers.js') }}"></script>
   <script src="{{ url_for('static', filename='raster_intersection_preview.js') }}"></script>
   <script src="{{ url_for('static', filename='raster_intersections.js') }}"></script>
+  <script src="{{ url_for('static', filename='searchable_select.js') }}"></script>
+  <script src="{{ url_for('static', filename='sql_server_source.js') }}"></script>
 </body>
 </html>

@@ -13,9 +13,15 @@
     const panel = ensurePanel();
     panel.classList.remove("hidden");
     panel.innerHTML = resultHtml(payload);
+    window.sqlServerSource?.offerWriteBack?.({
+      kind: "intersection",
+      jobId: payload.job_id,
+      sourceType: payload.source_type || summary.source_type
+    });
   }
 
   function clear() {
+    window.sqlServerSource?.hideWriteBack?.();
     const panel = document.getElementById("rasterIntersectionResultPanel");
     if (!panel) return;
     panel.classList.add("hidden");

@@ -2983,8 +2983,8 @@ clearExposureMap?.addEventListener("click", () => {
 });
 
 async function uploadSelectedCsv() {
-  const requestId = ++exposureUploadRequestId;
   if (!csvFile.files.length) {
+    exposureUploadRequestId += 1;
     setUploadedCsvName("");
     setUploadSummary("Choose a CSV or Excel (.xlsx) file first.");
     exposureUploadActions?.classList.add("hidden");
@@ -2992,36 +2992,44 @@ async function uploadSelectedCsv() {
     return;
   }
 
-  dismissCriticalNote();
-
   const formData = new FormData();
   formData.append("file", csvFile.files[0]);
-  setUploadedCsvName(csvFile.files[0].name);
+  await loadExposureSource({
+    displayName: csvFile.files[0].name,
+    loadingText: "Reading file preview...",
+    request: () => fetch("api/exposure/preview", { method: "POST", body: formData })
+  });
+}
+
+// Shared by CSV uploads and SQL Server tables; resolves to the preview payload or null.
+async function loadExposureSource({ displayName, loadingText, request }) {
+  const requestId = ++exposureUploadRequestId;
+  dismissCriticalNote();
+
+  setUploadedCsvName(displayName);
   exposureUploadActions?.classList.remove("hidden");
   clearActiveExposureMap({ keepControls: true });
   setExposureMapMessage("");
   exposureMapControls?.classList.add("hidden");
 
   statusEl.textContent = "Uploading";
-  setUploadSummary("Reading file preview...");
+  setUploadSummary(loadingText);
   downloadLink.classList.add("hidden");
 
   try {
-    const response = await fetch("api/exposure/preview", {
-      method: "POST",
-      body: formData
-    });
+    const response = await request();
     const payload = await response.json();
 
     if (!response.ok) {
       throw new Error(payload.error || "Upload failed");
     }
-    if (requestId !== exposureUploadRequestId) return;
+    if (requestId !== exposureUploadRequestId) return null;
 
     applyExposurePreviewPayload(payload);
     statusEl.textContent = "Ready";
+    return payload;
   } catch (error) {
-    if (requestId !== exposureUploadRequestId) return;
+    if (requestId !== exposureUploadRequestId) return null;
     statusEl.textContent = "Error";
     currentUploadColumns = [];
     setExposureTagStyle({ column: "" });
@@ -3032,8 +3040,11 @@ async function uploadSelectedCsv() {
     setUploadSummary(error.message);
     previewTable.classList.add("hidden");
     exposureMapControls?.classList.add("hidden");
+    return null;
   }
 }
+
+window.loadExposureSource = loadExposureSource;
 
 function applyExposurePreviewPayload(payload) {
   currentUploadId = payload.upload_id;
@@ -3485,6 +3496,7 @@ async function clearExposureWorkflow({ preserveStatus = false } = {}) {
   window.rasterIntersectionController?.reset?.();
   window.rasterIntersectionPreview?.clear?.();
   window.rasterIntersectionLayers?.clear?.();
+  window.sqlServerSource?.reset?.();
 
   try {
     uploadForm?.reset();
@@ -3581,6 +3593,7 @@ runEnrichment.addEventListener("click", async () => {
   downloadLink.classList.add("hidden");
   statsPanel.classList.add("hidden");
   releaseStatsDownload();
+  window.sqlServerSource?.hideWriteBack?.();
   const requestId = ++enrichmentProgressRequestId;
 
   try {
@@ -3633,6 +3646,7 @@ async function pollEnrichmentProgress(jobId, requestId) {
       renderSummary(payload.summary);
       renderStats(payload.summary);
       updateStatsDownload(payload.summary);
+      window.sqlServerSource?.offerWriteBack?.({ kind: "enrichment", jobId });
       statusEl.textContent = "Done";
       runEnrichment.disabled = false;
       return;
@@ -3835,7 +3849,7 @@ function setUploadSummary(message) {
 
 function setUploadedCsvName(filename) {
   if (csvDropzoneTitle) {
-    csvDropzoneTitle.textContent = filename || "Choose Exposure File";
+    csvDropzoneTitle.textContent = filename || "Choose CSV";
   }
 
   if (csvDropzoneSubtitle) {
