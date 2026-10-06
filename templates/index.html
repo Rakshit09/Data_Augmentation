@@ -48,10 +48,13 @@
     </section>
 
     <section id="etlMain" class="main-view hidden">
-      <div class="etl-splash">
+      <div id="etlSplash" class="etl-splash">
         <p class="eyebrow">Database Setup</p>
         <h2>Prepare a building lookup database for your project</h2>
         <p class="etl-splash-sub">This database powers building searches and exposure enrichment. Start with OpenBuildingMap when you need a new extract for a country or selected boundary. If you already have building data in a Parquet file, use that as your starting point instead. Open the relevant workflow on the right to configure your source and create the local lookup database.</p>
+      </div>
+      <div id="supplementMapWrap" class="supp-map-wrap hidden">
+        <div id="supplementMap" class="supp-map" aria-label="Supplement preview map"></div>
       </div>
     </section>
 
@@ -594,6 +597,245 @@
               <div id="customParquetStatus" class="etl-status hidden"></div>
             </div>
           </section>
+
+          <section class="etl-workflow etl-workflow--secondary supp-workflow">
+            <button id="supplementToggle" class="etl-workflow-toggle" type="button" aria-expanded="false" aria-controls="supplementBody">
+              <span class="etl-workflow-header">
+                <span class="eyebrow">Workflow 3</span>
+                <span class="etl-workflow-title">Supplement Database</span>
+                <span class="etl-workflow-copy">Match a GeoPackage or Parquet dataset to the buildings in a lookup database, pick the columns to bring across, preview the match on the map, then write them into a new or the existing database. Unmatched footprints can be added as new buildings.</span>
+              </span>
+            </button>
+
+            <div id="supplementBody" class="etl-workflow-body hidden">
+              <ol class="supp-stepper" aria-label="Supplement steps">
+                <li data-step="source" class="is-active"><span class="supp-step-dot">1</span><span>Source</span></li>
+                <li data-step="match"><span class="supp-step-dot">2</span><span>Match</span></li>
+                <li data-step="columns"><span class="supp-step-dot">3</span><span>Columns</span></li>
+                <li data-step="output"><span class="supp-step-dot">4</span><span>Output</span></li>
+              </ol>
+
+              <form id="supplementForm" class="etl-form" autocomplete="off">
+                <fieldset class="etl-fieldset" data-step-panel="source">
+                  <legend>1 · Source &amp; target</legend>
+                  <label>
+                    <span class="field-label-row">
+                      <span>Target lookup database</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="The DuckDB lookup database whose buildings receive the new columns. Defaults to the database currently loaded in the app.">i</span>
+                    </span>
+                    <span class="path-picker-row">
+                      <input id="suppTargetDb" type="text" placeholder="etl_output/building_lookup.duckdb">
+                      <button id="suppBrowseTarget" type="button">Browse</button>
+                    </span>
+                  </label>
+                  <label>
+                    <span class="field-label-row">
+                      <span>Supplement source</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="A GeoPackage (.gpkg) or Parquet (.parquet) file with building footprints or points. GeoPackages are read directly with SQLite, so large files on network drives work without GDAL.">i</span>
+                    </span>
+                    <span class="path-picker-row">
+                      <input id="suppSourcePath" type="text" placeholder="J:\path\to\dataset.gpkg">
+                      <button id="suppBrowseSource" type="button">Browse</button>
+                    </span>
+                  </label>
+                  <button id="suppInspect" class="etl-tab-button" type="button">Inspect source</button>
+                  <div id="suppSourceSummary" class="supp-summary hidden"></div>
+                  <div id="suppLayerPanel" class="supp-layer-panel hidden"></div>
+                  <div id="suppGeometryPanel" class="supp-geometry-panel hidden">
+                    <label>
+                      <span class="field-label-row">
+                        <span>Geometry column</span>
+                        <span class="field-tip" tabindex="0" data-tooltip="Column holding the geometry (GEOMETRY, WKB or WKT). Leave empty to build points from longitude/latitude columns instead.">i</span>
+                      </span>
+                      <select id="suppGeometryColumn"></select>
+                    </label>
+                    <div class="supp-two-col">
+                      <label><span>Longitude</span><select id="suppLonColumn"></select></label>
+                      <label><span>Latitude</span><select id="suppLatColumn"></select></label>
+                    </div>
+                  </div>
+                  <label id="suppCrsRow" class="hidden">
+                    <span class="field-label-row">
+                      <span>Source CRS</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Coordinate reference system of the source, read from the file. Override only if the file is missing or has the wrong CRS, for example EPSG:25832.">i</span>
+                    </span>
+                    <input id="suppSourceCrs" type="text" placeholder="EPSG:25832">
+                  </label>
+                </fieldset>
+
+                <fieldset class="etl-fieldset hidden" data-step-panel="match">
+                  <legend>2 · Matching</legend>
+                  <div id="suppMethodCard" class="supp-method-card"></div>
+                  <div class="supp-two-col">
+                    <label>
+                      <span class="field-label-row">
+                        <span>Search radius (m)</span>
+                        <span class="field-tip" tabindex="0" data-tooltip="Buildings with no direct hit are matched to the nearest source feature within this distance. Keep it small (3-10 m) for footprint-to-footprint matching so neighbours are not picked up.">i</span>
+                      </span>
+                      <input id="suppRadius" type="number" min="0" max="250" step="0.5" value="5">
+                    </label>
+                    <label id="suppIouRow">
+                      <span class="field-label-row">
+                        <span>High-confidence overlap</span>
+                        <span class="field-tip" tabindex="0" data-tooltip="Minimum footprint overlap (intersection over union) for an 'inside' match to be rated high confidence. Lower values accept more split or merged buildings as high.">i</span>
+                      </span>
+                      <span class="supp-range-row">
+                        <input id="suppMinIou" type="range" min="0" max="1" step="0.05" value="0.5">
+                        <output id="suppMinIouValue">0.50</output>
+                      </span>
+                    </label>
+                    <label id="suppAggregateRow" class="hidden">
+                      <span class="field-label-row">
+                        <span>Several points per building</span>
+                        <span class="field-tip" tabindex="0" data-tooltip="How numeric values are combined when several source points fall on the same building. Text columns always take the closest point.">i</span>
+                      </span>
+                      <select id="suppAggregate">
+                        <option value="closest">Closest point</option>
+                        <option value="mean">Mean</option>
+                        <option value="max">Maximum</option>
+                        <option value="min">Minimum</option>
+                        <option value="sum">Sum</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  <div class="supp-filter">
+                    <span class="field-label-row supp-subhead">
+                      <span>Only use source rows where</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Optional row filter applied while reading the source, e.g. keep building functions starting with 31001_ to skip bridges, walls and other structures.">i</span>
+                    </span>
+                    <div class="supp-filter-row">
+                      <select id="suppFilterColumn" aria-label="Filter column"></select>
+                      <select id="suppFilterOp" aria-label="Filter operator">
+                        <option value="prefix">starts with</option>
+                        <option value="not_prefix">does not start with</option>
+                        <option value="in">is one of</option>
+                        <option value="not_in">is not one of</option>
+                        <option value="between">is between</option>
+                      </select>
+                    </div>
+                    <div id="suppFilterValues" class="supp-chip-input hidden">
+                      <div id="suppFilterChips" class="supp-chips"></div>
+                      <input id="suppFilterEntry" type="text" placeholder="Type a value and press Enter" list="suppFilterSuggestions">
+                      <datalist id="suppFilterSuggestions"></datalist>
+                      <div id="suppFilterTopValues" class="supp-top-values"></div>
+                    </div>
+                    <div id="suppFilterRange" class="supp-two-col hidden">
+                      <label><span>Minimum</span><input id="suppFilterMin" type="number" step="any"></label>
+                      <label><span>Maximum</span><input id="suppFilterMax" type="number" step="any"></label>
+                    </div>
+                  </div>
+
+                  <label id="suppNewBuildingsRow" class="supp-check">
+                    <input id="suppAddNew" type="checkbox" checked>
+                    <span>Add unmatched source footprints as new buildings</span>
+                    <span class="field-tip" tabindex="0" data-tooltip="Source footprints that no existing building matched, and that do not sit inside an existing building, are appended to the lookup table with their own geometry and the selected columns.">i</span>
+                  </label>
+                </fieldset>
+
+                <fieldset class="etl-fieldset hidden" data-step-panel="columns">
+                  <legend>3 · Columns to add</legend>
+                  <div class="supp-two-col supp-prefix-row">
+                    <label>
+                      <span class="field-label-row">
+                        <span>Column prefix</span>
+                        <span class="field-tip" tabindex="0" data-tooltip="Prepended to every new column so the supplement is easy to spot and cannot collide with existing fields. Match quality columns use the same prefix.">i</span>
+                      </span>
+                      <input id="suppPrefix" type="text" placeholder="ioer_">
+                    </label>
+                    <label>
+                      <span>Find column</span>
+                      <input id="suppColumnSearch" type="search" placeholder="Filter by name">
+                    </label>
+                  </div>
+                  <div class="supp-column-toolbar">
+                    <span id="suppColumnCount" class="pill">0 selected</span>
+                    <span class="supp-toolbar-actions">
+                      <button id="suppSelectAll" class="etl-tab-button" type="button">Select all</button>
+                      <button id="suppSelectNone" class="etl-tab-button" type="button">Clear</button>
+                    </span>
+                  </div>
+                  <div id="suppColumnList" class="supp-column-list" role="list"></div>
+                  <p id="suppMatchColumnsNote" class="etl-hint"></p>
+                  <div id="suppConflictNote" class="supp-warning hidden"></div>
+                  <label id="suppReplaceRow" class="supp-check hidden">
+                    <input id="suppReplaceExisting" type="checkbox">
+                    <span>Replace existing columns with the same name</span>
+                  </label>
+                </fieldset>
+
+                <fieldset class="etl-fieldset hidden" data-step-panel="output">
+                  <legend>4 · Output</legend>
+                  <div class="supp-mode-cards" role="radiogroup" aria-label="Output mode">
+                    <label class="supp-mode-card">
+                      <input type="radio" name="suppOutputMode" value="new" checked>
+                      <span class="supp-mode-title">Write a new database file</span>
+                      <span class="supp-mode-copy">Original stays untouched. Needs free space about the size of the target database.</span>
+                    </label>
+                    <label class="supp-mode-card">
+                      <input type="radio" name="suppOutputMode" value="inplace">
+                      <span class="supp-mode-title">Update in place</span>
+                      <span class="supp-mode-copy">Builds the updated copy next to the original, then swaps it in. Same path, no reconfiguration.</span>
+                    </label>
+                  </div>
+                  <label id="suppOutputPathRow">
+                    <span class="field-label-row">
+                      <span>New database path</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Where the supplemented lookup database is written. Must end with .duckdb and differ from the target.">i</span>
+                    </span>
+                    <input id="suppOutputPath" type="text" placeholder="etl_output/building_lookup_ioer.duckdb">
+                  </label>
+                  <label id="suppActivateRow" class="supp-check">
+                    <input id="suppActivate" type="checkbox" checked>
+                    <span>Load the new database in the app when finished</span>
+                  </label>
+                  <label id="suppBackupRow" class="supp-check hidden">
+                    <input id="suppKeepBackup" type="checkbox">
+                    <span>Keep the original as a timestamped backup</span>
+                  </label>
+                  <label>
+                    <span class="field-label-row">
+                      <span>Working folder</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Local folder for temporary matching files. Use a fast local drive with plenty of space; the files are deleted when the job finishes.">i</span>
+                    </span>
+                    <span class="path-picker-row">
+                      <input id="suppWorkDir" type="text" placeholder="etl_output/.supplement_work">
+                      <button id="suppBrowseWork" type="button">Browse</button>
+                    </span>
+                  </label>
+                  <label id="suppCopyLocalRow" class="supp-check hidden">
+                    <input id="suppCopyLocal" type="checkbox">
+                    <span>Copy the source to the working folder before reading</span>
+                    <span class="field-tip" tabindex="0" data-tooltip="The source is on a network drive. Direct reading is usually fast; tick this if the share is slow or unstable.">i</span>
+                  </label>
+                  <div id="suppDiskMeter" class="supp-disk hidden"></div>
+                  <div class="supp-presets">
+                    <span class="field-label-row supp-subhead">
+                      <span>Presets</span>
+                      <span class="field-tip" tabindex="0" data-tooltip="Save the layer pattern, filter, matching settings and column choices to reuse them on the next file with the same structure. Stored in this browser.">i</span>
+                    </span>
+                    <div class="supp-preset-row">
+                      <select id="suppPresetSelect" aria-label="Saved presets"><option value="">Saved presets…</option></select>
+                      <button id="suppPresetApply" class="etl-tab-button" type="button">Apply</button>
+                      <button id="suppPresetDelete" class="etl-tab-button" type="button">Delete</button>
+                    </div>
+                    <div class="supp-preset-row">
+                      <input id="suppPresetName" type="text" placeholder="Preset name, e.g. IOER LoD2 Germany">
+                      <button id="suppPresetSave" class="etl-tab-button" type="button">Save</button>
+                    </div>
+                  </div>
+                </fieldset>
+
+                <div id="suppActions" class="supp-actions hidden">
+                  <button id="suppPreview" class="etl-tab-button" type="button">Preview in map view</button>
+                  <button id="suppRun" type="button">Run supplement</button>
+                  <button id="suppCancel" class="etl-tab-button supp-cancel hidden" type="button">Cancel</button>
+                </div>
+              </form>
+
+              <div id="supplementStatus" class="etl-status hidden"></div>
+            </div>
+          </section>
         </section>
       </section>
 
@@ -623,6 +865,7 @@
   <script src="{{ url_for('static', filename='building_lookup_fields.js') }}"></script>
   <script src="{{ url_for('static', filename='exposure_enrichment_fields.js') }}"></script>
   <script src="{{ url_for('static', filename='custom_parquet_database.js') }}"></script>
+  <script src="{{ url_for('static', filename='supplement_database.js') }}"></script>
   <script src="{{ url_for('static', filename='add_layer.js') }}"></script>
   <script src="{{ url_for('static', filename='raster_intersection_api.js') }}"></script>
   <script src="{{ url_for('static', filename='raster_intersection_layers.js') }}"></script>

@@ -258,6 +258,16 @@ def run_enrichment_worker_mode():
     enrichment_worker_main()
 
 
+def run_supplement_worker_mode():
+    """Hidden worker mode for Workflow 3 (supplement database); no UI."""
+    _install_bundled_duckdb_extensions()
+
+    from supplement_database import WORKER_FLAG, worker_main
+
+    args = [arg for arg in sys.argv[1:] if arg != WORKER_FLAG]
+    sys.exit(worker_main(args))
+
+
 def build_flask_app():
     """
     Imports are inside this function so import errors are captured and logged.
@@ -310,6 +320,10 @@ def main():
 
     if "--enrichment-worker" in sys.argv:
         run_enrichment_worker_mode()
+        return
+
+    if "--supplement-worker" in sys.argv:
+        run_supplement_worker_mode()
         return
 
     write_log("Application starting...")

@@ -8,6 +8,7 @@ import hashlib
 import ssl
 from genericpath import exists
 from html import escape
+import gc
 import json
 import math
 import os
@@ -36,6 +37,7 @@ from werkzeug.utils import secure_filename
 
 from country_boundary_catalog import DEFAULT_COUNTRY_BOUNDARY_CATALOG, list_catalog_countries
 from custom_parquet_database import register_custom_parquet_routes
+from supplement_database import register_supplement_routes
 from exposure_map_cache import (
     RAW_POINT_ZOOM,
     build_exposure_multires_tables,
@@ -1105,6 +1107,16 @@ def browse_local_file(kind: str) -> Optional[str]:
             "validator": lambda selected: validate_local_file(selected, ".duckdb", "DuckDB"),
             "filetypes": [("DuckDB files", "*.duckdb"), ("All files", "*.*")],
         },
+        "supplement": {
+            "title": "Select supplement source (GeoPackage or Parquet)",
+            "validator": lambda selected: validate_local_file_suffixes(selected, {".gpkg", ".parquet"}, "Supplement source"),
+            "filetypes": [
+                ("GeoPackage or Parquet", "*.gpkg *.parquet"),
+                ("GeoPackage", "*.gpkg"),
+                ("Parquet", "*.parquet"),
+                ("All files", "*.*"),
+            ],
+        },
         "layer": {
             "title": "Select layer file",
             "validator": validate_local_layer_file,
@@ -1120,7 +1132,7 @@ def browse_local_file(kind: str) -> Optional[str]:
         },
     }
     if kind not in choices:
-        raise ValueError("File type must be parquet, db, or layer.")
+        raise ValueError("File type must be parquet, db, layer, or supplement.")
 
     choice = choices[kind]
     title = str(choice["title"])
@@ -1400,6 +1412,26 @@ def create_app(
                 _f.unlink(missing_ok=True)
     sweep_stale_runtime_files()
     register_custom_parquet_routes(app)
+
+    def release_lookup_db(db_path: str) -> None:
+        resolved = str(Path(db_path).expanduser().resolve())
+        with db_conn_lock:
+            cached_con = app.config.get("DB_CONN")
+            if cached_con is None or (app.config.get("DB_CONN_PATH") or "") != resolved:
+                return
+            app.config["DB_CONN"] = None
+            app.config["DB_CONN_PATH"] = ""
+        try:
+            cached_con.close()
+        except Exception:
+            pass
+        gc.collect()
+
+    register_supplement_routes(
+        app,
+        release_db_connection=release_lookup_db,
+        display_seed_fields=DEFAULT_EXPOSURE_FIELD_CANDIDATES,
+    )
     register_layer_upload_routes(app)
     register_raster_intersection_routes(
         app,

@@ -1149,13 +1149,13 @@ function getStoredOverlayLayerOrder() {
   }
 }
 
-function setBasemap(id) {
+function setBasemap(id, targetMap = map) {
   if (!BASEMAPS[id]) return;
 
   for (const basemapId of Object.keys(BASEMAPS)) {
     const layerId = basemapLayerId(basemapId);
-    if (map.getLayer(layerId)) {
-      map.setLayoutProperty(layerId, "visibility", basemapId === id ? "visible" : "none");
+    if (targetMap.getLayer(layerId)) {
+      targetMap.setLayoutProperty(layerId, "visibility", basemapId === id ? "visible" : "none");
     }
   }
 
@@ -1277,7 +1277,7 @@ class BasemapControl {
     }
 
     select.value = defaultBasemapId;
-    select.addEventListener("change", () => setBasemap(select.value));
+    select.addEventListener("change", () => setBasemap(select.value, this.map));
 
     button.addEventListener("click", () => {
       this.container.classList.toggle("open");
@@ -1849,9 +1849,8 @@ class ExposurePointFilterControl {
   }
 }
 
-const map = new maplibregl.Map({
-  container: "map",
-  style: {
+function basemapStyle(activeBasemapId = defaultBasemapId) {
+  return {
     version: 8,
     glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
     sources: Object.fromEntries(Object.entries(BASEMAPS).map(([id, basemap]) => [
@@ -1869,15 +1868,35 @@ const map = new maplibregl.Map({
         type: "raster",
         source: basemapSourceId(id),
         layout: {
-          visibility: id === defaultBasemapId ? "visible" : "none"
+          visibility: id === activeBasemapId ? "visible" : "none"
         }
       }
     ))
-  },
+  };
+}
+
+const map = new maplibregl.Map({
+  container: "map",
+  style: basemapStyle(),
   center: [10.45, 51.16],
   zoom: 5.4,
   maxZoom: 22
 });
+
+// Standalone basemap-only maps (e.g. the Workflow 3 preview) that share nothing with the explorer map.
+window.createBasemapMap = (container, options = {}) => {
+  const instance = new maplibregl.Map({
+    container,
+    style: basemapStyle(getStoredBasemapId()),
+    center: [10.45, 51.16],
+    zoom: 5.4,
+    maxZoom: 22,
+    ...options
+  });
+  instance.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), "top-left");
+  instance.addControl(new BasemapControl(), "top-left");
+  return instance;
+};
 
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-left");
 map.addControl(new BasemapControl(), "top-left");
@@ -3558,6 +3577,7 @@ function resetEtlUi() {
   etlStatusEl.classList.remove("etl-status--error", "etl-status--success");
   etlStatusEl.innerHTML = "";
   window.customParquetUi?.reset?.();
+  window.supplementUi?.reset?.();
 }
 
 async function clearAllState() {
@@ -3922,15 +3942,22 @@ const etlWorkflowToggle = document.getElementById("etlWorkflowToggle");
 const etlWorkflowBody = document.getElementById("etlWorkflowBody");
 const customParquetToggle = document.getElementById("customParquetToggle");
 const customParquetBody = document.getElementById("customParquetBody");
+const supplementToggle = document.getElementById("supplementToggle");
+const supplementBody = document.getElementById("supplementBody");
 
 function setExpandedEtlWorkflow(workflow) {
   const showCreate = workflow === "create";
   const showCustom = workflow === "custom";
+  const showSupplement = workflow === "supplement";
 
   etlWorkflowToggle.setAttribute("aria-expanded", String(showCreate));
   customParquetToggle.setAttribute("aria-expanded", String(showCustom));
+  supplementToggle?.setAttribute("aria-expanded", String(showSupplement));
   etlWorkflowBody.classList.toggle("hidden", !showCreate);
   customParquetBody.classList.toggle("hidden", !showCustom);
+  supplementBody?.classList.toggle("hidden", !showSupplement);
+  window.supplementUi?.setMapVisible?.(showSupplement);
+  if (showSupplement) window.supplementUi?.onOpen?.();
 }
 
 etlWorkflowToggle.addEventListener("click", () => {
@@ -3943,6 +3970,12 @@ customParquetToggle.addEventListener("click", () => {
   dismissCriticalNote();
   const isExpanded = customParquetToggle.getAttribute("aria-expanded") === "true";
   setExpandedEtlWorkflow(isExpanded ? null : "custom");
+});
+
+supplementToggle?.addEventListener("click", () => {
+  dismissCriticalNote();
+  const isExpanded = supplementToggle.getAttribute("aria-expanded") === "true";
+  setExpandedEtlWorkflow(isExpanded ? null : "supplement");
 });
 
 setExpandedEtlWorkflow(null);

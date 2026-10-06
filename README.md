@@ -224,6 +224,32 @@ You can also add up to 10 extra mapped fields.
 
 The app creates a new DuckDB lookup database and activates it automatically.
 
+### Workflow 3: Supplement Database
+
+Use this workflow to add columns from another building dataset (for example the IOER 3D Building Metrics GeoPackage) to an existing lookup database. Sources can be `.gpkg` (one or more layers with the same columns) or `.parquet` (geometry column or longitude/latitude columns), with polygon or point geometry.
+
+#### Workflow 3 steps
+
+1. Expand `Workflow 3: Supplement Database`. The map replaces the splash panel so you can frame an area for previews.
+2. Check the target lookup database (defaults to the active one) and browse to the supplement source.
+3. Click `Inspect source`. The app reads the layers, CRS, feature counts and sample values without scanning the whole file.
+4. Pick the layers, then set matching: search radius, high-confidence overlap, an optional row filter (for example `bldg_function` starts with `31001_` to skip bridges and other structures), and whether unmatched footprints become new buildings.
+5. Tick the columns to add. Each gets the column prefix (editable per column) and an optional output type.
+6. Choose `Write a new database file` or `Update in place`, the working folder, and optionally save the settings as a preset.
+7. Zoom the map to a small area and click `Preview in map view` to see match quality coloured on the map, then click `Run supplement`.
+
+#### How matching works
+
+- Footprints: a point on each target building is tested against the source footprints; buildings without a hit take the closest source footprint within the radius. Overlap (IoU) rates the match as `high`, `medium` (split or merged buildings) or `low` (nearest only).
+- Points: each point is assigned to the building it falls inside, otherwise the nearest building within the radius. Several points on one building are combined with the chosen rule.
+- Every run adds `<prefix>match_type`, `<prefix>match_confidence` and `<prefix>match_distance_m`, plus `<prefix>match_iou` and `<prefix>match_shared` for footprints or `<prefix>match_count` for points.
+
+#### Workflow 3 rules
+
+- The original database is never edited directly. `Update in place` builds the updated copy next to it and swaps it in at the end; optionally the original is kept as a timestamped backup.
+- Both modes need free space about the size of the target database next to the output, plus temporary space in the working folder. The output panel shows an estimate.
+- Each run is recorded in the `supplement_log` table of the database, and the new columns are added to the default enrichment fields.
+
 ## 7. Files and Working Folders
 
 Common runtime locations include:

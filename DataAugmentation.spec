@@ -211,6 +211,7 @@ a = Analysis(
         'tkinter',
         'building_lookup_app',
         'enrichment_worker',
+        'supplement_database',
         'layer_upload_routes',
         'raster_intersections',
         'raster_intersections.routes',
@@ -264,3 +265,5 @@ coll = COLLECT(
     upx_exclude=[],
     name='DataAugmentation_v3.5',
 )
+
+
