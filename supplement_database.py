@@ -48,6 +48,8 @@ POINT_AGGREGATES = {"closest", "mean", "max", "min", "sum"}
 NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 CRS_PATTERN = re.compile(r"^[A-Za-z]+:[A-Za-z0-9]+$")
 HIDDEN_NAME_PREFIXES = ("geom", "bbox", "quadkey")
+# Always copied into a new database; geom/bbox/quadkey columns are kept too.
+SUPPLEMENT_REQUIRED_COLUMNS = {"building_id"}
 GENERIC_PREFIX_WORDS = {"data", "tmp", "temp", "input", "output", "source", "files", "file", "new", "copy"}
 WKB_COLUMN_NAMES = {"geom", "geometry", "geom_wkb", "wkb", "wkb_geometry", "shape", "the_geom"}
 LON_GUESSES = ("lon", "lng", "longitude", "centroid_lon", "x")
@@ -882,6 +884,22 @@ def build_job_config(
         if active_db_path and output_path == _resolve_path(active_db_path, "Active database"):
             raise ValueError("The new database path is the database currently open in the app. Choose another name.")
 
+    keep_columns: Optional[List[str]] = None
+    raw_keep = output.get("keep_columns")
+    if output_mode == "new" and raw_keep is not None:
+        if not isinstance(raw_keep, list):
+            raise ValueError("Fields to keep must be a list of column names.")
+        requested_keep = {str(name).casefold() for name in raw_keep}
+        unknown = sorted(requested_keep - set(target_columns))
+        if unknown:
+            raise ValueError(f"Unknown field(s) in the original database: {', '.join(unknown[:5])}")
+        keep_columns = [
+            name for folded, name in target_columns.items()
+            if folded in requested_keep
+            or folded in SUPPLEMENT_REQUIRED_COLUMNS
+            or folded.startswith(HIDDEN_NAME_PREFIXES)
+        ]
+
     if preview:
         work_dir = preview_root
         bbox = _validate_bbox(payload.get("bbox"))
@@ -929,6 +947,7 @@ def build_job_config(
             "path": str(output_path) if output_path else None,
             "activate": bool(output.get("activate", True)),
             "keep_backup": bool(output.get("keep_backup")),
+            "keep_columns": keep_columns,
         },
         "work_dir": str(work_dir),
         "work_db": str(work_dir / f"supplement_{job_id}.duckdb"),
@@ -1916,6 +1935,9 @@ def _update_display_fields(con: duckdb.DuckDBPyConnection, cfg: Dict[str, Any]) 
         for order, name in enumerate(seed, start=1):
             con.execute(f"INSERT INTO {DISPLAY_FIELDS_TABLE} VALUES (?, ?, ?)", [name, name, order])
     next_order = int(con.execute(f"SELECT COALESCE(MAX(display_order), 0) FROM {DISPLAY_FIELDS_TABLE}").fetchone()[0]) + 1
+    for (name,) in con.execute(f"SELECT field_name FROM {DISPLAY_FIELDS_TABLE}").fetchall():
+        if name not in building_columns:
+            con.execute(f"DELETE FROM {DISPLAY_FIELDS_TABLE} WHERE field_name = ?", [name])
     new_fields = [column["output"] for column in cfg["columns"]] + [cfg["prefix"] + "match_confidence"]
     for name in new_fields:
         con.execute(f"DELETE FROM {DISPLAY_FIELDS_TABLE} WHERE field_name = ?", [name])
@@ -1977,7 +1999,13 @@ def _build_output_db(out_path: Path, cfg: Dict[str, Any], stats: Dict[str, Any],
         target_columns = [str(row[0]) for row in con.execute("DESCRIBE tdb.buildings").fetchall()]
         supp_columns = [str(row[0]) for row in con.execute("DESCRIBE w.supp").fetchall() if str(row[0]) != "rid"]
         replaced = {name.casefold() for name in supp_columns}
-        keep = [name for name in target_columns if name.casefold() not in replaced]
+        keep_filter = cfg["output"].get("keep_columns")
+        keep_set = None if keep_filter is None else {name.casefold() for name in keep_filter}
+        keep = [
+            name for name in target_columns
+            if name.casefold() not in replaced and (keep_set is None or name.casefold() in keep_set)
+        ]
+        dropped = {name.casefold() for name in target_columns} - replaced - {name.casefold() for name in keep}
         select_sql = ", ".join(
             [f"b.{_sql_identifier(name)}" for name in keep] + [f"s.{_sql_identifier(name)}" for name in supp_columns]
         )
@@ -1995,9 +2023,16 @@ def _build_output_db(out_path: Path, cfg: Dict[str, Any], stats: Dict[str, Any],
         if cfg["add_new_buildings"] and _table_exists(con, "new_rows", "w"):
             inserted = int(con.execute("SELECT COUNT(*) FROM w.new_rows").fetchone()[0])
             if inserted:
+                output_names = {name.casefold() for name in keep + supp_columns}
+                new_columns = [
+                    str(row[0]) for row in con.execute("DESCRIBE w.new_rows").fetchall()
+                    if str(row[0]).casefold() in output_names
+                ]
                 _execute_tracked(
                     con,
-                    "INSERT INTO buildings BY NAME SELECT * FROM w.new_rows",
+                    "INSERT INTO buildings BY NAME SELECT "
+                    + ", ".join(_sql_identifier(name) for name in new_columns)
+                    + " FROM w.new_rows",
                     None,
                     lambda fraction, detail: report(0.6 + 0.05 * fraction, detail),
                     f"Appending {inserted:,} new buildings",
@@ -2016,9 +2051,10 @@ def _build_output_db(out_path: Path, cfg: Dict[str, Any], stats: Dict[str, Any],
 
         index_sql = [
             str(row[0]) for row in con.execute("""
-                SELECT sql FROM duckdb_indexes()
+                SELECT sql, expressions FROM duckdb_indexes()
                 WHERE database_name = 'tdb' AND table_name = 'buildings' AND sql IS NOT NULL
             """).fetchall()
+            if not dropped or not set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", str(row[1] or "").casefold())) & dropped
         ]
         for position, sql in enumerate(index_sql):
             low = 0.66 + 0.3 * position / max(1, len(index_sql))

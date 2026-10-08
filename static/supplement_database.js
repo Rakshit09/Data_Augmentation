@@ -50,6 +50,7 @@
     outputPath: $("suppOutputPath"),
     activateRow: $("suppActivateRow"),
     activate: $("suppActivate"),
+    keepFieldsPanel: $("suppKeepFieldsPanel"),
     backupRow: $("suppBackupRow"),
     keepBackup: $("suppKeepBackup"),
     workDir: $("suppWorkDir"),
@@ -76,6 +77,9 @@
   const PRESET_KEY = "dataAugmentation.supplementPresets.v1";
   const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,62}$/;
   const HIDDEN_PREFIXES = ["geom", "bbox", "quadkey"];
+  // Must match SUPPLEMENT_REQUIRED_COLUMNS in supplement_database.py.
+  const REQUIRED_KEEP_COLUMNS = new Set(["building_id"]);
+  const LOOKUP_KEEP_COLUMNS = ["centroid_lon", "centroid_lat", "footprint_area_m2"];
   const COLORS = {
     high: "#16a34a",
     medium: "#f59e0b",
@@ -340,6 +344,8 @@
     if (defaults.work_dir && !els.workDir.value.trim()) els.workDir.value = defaults.work_dir;
     els.copyLocalRow.classList.toggle("hidden", !source.is_remote);
     els.copyLocal.checked = false;
+    renderKeepFields();
+    onOutputModeChanged();
     ["match", "columns", "output"].forEach((step) => panel(step).classList.remove("hidden"));
     els.actions.classList.remove("hidden");
     if (!target) {
@@ -695,7 +701,7 @@
           </div>
           <input type="text" data-role="output" aria-label="Output name for ${esc(field.name)}" spellcheck="false">
           <select data-role="type" aria-label="Output type for ${esc(field.name)}">
-            <option value="auto">Keep (${esc(shortType(field.type))})</option>
+            <option value="auto">${esc(shortType(field.type))}</option>
             <option value="text">Text</option>
             <option value="integer">Integer</option>
             <option value="double">Decimal</option>
@@ -830,10 +836,74 @@
   // Output, disk space
   // ---------------------------------------------------------------------
 
+  function renderKeepFields() {
+    const columns = (inspected?.target?.columns || [])
+      .filter((column) => !HIDDEN_PREFIXES.some((prefix) => column.name.toLowerCase().startsWith(prefix)));
+    if (!columns.length) {
+      els.keepFieldsPanel.innerHTML = "";
+      return;
+    }
+    els.keepFieldsPanel.innerHTML = `
+      <div class="supp-layer-head">
+        <span class="supp-subhead">Fields to keep from the original database</span>
+        <span class="supp-toolbar-actions">
+          <span class="pill" data-role="count"></span>
+          <button type="button" class="etl-tab-button" data-role="all">Select all</button>
+          <button type="button" class="etl-tab-button" data-role="none">Remove all</button>
+        </span>
+      </div>
+      <div class="supp-layer-grid">${columns.map((column) => {
+        const required = REQUIRED_KEEP_COLUMNS.has(column.name);
+        return `
+          <label class="supp-layer-chip${required ? " is-locked" : ""}" title="${esc(column.name)}${required ? " (always kept: required by the app)" : ""}">
+            <input type="checkbox" value="${esc(column.name)}" checked${required ? " disabled" : ""}>
+            <span class="supp-layer-name">${esc(column.name)}</span>
+            <span class="supp-layer-count">${esc(shortType(column.type))}</span>
+          </label>`;
+      }).join("")}</div>
+      <p class="etl-hint">Unticked fields are left out of the new database. building_id and the geometry, bounding box and quadkey columns are always kept.</p>
+      <div class="supp-warning hidden" data-role="warn"></div>
+    `;
+    els.keepFieldsPanel.querySelector("[data-role='all']").addEventListener("click", () => setAllKeepFields(true));
+    els.keepFieldsPanel.querySelector("[data-role='none']").addEventListener("click", () => setAllKeepFields(false));
+    els.keepFieldsPanel.querySelector(".supp-layer-grid").addEventListener("change", updateKeepFieldCount);
+    updateKeepFieldCount();
+  }
+
+  function setAllKeepFields(checked) {
+    els.keepFieldsPanel.querySelectorAll(".supp-layer-grid input:not(:disabled)").forEach((input) => {
+      input.checked = checked;
+    });
+    updateKeepFieldCount();
+  }
+
+  function updateKeepFieldCount() {
+    const inputs = els.keepFieldsPanel.querySelectorAll(".supp-layer-grid input");
+    const kept = els.keepFieldsPanel.querySelectorAll(".supp-layer-grid input:checked").length;
+    const count = els.keepFieldsPanel.querySelector("[data-role='count']");
+    if (count) count.textContent = `${kept} of ${inputs.length} kept`;
+    const warn = els.keepFieldsPanel.querySelector("[data-role='warn']");
+    if (!warn) return;
+    const dropped = Array.from(inputs)
+      .filter((input) => !input.checked && LOOKUP_KEEP_COLUMNS.includes(input.value))
+      .map((input) => input.value);
+    warn.innerHTML = dropped.length
+      ? `Without ${dropped.map((name) => `<code>${esc(name)}</code>`).join(", ")} the new database cannot be used for exposure enrichment, map click lookup or raster intersections in this app.`
+      : "";
+    warn.classList.toggle("hidden", !dropped.length);
+  }
+
+  function keepColumns() {
+    const inputs = Array.from(els.keepFieldsPanel.querySelectorAll(".supp-layer-grid input"));
+    if (outputMode() !== "new" || inputs.every((input) => input.checked)) return null;
+    return inputs.filter((input) => input.checked).map((input) => input.value);
+  }
+
   function onOutputModeChanged() {
     const mode = outputMode();
     els.outputPathRow.classList.toggle("hidden", mode !== "new");
     els.activateRow.classList.toggle("hidden", mode !== "new");
+    els.keepFieldsPanel.classList.toggle("hidden", mode !== "new" || !els.keepFieldsPanel.innerHTML.trim());
     els.backupRow.classList.toggle("hidden", mode !== "inplace");
     scheduleSpaceCheck();
     refreshStepState();
@@ -1048,7 +1118,8 @@
         mode: outputMode(),
         path: els.outputPath.value.trim(),
         activate: els.activate.checked,
-        keep_backup: els.keepBackup.checked
+        keep_backup: els.keepBackup.checked,
+        keep_columns: keepColumns()
       },
       work_dir: els.workDir.value.trim(),
       copy_source_local: els.copyLocal.checked
@@ -1376,6 +1447,7 @@
     els.geometryPanel.classList.add("hidden");
     els.crsRow.classList.add("hidden");
     els.columnList.innerHTML = "";
+    els.keepFieldsPanel.innerHTML = "";
     ["match", "columns", "output"].forEach((step) => panel(step).classList.add("hidden"));
     els.actions.classList.add("hidden");
     els.disk.classList.add("hidden");

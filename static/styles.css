@@ -2668,6 +2668,11 @@ button:focus-visible,
   opacity: 0.5;
 }
 
+.etl-fieldset label.supp-layer-chip.is-locked {
+  opacity: 0.65;
+  cursor: default;
+}
+
 .supp-layer-name {
   overflow: hidden;
   flex: 1 1 auto;
@@ -2835,7 +2840,7 @@ button:focus-visible,
 
 .supp-col-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1.3fr) minmax(0, 1fr) 112px;
+  grid-template-columns: auto minmax(0, 1.3fr) minmax(0, 1fr) 84px;
   gap: 8px;
   align-items: center;
   padding: 8px 10px;
@@ -2929,6 +2934,10 @@ button:focus-visible,
 .supp-col-row:not(.is-selected) input[type=text],
 .supp-col-row:not(.is-selected) select {
   opacity: 0.55;
+}
+
+.supp-col-row select {
+  padding: 7px 4px 7px 8px;
 }
 
 .supp-warning {
@@ -3053,6 +3062,42 @@ button:focus-visible,
 .supp-actions .etl-tab-button {
   height: 44px;
   border-radius: 12px;
+}
+
+#supplementBody .etl-tab-button,
+#supplementBody .path-picker-row button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 84px;
+  padding: 0 16px;
+  border-width: 2px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+#supplementBody .supp-layer-head {
+  flex-wrap: wrap;
+}
+
+#supplementBody .supp-layer-head .supp-toolbar-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+#supplementBody .supp-toolbar-actions .etl-tab-button,
+#supplementBody .supp-layer-head .etl-tab-button,
+#supplementBody .supp-result-actions .etl-tab-button {
+  height: 32px;
+  padding: 0 14px;
+  font-size: 12px;
+}
+
+#supplementBody .supp-actions .etl-tab-button {
+  height: 44px;
 }
 
 .supp-cancel {

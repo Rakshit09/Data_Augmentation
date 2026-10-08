@@ -294,6 +294,7 @@ const EXPOSURE_POINT_LAYER_IDS = [
   "exposure-points-marker",
   "exposure-points-tag"
 ];
+const EXPOSURE_DEPTH_RESET_LAYER_ID = "exposure-depth-reset";
 const EXPOSURE_ALWAYS_BELOW_LAYER_IDS = [
   viewFilterFillLayerId,
   viewFilterOutlineLayerId,
@@ -2116,6 +2117,17 @@ map.on("load", () => {
     }
   });
 
+  // Circles/symbols are depth-tested against extrusions regardless of layer order.
+  map.addLayer({
+    id: EXPOSURE_DEPTH_RESET_LAYER_ID,
+    type: "custom",
+    renderingMode: "3d",
+    render(gl) {
+      gl.depthMask(true);
+      gl.clear(gl.DEPTH_BUFFER_BIT);
+    }
+  });
+
   map.addSource("exposure-points", {
     type: "geojson",
     data: emptyFeatureCollection,
@@ -2265,6 +2277,10 @@ function applyOverlayLayerOrder() {
     if (layerId !== exposureAnchorLayerId && map.getLayer(layerId) && map.getLayer(exposureAnchorLayerId)) {
       map.moveLayer(layerId, exposureAnchorLayerId);
     }
+  }
+
+  if (map.getLayer(EXPOSURE_DEPTH_RESET_LAYER_ID)) {
+    map.moveLayer(EXPOSURE_DEPTH_RESET_LAYER_ID, exposureAnchorLayerId);
   }
 }
 
