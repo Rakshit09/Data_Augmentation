@@ -1,0 +1,71 @@
+{
+  "country_name": "Germany",
+  "iso2": "DE",
+  "wikidata_qid": "Q183",
+  "esrm_country": "Germany",
+  "data_year": 2025,
+  "base_table": "J:/cms/Internal/Tools/Data_Augmentation/DEU/Supplement/base/part={part}/*.parquet",
+  "output_parts": "J:/cms/Internal/Tools/Data_Augmentation/DEU/Supplement/parts/deu_buildings_{part}",
+  "output": "J:/cms/Internal/Tools/Data_Augmentation/DEU/Supplement/deu_buildings_full",
+  "base_table_test": "J:/cms/Internal/Tools/Data_Augmentation/DEU/Supplement/base_dry/part=DE9/*.parquet",
+  "label_sources_test": [
+    {"type": "osm_pbf", "name": "osm_start_date", "url": "https://download.geofabrik.de/europe/germany/bremen-latest.osm.pbf", "weight": 1.0},
+    {"type": "wikidata_heritage", "name": "wikidata_heritage", "radius_m": 15, "weight": 0.5},
+    {"type": "wsf_new_development", "weight": 0.5}
+  ],
+  "parts": {
+    "DE1": {"osm": "https://download.geofabrik.de/europe/germany/baden-wuerttemberg-latest.osm.pbf"},
+    "DE2": {"osm": "https://download.geofabrik.de/europe/germany/bayern-latest.osm.pbf"},
+    "DE3": {"osm": "https://download.geofabrik.de/europe/germany/berlin-latest.osm.pbf"},
+    "DE4": {"osm": "https://download.geofabrik.de/europe/germany/brandenburg-latest.osm.pbf"},
+    "DE5": {"osm": "https://download.geofabrik.de/europe/germany/bremen-latest.osm.pbf"},
+    "DE6": {"osm": "https://download.geofabrik.de/europe/germany/hamburg-latest.osm.pbf"},
+    "DE7": {"osm": "https://download.geofabrik.de/europe/germany/hessen-latest.osm.pbf"},
+    "DE8": {"osm": "https://download.geofabrik.de/europe/germany/mecklenburg-vorpommern-latest.osm.pbf"},
+    "DE9": {"osm": "https://download.geofabrik.de/europe/germany/niedersachsen-latest.osm.pbf"},
+    "DEA": {"osm": "https://download.geofabrik.de/europe/germany/nordrhein-westfalen-latest.osm.pbf"},
+    "DEB": {"osm": "https://download.geofabrik.de/europe/germany/rheinland-pfalz-latest.osm.pbf"},
+    "DEC": {"osm": "https://download.geofabrik.de/europe/germany/saarland-latest.osm.pbf"},
+    "DED": {"osm": "https://download.geofabrik.de/europe/germany/sachsen-latest.osm.pbf"},
+    "DEE": {"osm": "https://download.geofabrik.de/europe/germany/sachsen-anhalt-latest.osm.pbf"},
+    "DEF": {"osm": "https://download.geofabrik.de/europe/germany/schleswig-holstein-latest.osm.pbf"},
+    "DEG": {"osm": "https://download.geofabrik.de/europe/germany/thueringen-latest.osm.pbf"}
+  },
+  "columns": {
+    "geometry": "geometry",
+    "height": "height_m",
+    "footprint_area": "footprint_area_m2",
+    "floors": "floors_est",
+    "use": "occupancy_code"
+  },
+  "use_groups": {
+    "RES": "res", "MIX": "res", "UNK": "res",
+    "COM": "com", "EDU": "com", "GOV": "com", "ASS": "com",
+    "IND": "ind", "AGR": "ind"
+  },
+  "unknown_use_group": "res",
+  "classes": [
+    ["Vor1919", null, 1918], ["a1919bis1949", 1919, 1949], ["a1950bis1959", 1950, 1959],
+    ["a1960bis1969", 1960, 1969], ["a1970bis1979", 1970, 1979], ["a1980bis1989", 1980, 1989],
+    ["a1990bis1999", 1990, 1999], ["a2000bis2009", 2000, 2009], ["a2010bis2015", 2010, 2015],
+    ["a2016undspaeter", 2016, null]
+  ],
+  "grid_prior": {
+    "name": "Zensus 2022 buildings with living space by construction decade (100 m / 1 km / 10 km grid)",
+    "url": "https://www.destatis.de/static/DE/zensus/gitterdaten/Gebaeude_nach_Baujahr_Jahrzehnte.zip",
+    "total_column": "Insgesamt_Gebaeude",
+    "levels": [
+      {"size": 10000, "member": "Gebaeude_nach_Baujahr/Zensus2022_Baujahr_JZ_10km-Gitter.csv", "x": "x_mp_10km", "y": "y_mp_10km"},
+      {"size": 1000, "member": "Gebaeude_nach_Baujahr/Zensus2022_Baujahr_JZ_1km-Gitter.csv", "x": "x_mp_1km", "y": "y_mp_1km"},
+      {"size": 100, "member": "Gebaeude_nach_Baujahr/Zensus2022_Baujahr_JZ_100m-Gitter.csv", "x": "x_mp_100m", "y": "y_mp_100m"}
+    ],
+    "smoothing": 1.0,
+    "last_class_scale": 1.55
+  },
+  "wsf": {"infill_weight_late": {"a2000bis2009": 0.4, "a2010bis2015": 0.3, "a2016undspaeter": 0.25}},
+  "label_sources": [
+    {"type": "osm_pbf", "name": "osm_start_date", "url": "set per part", "weight": 1.0},
+    {"type": "wikidata_heritage", "name": "wikidata_heritage", "radius_m": 15, "weight": 0.5},
+    {"type": "wsf_new_development", "weight": 0.5}
+  ]
+}

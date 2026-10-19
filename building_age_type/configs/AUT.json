@@ -1,0 +1,75 @@
+{
+  "country_name": "Austria",
+  "iso2": "AT",
+  "wikidata_qid": "Q40",
+  "esrm_country": "Austria",
+  "data_year": 2025,
+  "base_table": "J:/cms/Internal/Tools/Data_Augmentation/AUT/Supplement/aut_buildings.parquet",
+  "base_table_test": "J:/cms/Internal/Tools/Data_Augmentation/AUT/Supplement/test/aut_buildings.parquet",
+  "output": "J:/cms/Internal/Tools/Data_Augmentation/AUT/Supplement/aut_buildings_full",
+  "columns": {
+    "geometry": "geometry",
+    "height": "height_median",
+    "roof_class": "roof_class",
+    "footprint_area": "footprint_area",
+    "floors": "floors_est",
+    "use": "agwr_property"
+  },
+  "use_groups": {
+    "01": "res", "02": "res", "03": "res",
+    "04": "com:Hotels", "05": "com:Offices", "06": "com:Trade", "07": "com", "09": "com",
+    "08": "ind"
+  },
+  "unknown_use_group": "res",
+  "building_census": {
+    "type": "esrm20_material_period",
+    "file": "res_exposure_source_data/data_Austria_RES_census-buildings.xlsx",
+    "census_year": 2011,
+    "region_to_nuts2": {
+      "AUT.1_1": "AT11", "AUT.2_1": "AT21", "AUT.3_1": "AT12", "AUT.4_1": "AT31", "AUT.5_1": "AT32",
+      "AUT.6_1": "AT22", "AUT.7_1": "AT33", "AUT.8_1": "AT34", "AUT.9_1": "AT13"
+    },
+    "urban_nuts2": ["AT13"]
+  },
+  "residential_mapping": "res_mapping_schemes/mapping_Austria_RES.xlsx",
+  "brick_materials": [
+    "Non-insulating constr. (e.g. regular brick)",
+    "Regular bricks (or similar) and wood",
+    "Regular bricks and hollow tiles (or similar)"
+  ],
+  "material_labels": {
+    "Non-insulating constr. (e.g. regular brick)": "Solid brick masonry",
+    "Insulating construction (e.g. hollow tiles)": "Hollow brick masonry",
+    "Regular bricks and hollow tiles (or similar)": "Solid + hollow brick masonry",
+    "Regular bricks (or similar) and wood": "Brick masonry + timber",
+    "Hollow tiles (and similar) and wood": "Hollow brick + timber",
+    "Wood": "Timber",
+    "Prefabricated concrete parts": "Precast concrete",
+    "Other mixed construction": "Other mixed construction",
+    "Other construction materials": "Other materials (incl. cast concrete)"
+  },
+  "label_sources": [
+    {"type": "wfs_csv", "name": "vienna_exact_year", "geometry": "point", "crs": "EPSG:31256", "radius_m": 5,
+     "url": "https://data.wien.gv.at/daten/geo?service=WFS&request=GetFeature&version=2.0.0&outputFormat=csv&typeNames=ogdwien:GEBAEUDEINFOOGD&sortBy=OBJECTID",
+     "year_sql": "TRY_CAST(BAUJAHR AS INTEGER)", "weight": 1.0},
+    {"type": "wfs_csv", "name": "vienna_register", "geometry": "polygon", "crs": "EPSG:31256", "min_overlap": 0.3,
+     "url": "https://data.wien.gv.at/daten/geo?service=WFS&request=GetFeature&version=2.0.0&outputFormat=csv&typeNames=ogdwien:BAUPERIODEDETAILOGD&sortBy=OBJECTID",
+     "period_sql": "CASE WHEN OBJ_STR IS NOT NULL AND OBJ_STR <> '0' THEN OBJ_STR_TXT ELSE OBJ_STR2_TXT END",
+     "type_sql": "nullif(BAUTYP_TXT, 'Keine Angabe')", "weight": 1.0},
+    {"type": "osm_pbf", "name": "osm_start_date", "url": "https://download.geofabrik.de/europe/austria-latest.osm.pbf", "weight": 1.0},
+    {"type": "wikidata_heritage", "name": "wikidata_heritage", "radius_m": 15, "weight": 0.5},
+    {"type": "wsf_new_development", "weight": 0.5}
+  ],
+  "label_sources_test": [
+    {"type": "wfs_csv", "name": "vienna_exact_year", "geometry": "point", "crs": "EPSG:31256", "radius_m": 5,
+     "url": "https://data.wien.gv.at/daten/geo?service=WFS&request=GetFeature&version=2.0.0&outputFormat=csv&typeNames=ogdwien:GEBAEUDEINFOOGD&sortBy=OBJECTID",
+     "year_sql": "TRY_CAST(BAUJAHR AS INTEGER)", "weight": 1.0},
+    {"type": "wfs_csv", "name": "vienna_register", "geometry": "polygon", "crs": "EPSG:31256", "min_overlap": 0.3,
+     "url": "https://data.wien.gv.at/daten/geo?service=WFS&request=GetFeature&version=2.0.0&outputFormat=csv&typeNames=ogdwien:BAUPERIODEDETAILOGD&sortBy=OBJECTID",
+     "period_sql": "CASE WHEN OBJ_STR IS NOT NULL AND OBJ_STR <> '0' THEN OBJ_STR_TXT ELSE OBJ_STR2_TXT END",
+     "type_sql": "nullif(BAUTYP_TXT, 'Keine Angabe')", "weight": 1.0},
+    {"type": "osm_pbf", "name": "osm_start_date", "url": "https://download.geofabrik.de/europe/liechtenstein-latest.osm.pbf", "weight": 1.0},
+    {"type": "wikidata_heritage", "name": "wikidata_heritage", "radius_m": 15, "weight": 0.5},
+    {"type": "wsf_new_development", "weight": 0.5}
+  ]
+}

@@ -62,7 +62,8 @@ SAMPLE_LAYERS_MAX = 8
 SAMPLE_BLOCK_POSITIONS = (0.05, 0.35, 0.65, 0.92)
 GPKG_FETCH_ROWS = 50_000
 GPKG_RANGE_ROWS = 150_000
-GPKG_READERS = 4
+# Reads over SMB are latency-bound; 8 readers roughly double throughput vs 4 (16 adds little).
+GPKG_READERS = 8
 PREVIEW_READERS = 8
 PREVIEW_ID_CHUNK = 400
 CELL_SIZE_M = 5_000.0
@@ -72,6 +73,7 @@ PREVIEW_MAX_FEATURES = 6_000
 COPY_CHUNK_BYTES = 16 * 1024 * 1024
 DEFAULT_RADIUS_M = 5.0
 DEFAULT_MIN_IOU = 0.5
+MIN_EXTENT_OVERLAP = 0.5
 SUPPLEMENT_LOG_TABLE = "supplement_log"
 DISPLAY_FIELDS_TABLE = "building_display_fields"
 WORKER_FLAG = "--supplement-worker"
@@ -634,6 +636,112 @@ def inspect_source(path: Path) -> Dict[str, Any]:
     return inspected
 
 
+def _box_to_wgs84(con: duckdb.DuckDBPyConnection, box: Optional[Sequence[Any]], crs: str) -> Optional[Tuple[float, float, float, float]]:
+    if not box or any(value is None for value in box):
+        return None
+    if crs.upper() in {"EPSG:4326", "OGC:CRS84"}:
+        return (float(box[0]), float(box[1]), float(box[2]), float(box[3]))
+    xs: List[float] = []
+    ys: List[float] = []
+    for x in (box[0], box[2]):
+        for y in (box[1], box[3]):
+            lon, lat = con.execute(
+                f"SELECT ST_X(p), ST_Y(p) FROM (SELECT ST_Transform(ST_Point(?, ?), {_sql_string(crs)}, 'EPSG:4326', always_xy := true) AS p)",
+                [float(x), float(y)],
+            ).fetchone()
+            xs.append(lon)
+            ys.append(lat)
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _target_extent(target_path: Path, column_names: Iterable[str]) -> Optional[Tuple[float, float, float, float]]:
+    names = {name.casefold() for name in column_names}
+    if {"centroid_lon", "centroid_lat"} <= names:
+        expr = "min(centroid_lon), min(centroid_lat), max(centroid_lon), max(centroid_lat)"
+    elif {"bbox_xmin", "bbox_ymin", "bbox_xmax", "bbox_ymax"} <= names:
+        expr = "min(bbox_xmin), min(bbox_ymin), max(bbox_xmax), max(bbox_ymax)"
+    else:
+        return None
+    con = duckdb.connect(str(target_path), read_only=True)
+    try:
+        # A row-group sample is plenty for an extent and avoids a full column scan over SMB.
+        row = con.execute(f"SELECT {expr} FROM buildings USING SAMPLE 2% (system)").fetchone()
+        if row is None or row[0] is None:
+            row = con.execute(f"SELECT {expr} FROM buildings").fetchone()
+    finally:
+        con.close()
+    return None if row is None or row[0] is None else tuple(float(value) for value in row)
+
+
+def _source_extent(source_cfg: Dict[str, Any]) -> Optional[Tuple[float, float, float, float]]:
+    path = Path(source_cfg["path"])
+    con = duckdb.connect()
+    try:
+        con.execute("LOAD spatial;")
+        boxes = []
+        if source_cfg["kind"] == "gpkg":
+            gpkg = _gpkg_connect(path)
+            try:
+                contents = {
+                    str(row[0]): row[1:]
+                    for row in gpkg.execute("SELECT table_name, min_x, min_y, max_x, max_y FROM gpkg_contents").fetchall()
+                }
+            finally:
+                gpkg.close()
+            for layer in source_cfg["layers"]:
+                boxes.append(_box_to_wgs84(con, contents.get(layer["name"]), layer["crs"]))
+        else:
+            geometry_sql = source_cfg["geometry_sql"]
+            row = con.execute(
+                f"SELECT min(ST_XMin(g)), min(ST_YMin(g)), max(ST_XMax(g)), max(ST_YMax(g)) "
+                f"FROM (SELECT {geometry_sql} AS g FROM read_parquet(?) USING SAMPLE 5% (system))",
+                [str(path)],
+            ).fetchone()
+            boxes.append(_box_to_wgs84(con, row, source_cfg["layers"][0]["crs"]))
+    finally:
+        con.close()
+    boxes = [box for box in boxes if box]
+    if not boxes:
+        return None
+    return (min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes))
+
+
+def _check_extent_overlap(
+    target_box: Optional[Tuple[float, float, float, float]],
+    source_box: Optional[Tuple[float, float, float, float]],
+    add_new_buildings: bool,
+) -> Optional[Dict[str, Any]]:
+    if not target_box or not source_box:
+        return None
+    target_area = (target_box[2] - target_box[0]) * (target_box[3] - target_box[1])
+    source_area = (source_box[2] - source_box[0]) * (source_box[3] - source_box[1])
+    if target_area <= 0 or source_area <= 0:
+        return None
+    inter = max(0.0, min(target_box[2], source_box[2]) - max(target_box[0], source_box[0])) * max(
+        0.0, min(target_box[3], source_box[3]) - max(target_box[1], source_box[1])
+    )
+    target_covered = inter / target_area
+    source_inside = inter / source_area
+
+    def describe(box: Tuple[float, float, float, float]) -> str:
+        return f"lon {box[0]:.2f} to {box[2]:.2f}, lat {box[1]:.2f} to {box[3]:.2f}"
+
+    extents = f"Target buildings: {describe(target_box)}. Source: {describe(source_box)}."
+    if target_covered < MIN_EXTENT_OVERLAP:
+        raise ValueError(
+            f"The source covers only {target_covered:.0%} of the target database's area, so most target "
+            f"buildings cannot be matched. {extents} Check that you picked the right target database."
+        )
+    if add_new_buildings and source_inside < MIN_EXTENT_OVERLAP:
+        raise ValueError(
+            f"{1 - source_inside:.0%} of the source area lies outside the target database, and "
+            f"'Add unmatched footprints as new buildings' would copy all of those features in. {extents} "
+            "Untick that option or choose a target database that covers the source."
+        )
+    return {"target_box": list(target_box), "source_box": list(source_box),
+            "target_covered": round(target_covered, 3), "source_inside": round(source_inside, 3)}
+
+
 # ---------------------------------------------------------------------------
 # Request validation -> worker config
 # ---------------------------------------------------------------------------
@@ -909,7 +1017,14 @@ def build_job_config(
     work_dir.mkdir(parents=True, exist_ok=True)
 
     copy_local = bool(payload.get("copy_source_local")) and not preview
+    add_new_buildings = bool(payload.get("add_new_buildings")) and geometry_kind == "polygon"
+    extent_check = None
     if not preview:
+        extent_check = _check_extent_overlap(
+            _target_extent(target_path, target_columns.values()),
+            _source_extent(source_cfg),
+            add_new_buildings,
+        )
         source_size = source_path.stat().st_size
         target_size = target_path.stat().st_size
         destination_dir = (output_path or target_path).parent
@@ -941,7 +1056,8 @@ def build_job_config(
         "filter": filter_cfg,
         "match": match_cfg,
         "prefix": prefix,
-        "add_new_buildings": bool(payload.get("add_new_buildings")) and geometry_kind == "polygon",
+        "add_new_buildings": add_new_buildings,
+        "extent_check": extent_check,
         "output": {
             "mode": output_mode,
             "path": str(output_path) if output_path else None,
@@ -1365,7 +1481,8 @@ def _normalize_source(con: duckdb.DuckDBPyConnection, cfg: Dict[str, Any], repor
     if kind == "polygon":
         # No blanket ST_IsValid pass: it dominates reprojection time, and overlap maths is already TRY-guarded.
         fix = "g"
-        point = "COALESCE(TRY(ST_PointOnSurface(g)), ST_Centroid(g))"
+        # Only used to bucket rows into cells; the exact point-on-surface is computed later for unmatched rows only.
+        point = "ST_Point((ST_XMin(g) + ST_XMax(g)) / 2, (ST_YMin(g) + ST_YMax(g)) / 2)"
         area = "ST_Area(g)"
     else:
         fix = "g"
@@ -1591,10 +1708,13 @@ def _find_new_buildings(con: duckdb.DuckDBPyConnection, report: Callable[[float,
     con.execute("CREATE TABLE new_src (src_id BIGINT)")
     con.execute("""
         CREATE TABLE unmatched_src AS
-        SELECT s.src_id, s.pt, s.cx, s.cy,
-            ST_X(s.pt) AS bx0, ST_Y(s.pt) AS by0, ST_X(s.pt) AS bx1, ST_Y(s.pt) AS by1
-        FROM src s ANTI JOIN (SELECT DISTINCT src_id FROM matches) m USING (src_id)
-        ORDER BY s.cy, s.cx
+        WITH u AS (
+            SELECT s.src_id, COALESCE(TRY(ST_PointOnSurface(s.g)), ST_Centroid(s.g)) AS pt, s.cx, s.cy
+            FROM src s ANTI JOIN (SELECT DISTINCT src_id FROM matches) m USING (src_id)
+        )
+        SELECT src_id, pt, cx, cy, ST_X(pt) AS bx0, ST_Y(pt) AS by0, ST_X(pt) AS bx1, ST_Y(pt) AS by1
+        FROM u WHERE pt IS NOT NULL
+        ORDER BY cy, cx
     """)
     batches = _cell_batches(con, "unmatched_src", BATCH_TARGET_ROWS)
     total = max(1, sum(batch["n"] for batch in batches))
@@ -1846,7 +1966,9 @@ def prepare_supplement(cfg: Dict[str, Any], progress: ProgressWriter) -> Dict[st
     work_db = Path(cfg["work_db"])
     for stale in (work_db, Path(str(work_db) + ".wal")):
         stale.unlink(missing_ok=True)
-    con = _connect(work_db, work_dir, cfg["threads"])
+    # Staging/matching tables stay in RAM (spilling to work_dir only if needed); writing them to a
+    # file-backed work DB on a network share was the dominant cost. Only the results are persisted.
+    con = _connect(Path(":memory:"), work_dir, cfg["threads"])
     timings: Dict[str, float] = {}
     mark = [time.time()]
 
@@ -1903,9 +2025,12 @@ def prepare_supplement(cfg: Dict[str, Any], progress: ProgressWriter) -> Dict[st
         if cfg["preview"]:
             result["geojson"] = _preview_geojson(con, cfg)
         else:
-            for table in ("tgt", "matches", "pmatches", "new_src"):
-                con.execute(f"DROP TABLE IF EXISTS {table}")
-            con.execute("CHECKPOINT")
+            progress("Saving match results", 0.995, force=True)
+            con.execute(f"ATTACH {_sql_string(str(work_db))} AS persist")
+            for table in ("supp", "new_rows"):
+                if _table_exists(con, table):
+                    con.execute(f"CREATE TABLE persist.{table} AS SELECT * FROM {table}")
+            con.execute("DETACH persist")
         progress("Matching complete", 1.0, force=True)
         return result
     finally:
@@ -1960,6 +2085,8 @@ def _write_supplement_log(con: duckdb.DuckDBPyConnection, cfg: Dict[str, Any], s
         )
     """)
     settings = {
+        "target_db": cfg["target_db"],
+        "extent_check": cfg.get("extent_check"),
         "match": cfg["match"],
         "filter": cfg["filter"],
         "add_new_buildings": cfg["add_new_buildings"],

@@ -1008,6 +1008,8 @@ def _generate_raster_tiles(
         "-of", "GTiff",
         "-ot", "Byte",
         "-co", "TILED=YES",
+        "-co", "COMPRESS=DEFLATE",
+        "-co", "BIGTIFF=IF_SAFER",
     ]
     command.extend(outsize_args)
     command.extend(_display_scale_arguments(info))
@@ -1180,6 +1182,9 @@ def _normalize_raster_for_tiling(upload_path: Path, work_dir: Path, gdal_tools: 
     normalized_path = work_dir / f"{upload_path.stem}_georeferenced.tif"
     _run_command([
         gdal_tools["gdal_translate"],
+        "-co", "COMPRESS=DEFLATE",
+        "-co", "BIGTIFF=IF_SAFER",
+        "-co", "TILED=YES",
         "-a_srs",
         "EPSG:4326",
         "-a_ullr",
@@ -1661,9 +1666,13 @@ def _run_local_import_job(job_id: str, path_value: str, replace_layer_id: str, u
         upload_kind = _classify_uploads(upload_items)
         upload_dir.mkdir(parents=True, exist_ok=True)
 
-        copy_phase = "Copying raster into the local workspace..." if upload_kind == "raster" else "Copying layer files into the local workspace..."
-        _update_layer_import_job(job_id, status="running", phase=copy_phase, percent=35)
-        original_name, upload_path = _copy_local_upload_bundle(upload_items, upload_kind, upload_dir)
+        if upload_kind == "raster":
+            # GDAL only reads the source, so avoid duplicating multi-GB rasters into %TEMP%.
+            original_name = upload_items[0]["original_name"]
+            upload_path = Path(upload_items[0]["source_path"])
+        else:
+            _update_layer_import_job(job_id, status="running", phase="Copying layer files into the local workspace...", percent=35)
+            original_name, upload_path = _copy_local_upload_bundle(upload_items, upload_kind, upload_dir)
 
         prepare_phase = "Preparing raster for map rendering..." if upload_kind == "raster" else "Preparing vector layer for map rendering..."
         _update_layer_import_job(job_id, status="running", phase=prepare_phase, percent=72)
