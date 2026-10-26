@@ -1282,7 +1282,7 @@
     `;
   }
 
-  function statsTiles(stats) {
+  function statsTiles(stats, writeSeconds) {
     const tiles = [
       statTile("Target buildings", fmtInt(stats.targets)),
       statTile("Matched", `${fmtInt(stats.matched_targets)} (${stats.targets ? ((stats.matched_targets / stats.targets) * 100).toFixed(1) : "0"}%)`),
@@ -1293,7 +1293,8 @@
       tiles.push(statTile("New buildings", fmtInt(stats.new_buildings)));
       if (stats.mean_iou_inside !== null && stats.mean_iou_inside !== undefined) tiles.push(statTile("Mean overlap", Number(stats.mean_iou_inside).toFixed(2)));
     }
-    tiles.push(statTile("Matching time", fmtDuration(stats.elapsed_seconds || 0)));
+    tiles.push(statTile("Preparation time", fmtDuration(stats.elapsed_seconds || 0)));
+    if (Number.isFinite(writeSeconds)) tiles.push(statTile("Database write", fmtDuration(writeSeconds)));
     return `<div class="supp-result-grid">${tiles.join("")}</div>`;
   }
 
@@ -1304,7 +1305,7 @@
     showStatus("success", `
       <div class="supp-result">
         <strong>${result.mode === "inplace" ? "Database updated in place." : "New database written."}</strong>
-        ${statsTiles(stats)}
+        ${statsTiles(stats, result.write_seconds)}
         ${confidenceBar(stats)}
         <div>
           Output: <code>${esc(result.output_path)}</code>${result.activated ? " · loaded in the app" : ""}<br>

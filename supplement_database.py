@@ -2031,6 +2031,8 @@ def prepare_supplement(cfg: Dict[str, Any], progress: ProgressWriter) -> Dict[st
                 if _table_exists(con, table):
                     con.execute(f"CREATE TABLE persist.{table} AS SELECT * FROM {table}")
             con.execute("DETACH persist")
+            lap("save_results")
+        stats["elapsed_seconds"] = round(time.time() - started, 1)
         progress("Matching complete", 1.0, force=True)
         return result
     finally:
@@ -2112,8 +2114,59 @@ def staged_output_path(cfg: Dict[str, Any]) -> Path:
     return final.with_name(f".{final.stem}.{cfg['job_id']}.tmp.duckdb")
 
 
+def _update_output_copy(
+    out_path: Path,
+    cfg: Dict[str, Any],
+    stats: Dict[str, Any],
+    supp_schema: List[Tuple[str, str]],
+    report: Callable[[float, str], None],
+) -> Dict[str, Any]:
+    """Populate new attribute columns in a private copy, retaining the original indexes."""
+    target = Path(cfg["target_db"])
+    signature = _file_signature(target)
+    if signature != list(cfg.get("target_signature", signature)):
+        raise RuntimeError("The target database changed after matching. Nothing was replaced.")
+    _copy_with_progress(
+        target, out_path,
+        lambda fraction, detail: report(0.4 * fraction, detail),
+        "Copying indexed target database",
+    )
+    if _file_signature(target) != signature or Path(str(target) + ".wal").exists():
+        raise RuntimeError("The target database changed while being copied. Nothing was replaced.")
+    con = _connect(out_path, Path(cfg["work_dir"]), cfg["threads"])
+    try:
+        con.execute(f"ATTACH {_sql_string(cfg['work_db'])} AS w (READ_ONLY)")
+        for name, type_name in supp_schema:
+            con.execute(f"ALTER TABLE buildings ADD COLUMN {_sql_identifier(name)} {type_name}")
+        assignments = ", ".join(f"{_sql_identifier(name)} = s.{_sql_identifier(name)}" for name, _type in supp_schema)
+        _execute_tracked(
+            con,
+            f"UPDATE buildings AS b SET {assignments} FROM w.supp s WHERE b.rowid = s.rid",
+            None,
+            lambda fraction, detail: report(0.4 + 0.5 * fraction, detail),
+            "Writing supplement columns; retaining existing spatial indexes",
+        )
+        _update_display_fields(con, cfg)
+        _write_supplement_log(con, cfg, stats)
+        con.execute("DETACH w")
+        report(0.97, "Checkpointing database")
+        con.execute("CHECKPOINT")
+        total_rows = int(con.execute("SELECT COUNT(*) FROM buildings").fetchone()[0])
+        report(1.0, "Database written")
+        return {
+            "rows_total": total_rows,
+            "rows_updated": int(stats.get("matched_targets") or 0),
+            "rows_inserted": 0,
+            "columns_added": [name for name, _type in supp_schema],
+            "warnings": [],
+            "write_strategy": "index_reuse",
+        }
+    finally:
+        con.close()
+
+
 def _build_output_db(out_path: Path, cfg: Dict[str, Any], stats: Dict[str, Any], report: Callable[[float, str], None]) -> Dict[str, Any]:
-    """Write a complete, re-indexed lookup DB; the original stays untouched until it is swapped in."""
+    """Write a complete lookup DB; the original stays untouched until it is swapped in."""
     for path in (out_path, Path(str(out_path) + ".wal")):
         path.unlink(missing_ok=True)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2124,7 +2177,8 @@ def _build_output_db(out_path: Path, cfg: Dict[str, Any], stats: Dict[str, Any],
         con.execute(f"ATTACH {_sql_string(cfg['target_db'])} AS tdb (READ_ONLY)")
         con.execute(f"ATTACH {_sql_string(cfg['work_db'])} AS w (READ_ONLY)")
         target_columns = [str(row[0]) for row in con.execute("DESCRIBE tdb.buildings").fetchall()]
-        supp_columns = [str(row[0]) for row in con.execute("DESCRIBE w.supp").fetchall() if str(row[0]) != "rid"]
+        supp_schema = [(str(row[0]), str(row[1])) for row in con.execute("DESCRIBE w.supp").fetchall() if str(row[0]) != "rid"]
+        supp_columns = [name for name, _type in supp_schema]
         replaced = {name.casefold() for name in supp_columns}
         keep_filter = cfg["output"].get("keep_columns")
         keep_set = None if keep_filter is None else {name.casefold() for name in keep_filter}
@@ -2133,18 +2187,47 @@ def _build_output_db(out_path: Path, cfg: Dict[str, Any], stats: Dict[str, Any],
             if name.casefold() not in replaced and (keep_set is None or name.casefold() in keep_set)
         ]
         dropped = {name.casefold() for name in target_columns} - replaced - {name.casefold() for name in keep}
+        if (
+            not dropped
+            and not replaced.intersection(name.casefold() for name in target_columns)
+            and (
+                not cfg["add_new_buildings"]
+                or not _table_exists(con, "new_rows", "w")
+                or con.execute("SELECT COUNT(*) FROM w.new_rows").fetchone()[0] == 0
+            )
+            and not Path(cfg["target_db"] + ".wal").exists()
+            and not con.execute(
+                "SELECT 1 FROM duckdb_constraints() WHERE database_name = 'tdb' AND table_name = 'buildings' LIMIT 1"
+            ).fetchone()
+            and not con.execute(
+                "SELECT 1 FROM information_schema.columns WHERE table_catalog = 'tdb' "
+                "AND table_name = 'buildings' AND column_default IS NOT NULL LIMIT 1"
+            ).fetchone()
+        ):
+            con.close()
+            out_path.unlink(missing_ok=True)
+            return _update_output_copy(out_path, cfg, stats, supp_schema, report)
         select_sql = ", ".join(
             [f"b.{_sql_identifier(name)}" for name in keep] + [f"s.{_sql_identifier(name)}" for name in supp_columns]
         )
-        # ORDER BY rowid keeps the original spatial row order, which the app's zone-map filters rely on.
+        aligned_sql = ", ".join(f"s.{_sql_identifier(name)}" for name in supp_columns)
+        _execute_tracked(
+            con,
+            f"CREATE TEMP TABLE supplement_aligned AS SELECT {aligned_sql} FROM tdb.buildings b "
+            "LEFT JOIN w.supp s ON s.rid = b.rowid ORDER BY b.rowid",
+            None,
+            lambda fraction, detail: report(0.15 * fraction, detail),
+            "Aligning supplement columns with target row order",
+        )
         _execute_tracked(
             con,
             f"CREATE TABLE buildings AS SELECT {select_sql} FROM tdb.buildings b "
-            "LEFT JOIN w.supp s ON s.rid = b.rowid ORDER BY b.rowid",
+            "POSITIONAL JOIN supplement_aligned s",
             None,
-            lambda fraction, detail: report(0.6 * fraction, detail),
+            lambda fraction, detail: report(0.15 + 0.45 * fraction, detail),
             "Writing buildings with supplement columns",
         )
+        con.execute("DROP TABLE supplement_aligned")
 
         inserted = 0
         if cfg["add_new_buildings"] and _table_exists(con, "new_rows", "w"):
@@ -2211,22 +2294,25 @@ def _build_output_db(out_path: Path, cfg: Dict[str, Any], stats: Dict[str, Any],
             "rows_inserted": inserted,
             "columns_added": supp_columns,
             "warnings": warnings,
+            "write_strategy": "rebuild",
         }
     finally:
         con.close()
 
 
 def commit_supplement(cfg: Dict[str, Any], progress: ProgressWriter) -> Dict[str, Any]:
+    started = time.perf_counter()
     if _file_signature(Path(cfg["target_db"])) != list(cfg["target_signature"]):
         raise RuntimeError("The target database changed after matching. Run the supplement again.")
     staged = staged_output_path(cfg)
     try:
         result = _build_output_db(staged, cfg, cfg.get("stats") or {}, progress.span("Writing database", 0.0, 1.0))
     except BaseException:
-        for path in (staged, Path(str(staged) + ".wal")):
+        for path in (staged, Path(str(staged) + ".wal"), staged.with_name(staged.name + ".part")):
             path.unlink(missing_ok=True)
         raise
     result["staged_path"] = str(staged)
+    result["write_seconds"] = round(time.perf_counter() - started, 1)
     progress("Database written", 1.0, force=True)
     return result
 
@@ -2250,7 +2336,7 @@ def cleanup_work_files(cfg: Dict[str, Any], *, remove_staged: bool) -> None:
     candidates += [source_copy, source_copy.with_name(source_copy.name + ".part")]
     if remove_staged and not cfg["preview"]:
         staged = staged_output_path(cfg)
-        candidates += [staged, Path(str(staged) + ".wal")]
+        candidates += [staged, Path(str(staged) + ".wal"), staged.with_name(staged.name + ".part")]
     for path in candidates:
         try:
             path.unlink(missing_ok=True)

@@ -250,6 +250,15 @@ Use this workflow to add columns from another building dataset (for example the 
 - Both modes need free space about the size of the target database next to the output, plus temporary space in the working folder. The output panel shows an estimate.
 - Each run is recorded in the `supplement_log` table of the database, and the new columns are added to the default enrichment fields.
 
+#### Workflow 3 performance
+
+- Runs that keep all original fields, add new columns, and append no buildings can copy the indexed database and update only the added columns. Existing geometry and quadkey indexes are retained. This applies even with `Add new buildings` enabled if no new buildings were found.
+- Replacing or removing fields, appending buildings, or using a target with constraints, column defaults, or a pending write-ahead log uses the reconstruction path. Only supplement attributes are sorted before streaming the original building columns in their existing order; indexes are then rebuilt.
+- `Preparation time` includes reading, reprojection, matching, and saving match results. `Database write` measures the separate output phase. The write optimization does not reduce source reading or exact polygon intersection time.
+- Keep the source, target, working folder, and output on a local drive. Network transfers and temporary spill files on shared drives can still dominate elapsed time.
+
+Run the focused regression checks in the application's Python environment with `python _test_supplement.py -v`. To compare output construction against the checked-in version on a temporary sample of the local lookup database, run `python _test_supplement.py --output-benchmark 1000000`. The benchmark reads the original database without modifying it and checks every output row and its order. Use `--target-db <path>` for another lookup database.
+
 ## 7. Files and Working Folders
 
 Common runtime locations include:
