@@ -4864,12 +4864,12 @@ def parse_args() -> argparse.Namespace:
     serve.add_argument("--nearest-radius-m", type=float, default=50.0)
     serve.add_argument("--debug", action="store_true")
 
+
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-
     if args.command == "prepare-index":
         prepare_index(args.parquet, args.db, args.force, args.threads)
         return
