@@ -4654,6 +4654,7 @@ def lookup_building_filter_summary(
         "colored_count": colored_count,
         "tile_feature_limit": MAX_FILTER_VIEW_FEATURES_PER_TILE,
         "mode": "all",
+        "palette": list(FILTER_VIEW_PALETTE),
         "legend": [
             {
                 "value": str(filter_value),

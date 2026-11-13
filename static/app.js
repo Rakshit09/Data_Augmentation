@@ -30,6 +30,7 @@ const searchResults = document.getElementById("searchResults");
 const filterViewColumn = document.getElementById("filterViewColumn");
 const filterViewValue = document.getElementById("filterViewValue");
 const filterViewColor = document.getElementById("filterViewColor");
+const filterViewFixedLegend = document.getElementById("filterViewFixedLegend");
 const applyViewFilter = document.getElementById("applyViewFilter");
 const filterViewMessage = document.getElementById("filterViewMessage");
 const uploadForm = document.getElementById("uploadForm");
@@ -71,6 +72,8 @@ let currentStatsDownloadUrl = null;
 let availableDbFiles = [];
 let selectedBuilding = null;
 let activeViewFilter = null;
+// Per-column value -> colour assignments used when "Fixed legends" is enabled.
+const fixedViewFilterLegendColors = new Map();
 let viewFilterRequestId = 0;
 let viewFilterTileUrlActive = "";
 let viewFilterFetchController = null;
@@ -2627,6 +2630,11 @@ filterViewValue?.addEventListener("change", () => {
   updateFilterViewColorAvailability();
 });
 
+filterViewFixedLegend?.addEventListener("change", async () => {
+  if (!activeViewFilter?.all) return;
+  await refreshViewFilter({ silent: true });
+});
+
 applyViewFilter?.addEventListener("click", async () => {
   dismissCriticalNote();
 
@@ -2848,6 +2856,64 @@ function renderViewFilterLayer(tileUrl) {
   applyOverlayLayerOrder();
 }
 
+function isFixedViewFilterLegendEnabled() {
+  return Boolean(filterViewFixedLegend?.checked);
+}
+
+function nextFixedViewFilterLegendColor(assigned, palette, fallback) {
+  if (!palette.length) return fallback || "#64748b";
+
+  const usage = new Map(palette.map((color) => [color, 0]));
+  for (const color of assigned.values()) {
+    if (usage.has(color)) usage.set(color, usage.get(color) + 1);
+  }
+
+  // Least-used colour wins; ties go to palette order, so the first view
+  // matches the default ranking (orange, blue, ...).
+  let bestColor = palette[0];
+  let bestCount = Infinity;
+  for (const color of palette) {
+    const count = usage.get(color);
+    if (count < bestCount) {
+      bestColor = color;
+      bestCount = count;
+    }
+  }
+  return bestColor;
+}
+
+function resolveViewFilterLegend(column, legend, palette) {
+  const items = Array.isArray(legend) ? legend : [];
+  if (!isFixedViewFilterLegendEnabled()) return items;
+
+  let assigned = fixedViewFilterLegendColors.get(column);
+  if (!assigned) {
+    assigned = new Map();
+    fixedViewFilterLegendColors.set(column, assigned);
+  }
+
+  const colors = Array.isArray(palette) && palette.length
+    ? palette
+    : [...new Set(items.map((item) => item.color).filter(Boolean))];
+
+  return items.map((item) => {
+    const key = String(item.value ?? "");
+    if (!assigned.has(key)) {
+      assigned.set(key, nextFixedViewFilterLegendColor(assigned, colors, item.color));
+    }
+    return { ...item, color: assigned.get(key) };
+  });
+}
+
+function viewFilterColorItems(column, legend) {
+  if (!isFixedViewFilterLegendEnabled()) return legend;
+  const assigned = fixedViewFilterLegendColors.get(column);
+  if (!assigned?.size) return legend;
+  // Include every value assigned so far so already-loaded tiles outside the
+  // current viewport keep their colours too.
+  return Array.from(assigned, ([value, color]) => ({ value, color }));
+}
+
 function applyViewFilterLegendColors(legend) {
   if (!activeViewFilter?.all || !map.getLayer(viewFilterFillLayerId)) return;
 
@@ -2931,8 +2997,10 @@ async function refreshViewFilter({ silent = false } = {}) {
       ? `${formatInteger(shown)} polygons shown · ${formatInteger(colored)} matching · up to ${formatInteger(maxColoredPerTile)} coloured per tile.`
       : `${formatInteger(shown)} polygons shown · ${formatInteger(colored)} coloured.`;
     if (activeViewFilter.all) {
-      applyViewFilterLegendColors(payload.legend);
-      window.filterViewAll?.renderLegend(payload, formatFieldLabel(activeViewFilter.column));
+      const column = activeViewFilter.column;
+      const legend = resolveViewFilterLegend(column, payload.legend, payload.palette);
+      applyViewFilterLegendColors(viewFilterColorItems(column, legend));
+      window.filterViewAll?.renderLegend({ ...payload, legend }, formatFieldLabel(column));
       setFilterViewMessage(filterCountMessage, colored ? "success" : "");
     } else {
       window.filterViewAll?.clearLegend();
@@ -3578,6 +3646,8 @@ function resetLookupUi() {
   searchForm?.reset();
   clearViewFilter(defaultFilterViewMessage);
   filterViewColor.value = "#ff6b6b";
+  if (filterViewFixedLegend) filterViewFixedLegend.checked = false;
+  fixedViewFilterLegendColors.clear();
 }
 
 function resetEtlUi() {

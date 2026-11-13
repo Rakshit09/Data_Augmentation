@@ -151,6 +151,10 @@
               <span>Choose color</span>
               <input id="filterViewColor" type="color" value="#ff6b6b">
             </label>
+            <label for="filterViewFixedLegend" class="filter-view-fixed-legend" title="In ALL mode, keep each value's colour the same as you move around the map.">
+              <input id="filterViewFixedLegend" type="checkbox">
+              <span>Fixed legends</span>
+            </label>
             <button id="applyViewFilter" type="button">Apply</button>
           </div>
           <p id="filterViewMessage" class="filter-view-message">Choose a column and value to color polygons in the current view.</p>
@@ -160,7 +164,7 @@
           <summary>
             <span class="field-label-row">
               <span>Add Layer</span>
-              <span class="field-tip" tabindex="0" data-tooltip="Upload a hazard or context layer to render over the map. Vector files are streamed by viewport for smooth panning. GeoTIFF rasters require GDAL to be installed locally.">i</span>
+              <span class="field-tip" tabindex="0" data-tooltip="Upload a hazard or context layer to render over the map, or paste a WMS service URL. Vector files are streamed by viewport for smooth panning. GeoTIFF rasters require GDAL to be installed locally.">i</span>
             </span>
           </summary>
           <div class="add-layer-form">
@@ -171,6 +175,10 @@
               <span id="addLayerFileProgress" class="add-layer-dropzone-progress hidden"><span></span></span>
             </label>
             <input id="addLayerFile" class="file-input" type="file" accept=".gpkg,.zip,.shp,.shx,.dbf,.prj,.cpg,.geojson,.json,.tif,.tiff" multiple tabindex="-1" aria-hidden="true" data-max-bytes="{{ layer_upload_max_bytes }}">
+            <div id="addLayerWms" class="add-layer-wms">
+              <input id="addLayerWmsUrl" type="url" placeholder="…or paste a WMS URL" aria-label="WMS service URL" spellcheck="false" autocomplete="off">
+              <select id="addLayerWmsLayer" class="hidden" aria-label="WMS layer"></select>
+            </div>
             <div class="add-layer-actions">
               <button id="removeSelectedLayers" type="button" class="is-secondary hidden" disabled>Remove layer</button>
               <button id="uploadMapLayer" type="button">Import layer</button>

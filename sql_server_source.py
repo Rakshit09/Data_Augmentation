@@ -16,7 +16,7 @@ SQL_SERVERS: Tuple[str, ...] = tuple(
     server.strip()
     for server in os.environ.get(
         "DATA_AUGMENTATION_SQL_SERVERS",
-        r"GREAZUK1DB036P\SQL2022;GREAZUK1DB036P\SQL2019",
+        r"GREAZUK1DB036P\SQL2022;GREAZUK1DB036P\SQL2019;GREAZUK1DB751P;GREAZUK1DB851P;GREAZUK1DB801P",
     ).split(";")
     if server.strip()
 )

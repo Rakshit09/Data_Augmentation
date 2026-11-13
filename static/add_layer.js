@@ -13,6 +13,9 @@
   const messageEl = document.getElementById("addLayerMessage");
   const layerListEl = document.getElementById("addLayerList");
   const layerListPanel = document.getElementById("addLayerListPanel");
+  const wmsPanel = document.getElementById("addLayerWms");
+  const wmsUrlInput = document.getElementById("addLayerWmsUrl");
+  const wmsLayerSelect = document.getElementById("addLayerWmsLayer");
   const maxUploadBytes = Number(layerFile?.dataset.maxBytes || 0);
 
   const MAX_LAYERS = 5;
@@ -71,6 +74,9 @@
   let uploadAfterPick = false;
   let importing = false;
   let dropzoneOpen = true;
+  let wmsService = null;
+  let wmsLoad = null;
+  let wmsLoadTimer = 0;
   publishLayerChange();
 
   if (!layerFile || !uploadButton) {
@@ -89,6 +95,8 @@
       uploadAfterPick = false;
       return;
     }
+    clearWmsInput();
+    syncActions();
     setDropzoneContent(
       files.length > 1 ? `${files.length} files selected` : files[0].name,
       "Ready to import – click Import layer to add it to the map"
@@ -110,9 +118,25 @@
     dropzoneOpen = true;
     resetDropzone();
     syncActions();
-    chooseLocalLayer(true);
+    setMessage("Choose a layer file or paste a WMS URL.");
   });
   removeSelectedButton?.addEventListener("click", removeSelectedLayers);
+  wmsUrlInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      if (!uploadButton.disabled) addWmsFromInput();
+    }
+  });
+  wmsUrlInput?.addEventListener("input", () => {
+    wmsService = null;
+    wmsLayerSelect?.classList.add("hidden");
+    window.clearTimeout(wmsLoadTimer);
+    if (wmsUrlInput.value.trim()) {
+      if (selectedLocalPath || layerFile.files?.length) clearFileSelection();
+      wmsLoadTimer = window.setTimeout(loadWmsService, 500);
+    }
+    syncActions();
+  });
   importedListEl?.addEventListener("change", (event) => {
     const input = event.target.closest('input[data-action="select-remove"]');
     const card = input?.closest("[data-layer-id]");
@@ -139,6 +163,10 @@
     if (target.dataset.action === "toggle") setLayerVisible(entry.id, target.checked);
     else if (target.dataset.setting === "field") setLayerField(entry, target.value);
     else if (target.dataset.setting === "colormap") setLayerColormap(entry, target.value);
+    else if (target.dataset.setting === "invert") {
+      entry.colormapInverted = target.checked;
+      setLayerColormap(entry, entry.colormap);
+    }
   });
   layerListEl?.addEventListener("input", (event) => {
     const target = event.target;
@@ -169,7 +197,108 @@
       return;
     }
 
+    if (wmsUrlInput?.value.trim()) {
+      await addWmsFromInput();
+      return;
+    }
+
     await chooseLocalLayer(true);
+  }
+
+  // Reads the pasted service's layer list; reused by the add action so one click is enough.
+  async function loadWmsService() {
+    const url = wmsUrlInput?.value.trim() || "";
+    if (!url) return null;
+    if (wmsService?.sourceUrl === url) return wmsService;
+    if (wmsLoad?.url !== url) {
+      setMessage("Reading WMS service…");
+      wmsLoad = {
+        url,
+        promise: fetch(`api/wms/capabilities?url=${encodeURIComponent(url)}`).then(async (response) => {
+          const payload = await response.json();
+          if (!response.ok) throw new Error(payload.error || "Could not read the WMS service");
+          return { ...payload, sourceUrl: url };
+        })
+      };
+    }
+    const pending = wmsLoad;
+    try {
+      const service = await pending.promise;
+      if (wmsUrlInput.value.trim() !== url) return null;
+      if (wmsService !== service) {
+        wmsService = service;
+        showWmsLayerOptions(service);
+      }
+      return service;
+    } catch (error) {
+      if (wmsUrlInput.value.trim() === url) setMessage(error.message, "error");
+      return null;
+    } finally {
+      if (wmsLoad === pending) wmsLoad = null;
+    }
+  }
+
+  function showWmsLayerOptions(service) {
+    const layers = service.layers || [];
+    const choose = !service.requested_layers && layers.length > 1;
+    wmsLayerSelect.innerHTML = choose
+      ? layers
+        .map((layer) => `<option value="${htmlEscape(layer.name)}">${htmlEscape(layer.title === layer.name ? layer.name : `${layer.title} (${layer.name})`)}</option>`)
+        .join("")
+      : "";
+    wmsLayerSelect.classList.toggle("hidden", !choose);
+    setMessage(choose
+      ? `${layers.length} WMS layers found. Choose one, then click Add WMS layer.`
+      : "WMS service ready. Click Add WMS layer.");
+  }
+
+  async function addWmsFromInput() {
+    if (importing || !canAddLayer()) return;
+    window.clearTimeout(wmsLoadTimer);
+    const listWasShown = !wmsLayerSelect.classList.contains("hidden");
+    uploadButton.disabled = true;
+    uploadButton.innerHTML = '<span class="spinner"></span> Reading WMS…';
+    let service = null;
+    try {
+      service = await loadWmsService();
+    } finally {
+      syncActions();
+    }
+    if (!service) return;
+    const layers = service.layers || [];
+    const mustChoose = !service.requested_layers && layers.length > 1;
+    if (mustChoose && !listWasShown) {
+      wmsLayerSelect.focus();
+      return;
+    }
+    const wanted = service.requested_layers || (mustChoose ? wmsLayerSelect.value : layers[0]?.name);
+    addWmsLayer(service, layers.find((layer) => layer.name === wanted) || { name: wanted });
+  }
+
+  function clearWmsInput() {
+    window.clearTimeout(wmsLoadTimer);
+    wmsService = null;
+    if (wmsUrlInput) wmsUrlInput.value = "";
+    wmsLayerSelect?.classList.add("hidden");
+  }
+
+  function addWmsLayer(service, layer) {
+    if (!layer || !canAddLayer()) return;
+    const params = new URLSearchParams({
+      url: service.url,
+      layers: layer.name,
+      styles: service.styles || "",
+      version: service.version || "1.3.0",
+      format: service.format || "image/png"
+    });
+    addLoadedLayer({
+      id: `wms-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: "wms",
+      name: layer.title || layer.name,
+      extent: layer.extent || null,
+      legend_url: layer.legend_url || "",
+      tile_url: `/api/wms/tile?${params.toString()}&bbox={bbox-epsg-3857}`
+    });
   }
 
   async function chooseLocalLayer(autoImport) {
@@ -370,6 +499,7 @@
       // Ignore browsers that do not allow clearing a file input here.
     }
     if (selectedLocalPath) {
+      clearWmsInput();
       setDropzoneContent(localPathName(selectedLocalPath), `Ready to import from ${selectedLocalPath}`);
     } else {
       setDropzoneContent(defaultLayerTitle, defaultLayerSubtitle);
@@ -388,7 +518,7 @@
       field: payload.default_field || "",
       colormap: "hazard",
       transparency: 55,
-      boundaryWidth: payload.kind === "raster" ? 0 : 0.8,
+      boundaryWidth: payload.kind === "vector" ? 0.8 : 0,
       visible: true,
       importIndex: ++state.importCounter
     };
@@ -404,8 +534,12 @@
     resetDropzone();
     renderImportedCards();
     syncActions();
-    const kindCopy = entry.kind === "raster" ? "Raster ready." : "Vector layer ready.";
-    setMessage(`${kindCopy} Alt/Option-click it on the map for details.`, "success");
+    if (entry.kind === "wms") {
+      setMessage("WMS layer ready.", "success");
+    } else {
+      const kindCopy = entry.kind === "raster" ? "Raster ready." : "Vector layer ready.";
+      setMessage(`${kindCopy} Alt/Option-click it on the map for details.`, "success");
+    }
     if (typeof statusEl !== "undefined") statusEl.textContent = "Ready";
     scheduleVectorRefresh(entry, { immediate: true });
   }
@@ -417,6 +551,11 @@
   }
 
   function resetDropzone() {
+    clearFileSelection();
+    clearWmsInput();
+  }
+
+  function clearFileSelection() {
     selectedLocalPath = "";
     uploadAfterPick = false;
     try {
@@ -454,6 +593,7 @@
     const hasLayers = state.layers.length > 0;
     const showDropzone = dropzoneOpen || !hasLayers;
     dropzone?.classList.toggle("hidden", !showDropzone);
+    wmsPanel?.classList.toggle("hidden", !showDropzone);
     uploadButton.classList.toggle("hidden", !showDropzone);
     addAnotherButton?.classList.toggle("hidden", showDropzone);
     removeSelectedButton?.classList.toggle("hidden", !hasLayers);
@@ -469,7 +609,7 @@
     if (addAnotherButton) addAnotherButton.disabled = importing;
     if (!importing && !activeImportJobId) {
       uploadButton.disabled = false;
-      uploadButton.textContent = "Import layer";
+      uploadButton.textContent = wmsUrlInput?.value.trim() ? "Add WMS layer" : "Import layer";
     }
   }
 
@@ -512,10 +652,16 @@
   }
 
   function legendMarkup(entry) {
+    if (entry.kind === "wms") {
+      return entry.legend_url
+        ? `<div class="add-layer-legend" aria-label="WMS legend"><img class="add-layer-wms-legend" src="${htmlEscape(entry.legend_url)}" alt="Legend" loading="lazy" onerror="this.parentElement.remove()"></div>`
+        : "";
+    }
     const bands = entry.bands || [];
     // Colourmaps are only applied to single-band tiled rasters.
     if (entry.kind !== "raster" || entry.render_mode === "image" || bands.length > 1) return "";
-    const palette = legendPalettes[entry.colormap] || legendPalettes.hazard;
+    const basePalette = legendPalettes[entry.colormap] || legendPalettes.hazard;
+    const palette = entry.colormapInverted ? [...basePalette].reverse() : basePalette;
     const min = Number(bands[0]?.min);
     const max = Number(bands[0]?.max);
     const hasRange = bands[0]?.min != null && bands[0]?.max != null && Number.isFinite(min) && Number.isFinite(max);
@@ -541,6 +687,9 @@
 
   function mapIdsFor(entry) {
     const prefix = `user-layer-${entry.id}`;
+    if (entry.kind === "wms") {
+      return { source: `${prefix}-wms-src`, layers: [`${prefix}-wms`] };
+    }
     if (entry.kind === "raster") {
       return {
         source: `${prefix}-raster-src`,
@@ -567,11 +716,32 @@
 
   function addMapLayers(entry) {
     if (typeof map === "undefined") return;
-    if (entry.kind === "raster") {
+    if (entry.kind === "wms") {
+      addWmsMapLayers(entry);
+    } else if (entry.kind === "raster") {
       addRasterMapLayers(entry);
     } else {
       addVectorMapLayers(entry);
     }
+  }
+
+  function addWmsMapLayers(entry) {
+    removeMapLayers(entry);
+    const ids = mapIdsFor(entry);
+    const extent = entry.extent;
+    map.addSource(ids.source, {
+      type: "raster",
+      tiles: [entry.tile_url],
+      tileSize: 256,
+      bounds: extent ? [extent.min_lon, extent.min_lat, extent.max_lon, extent.max_lat] : undefined
+    });
+    map.addLayer({
+      id: ids.layers[0],
+      type: "raster",
+      source: ids.source,
+      layout: layoutFor(entry),
+      paint: { "raster-opacity": layerOpacity(entry, 1) }
+    }, layerBeforeId());
   }
 
   function addVectorMapLayers(entry) {
@@ -774,7 +944,11 @@
 
   function rasterTileUrl(entry) {
     const base = entry.tile_url || "";
-    return base + (base.includes("?") ? "&" : "?") + "colormap=" + encodeURIComponent(entry.colormap || "hazard");
+    return base + (base.includes("?") ? "&" : "?") + "colormap=" + encodeURIComponent(colormapParam(entry));
+  }
+
+  function colormapParam(entry) {
+    return (entry.colormap || "hazard") + (entry.colormapInverted ? "_r" : "");
   }
 
   function findLayer(id) {
@@ -839,6 +1013,7 @@
     const rows = state.layers.map((entry, index) => {
       const name = htmlEscape(entry.name || "Layer");
       const isRaster = entry.kind === "raster";
+      const isWms = entry.kind === "wms";
       const colormapHtml = colormapOptions
         .map(([value, label]) => `<option value="${value}" ${value === (entry.colormap || "hazard") ? "selected" : ""}>${label}</option>`)
         .join("");
@@ -848,7 +1023,7 @@
             <input type="checkbox" data-action="toggle" ${entry.visible ? "checked" : ""} aria-label="Show ${name}" title="Show or hide">
             <div class="add-layer-item-name" title="${name}">
               <span>${name}</span>
-              <small>${isRaster ? "Raster" : "Vector"}</small>
+              <small>${isWms ? "WMS" : isRaster ? "Raster" : "Vector"}</small>
             </div>
             <button type="button" class="add-layer-item-icon" data-action="up" ${index === 0 ? "disabled" : ""} aria-label="Move ${name} up" title="Move up">&#9650;</button>
             <button type="button" class="add-layer-item-icon" data-action="down" ${index === lastIndex ? "disabled" : ""} aria-label="Move ${name} down" title="Move down">&#9660;</button>
@@ -861,7 +1036,11 @@
             </label>
             <label>
               <span>Colourmap</span>
-              <select data-setting="colormap">${colormapHtml}</select>
+              <select data-setting="colormap" ${isWms ? "disabled" : ""}>${colormapHtml}</select>
+            </label>
+            <label class="add-layer-checkbox-setting">
+              <input type="checkbox" data-setting="invert" ${entry.colormapInverted ? "checked" : ""} ${isWms ? "disabled" : ""}>
+              <span>Invert colourmap</span>
             </label>
             <label>
               <span class="add-layer-setting-head"><span>Transparency</span><output>${settingValueLabel("transparency", Number(entry.transparency ?? 55))}</output></span>
@@ -869,7 +1048,7 @@
             </label>
             <label title="${isRaster ? "Outline along the edges of the raster data" : "Outline of each polygon"}; stays visible at 100% transparency">
               <span class="add-layer-setting-head"><span>Boundary</span><output>${settingValueLabel("boundary", Number(entry.boundaryWidth ?? 0))}</output></span>
-              <input type="range" data-setting="boundary" min="0" max="1" step="0.1" value="${Number(entry.boundaryWidth ?? 0)}" ${isRaster && entry.render_mode === "image" ? "disabled" : ""}>
+              <input type="range" data-setting="boundary" min="0" max="1" step="0.1" value="${Number(entry.boundaryWidth ?? 0)}" ${(isRaster && entry.render_mode === "image") || isWms ? "disabled" : ""}>
             </label>
             ${legendMarkup(entry)}
           </div>
@@ -880,6 +1059,7 @@
   }
 
   function fieldOptionsMarkup(entry) {
+    if (entry.kind === "wms") return '<option value="">WMS image</option>';
     if (entry.kind === "raster") return '<option value="">Raster values</option>';
     const options = ['<option value="">No field</option>'];
     for (const field of entry.fields || []) {
@@ -934,7 +1114,7 @@
       height: String(canvas.clientHeight || 800),
       zoom: String(map.getZoom()),
       field: entry.field || "",
-      colormap: entry.colormap || "hazard"
+      colormap: colormapParam(entry)
     });
 
     rt.refreshRunning = true;
@@ -976,7 +1156,7 @@
     const setOpacity = (layerId, property, base) => {
       if (map.getLayer(layerId)) map.setPaintProperty(layerId, property, layerOpacity(entry, base));
     };
-    if (entry.kind === "raster") {
+    if (entry.kind === "raster" || entry.kind === "wms") {
       setOpacity(ids.layers[0], "raster-opacity", 1);
       return;
     }
@@ -1052,7 +1232,7 @@
     if (rt?.refreshTimer) window.clearTimeout(rt.refreshTimer);
     removeMapLayers(entry);
     runtime.delete(id);
-    deleteLayerOnServer(id);
+    if (entry.kind !== "wms") deleteLayerOnServer(id);
     if (state.popup) {
       state.popup.remove();
       state.popup = null;

@@ -1051,6 +1051,21 @@ button:focus-visible,
   opacity: 0.48;
 }
 
+.filter-view-form > label.filter-view-fixed-legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.filter-view-fixed-legend input[type=checkbox] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--button-primary);
+  cursor: pointer;
+}
+
 .filter-view-value-list {
   display: grid;
   gap: 6px;

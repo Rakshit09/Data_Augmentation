@@ -7,12 +7,16 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 import uuid
+import xml.etree.ElementTree as ET
 import zipfile
 from io import BytesIO
 from pathlib import Path
 from threading import Lock, Thread
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import duckdb
 import numpy as np
@@ -71,6 +75,8 @@ COLOR_MAPS = {
     "brbg": ["#543005", "#bf812d", "#f5f5f5", "#35978f", "#003c30"],
     "categorical": ["#2563eb", "#16a34a", "#dc2626", "#9333ea", "#ea580c", "#0891b2", "#be123c", "#4d7c0f"],
 }
+# Inverted variants use the "<name>_r" suffix (matplotlib convention).
+COLOR_MAPS.update({f"{name}_r": palette[::-1] for name, palette in list(COLOR_MAPS.items())})
 
 LAYER_REGISTRY: Dict[str, Dict[str, Any]] = {}
 LAYER_REGISTRY_LOCK = Lock()
@@ -220,6 +226,25 @@ def register_layer_upload_routes(app: Flask) -> None:
         if job is None:
             return jsonify({"error": "Layer import job was not found."}), 404
         return jsonify(_layer_import_job_payload(job))
+
+    @app.route("/api/wms/capabilities")
+    def wms_capabilities():
+        try:
+            return jsonify(_wms_capabilities(str(request.args.get("url", "")).strip()))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.route("/api/wms/tile")
+    def wms_tile():
+        # Proxied so WMS servers without CORS headers still render in MapLibre.
+        try:
+            url = _wms_getmap_url(request.args)
+            content, content_type = _wms_fetch(url)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if not content_type.startswith("image/"):
+            return ("", 204)
+        return Response(content, content_type=content_type, headers={"Cache-Control": "public, max-age=600"})
 
     @app.route("/api/layers/<layer_id>", methods=["DELETE"])
     def delete_layer(layer_id: str):
@@ -899,7 +924,7 @@ def _feature_color(display_value: Any, numeric_value: Any, summary: Dict[str, An
 
     if display_value is None or str(display_value) == "":
         return "#64748b"
-    categorical_palette = COLOR_MAPS["categorical"] if colormap != "hazard" else COLOR_MAPS["hazard"]
+    categorical_palette = palette if colormap in ("hazard", "hazard_r") else COLOR_MAPS["categorical"]
     digest = hashlib.sha1(str(display_value).encode("utf-8")).hexdigest()
     return categorical_palette[int(digest[:8], 16) % len(categorical_palette)]
 
@@ -1735,3 +1760,173 @@ def _cleanup_layer(layer: Dict[str, Any]) -> None:
     except (OSError, ValueError):
         return
     shutil.rmtree(resolved_work_dir, ignore_errors=True)
+
+
+WMS_TIMEOUT_SECONDS = 20
+WMS_MAX_RESPONSE_BYTES = 20 * 1024 ** 2
+_WMS_REQUEST_KEYS = {
+    "service", "request", "version", "layers", "styles", "format",
+    "transparent", "crs", "srs", "bbox", "width", "height",
+}
+
+
+def _wms_split_url(url: str) -> Tuple[str, Dict[str, str]]:
+    """Return the service URL (keeping vendor params such as map= or tokens) and any WMS params it carried."""
+    parsed = urlsplit(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("Enter a valid http(s) WMS URL.")
+    extra: List[Tuple[str, str]] = []
+    wms: Dict[str, str] = {}
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        if key.lower() in _WMS_REQUEST_KEYS:
+            wms[key.lower()] = value
+        else:
+            extra.append((key, value))
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(extra), "")), wms
+
+
+def _wms_with_params(url: str, params: Dict[str, str]) -> str:
+    parsed = urlsplit(url)
+    query = parse_qsl(parsed.query, keep_blank_values=True) + list(params.items())
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), ""))
+
+
+def _wms_fetch(url: str) -> Tuple[bytes, str]:
+    req = urllib.request.Request(url, headers={"User-Agent": "DataAugmentation-WMS/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=WMS_TIMEOUT_SECONDS) as response:
+            content = response.read(WMS_MAX_RESPONSE_BYTES + 1)
+            content_type = response.headers.get("Content-Type", "")
+    except (urllib.error.URLError, OSError) as exc:
+        raise ValueError(f"WMS request failed: {getattr(exc, 'reason', exc)}") from exc
+    if len(content) > WMS_MAX_RESPONSE_BYTES:
+        raise ValueError("WMS response is too large.")
+    return content, content_type.strip().lower()
+
+
+def _xml_local(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _xml_children(element: ET.Element, name: str) -> List[ET.Element]:
+    return [child for child in element if _xml_local(child.tag) == name]
+
+
+def _xml_child_text(element: ET.Element, name: str) -> str:
+    children = _xml_children(element, name)
+    return (children[0].text or "").strip() if children else ""
+
+
+def _wms_layer_extent(layer: ET.Element) -> Optional[Dict[str, float]]:
+    try:
+        geo = _xml_children(layer, "EX_GeographicBoundingBox")
+        if geo:
+            values = [float(_xml_child_text(geo[0], key)) for key in (
+                "westBoundLongitude", "southBoundLatitude", "eastBoundLongitude", "northBoundLatitude")]
+        else:
+            latlon = _xml_children(layer, "LatLonBoundingBox")
+            if not latlon:
+                return None
+            values = [float(latlon[0].get(key, "")) for key in ("minx", "miny", "maxx", "maxy")]
+    except ValueError:
+        return None
+    min_lon, min_lat, max_lon, max_lat = values
+    return {
+        "min_lon": max(-180.0, min_lon),
+        "min_lat": max(-85.0, min_lat),
+        "max_lon": min(180.0, max_lon),
+        "max_lat": min(85.0, max_lat),
+    }
+
+
+def _wms_legend_url(layer: ET.Element) -> str:
+    for style in _xml_children(layer, "Style"):
+        for legend in _xml_children(style, "LegendURL"):
+            for resource in _xml_children(legend, "OnlineResource"):
+                for key, value in resource.attrib.items():
+                    if key.endswith("href") and value:
+                        return value
+    return ""
+
+
+def _wms_capabilities(url: str) -> Dict[str, Any]:
+    """Read a WMS GetCapabilities document; a GetMap URL with LAYERS= also works without it."""
+    service_url, wms_params = _wms_split_url(url)
+    requested = wms_params.get("layers", "").strip()
+    result: Dict[str, Any] = {
+        "url": service_url,
+        "version": wms_params.get("version") or "1.3.0",
+        "format": wms_params.get("format") or "image/png",
+        "styles": wms_params.get("styles", ""),
+        "requested_layers": requested,
+        "layers": [],
+    }
+    try:
+        content, _ = _wms_fetch(_wms_with_params(service_url, {"SERVICE": "WMS", "REQUEST": "GetCapabilities"}))
+        root = ET.fromstring(content)
+        if _xml_local(root.tag) not in ("WMS_Capabilities", "WMT_MS_Capabilities"):
+            message = " ".join(text.strip() for text in root.itertext() if text.strip())
+            raise ValueError(f"Server did not return WMS capabilities. {message}".strip()[:300])
+    except (ValueError, ET.ParseError) as exc:
+        if requested:
+            return result
+        if isinstance(exc, ET.ParseError):
+            raise ValueError("Could not read WMS capabilities: the URL did not return a WMS XML document.") from exc
+        raise ValueError(f"Could not read WMS capabilities: {exc}") from exc
+
+    if not wms_params.get("version"):
+        result["version"] = root.get("version") or result["version"]
+    capability = (_xml_children(root, "Capability") or [root])[0]
+    if not wms_params.get("format"):
+        formats: List[str] = []
+        for request_el in _xml_children(capability, "Request"):
+            for getmap in _xml_children(request_el, "GetMap"):
+                formats += [(el.text or "").strip() for el in _xml_children(getmap, "Format")]
+        result["format"] = next((fmt for fmt in ("image/png", "image/png8", "image/jpeg") if fmt in formats), result["format"])
+
+    def walk(layer: ET.Element, inherited_extent: Optional[Dict[str, float]]) -> None:
+        extent = _wms_layer_extent(layer) or inherited_extent
+        name = _xml_child_text(layer, "Name")
+        if name:
+            result["layers"].append({
+                "name": name,
+                "title": _xml_child_text(layer, "Title") or name,
+                "extent": extent,
+                "legend_url": _wms_legend_url(layer),
+            })
+        for child in _xml_children(layer, "Layer"):
+            walk(child, extent)
+
+    for top_layer in _xml_children(capability, "Layer"):
+        walk(top_layer, None)
+    if not result["layers"] and not requested:
+        raise ValueError("The WMS service does not advertise any named layers.")
+    return result
+
+
+def _wms_getmap_url(args: Any) -> str:
+    service_url, _ = _wms_split_url(str(args.get("url", "")).strip())
+    layers = str(args.get("layers", "")).strip()
+    if not layers:
+        raise ValueError("A WMS layer name is required.")
+    try:
+        bbox = [float(value) for value in str(args.get("bbox", "")).split(",")]
+    except ValueError:
+        bbox = []
+    if len(bbox) != 4 or not all(math.isfinite(value) for value in bbox):
+        raise ValueError("A valid bbox is required.")
+    version = str(args.get("version", "")).strip() or "1.3.0"
+    return _wms_with_params(service_url, {
+        "SERVICE": "WMS",
+        "REQUEST": "GetMap",
+        "VERSION": version,
+        "LAYERS": layers,
+        "STYLES": str(args.get("styles", "")),
+        "FORMAT": str(args.get("format", "")).strip() or "image/png",
+        "TRANSPARENT": "TRUE",
+        # WMS 1.3.0 renamed SRS to CRS; EPSG:3857 keeps x/y axis order in both versions.
+        ("CRS" if version.startswith("1.3") else "SRS"): "EPSG:3857",
+        "BBOX": ",".join(repr(value) for value in bbox),
+        "WIDTH": "256",
+        "HEIGHT": "256",
+    })
